@@ -2,6 +2,11 @@
 
 > mightier than the prose.
 
+<p align="center">
+  <img src="docs/hero.png" width="820"
+       alt="nib editing an SVG path: a selected bezier node with its control handles extended, tool rail and inspector around a dark canvas" />
+</p>
+
 A small, direct-manipulation **SVG path editor**. LLMs are great at roughing out
 an SVG but hopeless to *finetune* by prose — "nudge that node left, close the
 loop" doesn't work in words. nib closes that gap: open the SVG, grab the actual
