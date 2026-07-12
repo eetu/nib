@@ -1,7 +1,7 @@
 <script lang="ts">
   import { STYLE_KEYS } from "$lib/model/document";
   import { pathToD } from "$lib/model/path";
-  import type { Point } from "$lib/model/types";
+  import type { Point, ViewBox } from "$lib/model/types";
   import { canvas } from "$lib/stores/canvas.svelte";
   import { editor } from "$lib/stores/document.svelte";
   import { interaction } from "$lib/stores/interaction.svelte";
@@ -29,24 +29,36 @@
   );
   const newPaths = $derived(editor.doc?.paths.filter((p) => p.added && !p.deleted) ?? []);
 
-  function screenOf(e: PointerEvent | WheelEvent): Point {
+  // WebKit-only trackpad gesture event (Safari); not in the standard DOM lib.
+  type GestureLike = Event & { scale: number; clientX: number; clientY: number };
+
+  function screenOf(e: { clientX: number; clientY: number }): Point {
     const r = svgEl.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
-  // Re-import the artwork whenever a new document is loaded (source changes),
-  // then fit it to the viewport. Editing mutates the model in place, so this
-  // does not re-run on drags.
+  // Re-import the artwork only when the document *source* changes (a new load) —
+  // guarded so a spurious re-run (e.g. a viewport change) neither re-imports nor
+  // re-fits. Editing mutates the model in place (applied to the live elements by
+  // the effect below), so `source` is stable across edits. A fresh import
+  // requests a one-shot fit via `pendingFit`.
+  let importedSource: string | undefined;
+  let pendingFit = $state<ViewBox | null>(null);
   $effect(() => {
     const doc = editor.doc;
     if (!artworkGroup) return;
+    if (doc?.source === importedSource) return;
+    importedSource = doc?.source;
     // This <g> is left empty in the template — nib owns its children (the
     // imported foreign SVG), so Svelte never diffs against them and imperative
     // DOM here is safe. Same rationale for the setAttribute update below.
     // eslint-disable-next-line svelte/no-dom-manipulating
     artworkGroup.replaceChildren();
     livePaths = [];
-    if (!doc) return;
+    if (!doc) {
+      pendingFit = null;
+      return;
+    }
     const parsed = new DOMParser().parseFromString(doc.source, "image/svg+xml");
     const src = parsed.querySelector("svg");
     if (!src) return;
@@ -55,13 +67,18 @@
       artworkGroup.appendChild(document.importNode(child, true));
     }
     livePaths = Array.from(artworkGroup.querySelectorAll("path"));
-    if (wrap) viewport.setSize(wrap.clientWidth, wrap.clientHeight);
-    viewport.fitDocument(doc.viewBox);
+    pendingFit = doc.viewBox;
   });
 
-  // Keep the viewport's pixel size current (drives the fit-to-view button).
+  // Keep the viewport's pixel size current, and fit a freshly-loaded document
+  // once the canvas has real pixels. Depends only on the size + the pending-fit
+  // request, so zoom/pan (which change scale/tx/ty, not these) never re-fit.
   $effect(() => {
     viewport.setSize(pxW, pxH);
+    if (pendingFit && pxW > 0 && pxH > 0) {
+      viewport.fitDocument(pendingFit);
+      pendingFit = null;
+    }
   });
 
   // Reflect model edits into the live (imported) <path> elements: geometry, and
@@ -187,14 +204,35 @@
   function onWheel(e: WheelEvent) {
     if (!editor.doc) return;
     e.preventDefault();
-    // Trackpad pinch arrives as ctrl+wheel; ⌘/ctrl+wheel is the mouse zoom.
-    // A plain wheel / two-finger scroll pans (matching trackpad expectations).
+    // Chromium/Firefox deliver a trackpad pinch as ctrl+wheel; ⌘/ctrl+wheel is
+    // the mouse zoom. A plain wheel / two-finger scroll pans.
     if (e.ctrlKey || e.metaKey) {
       viewport.zoomAt(screenOf(e), Math.exp(-e.deltaY * 0.0025));
     } else {
       viewport.panBy(-e.deltaX, -e.deltaY);
     }
   }
+
+  // Safari delivers a trackpad pinch as WebKit gesture events instead of a
+  // ctrl+wheel (see onWheel). `scale` is cumulative since gesturestart, so zoom
+  // by the step ratio at the cursor. Bound via a spread on the <svg> so it goes
+  // through Svelte's event system (which flushes the viewport change to the
+  // DOM) — a raw addEventListener would leave it stale, and a manual flushSync
+  // re-runs the fit-on-load effect and snaps the zoom back.
+  let gestureLast = 1;
+  const gestureHandlers = {
+    ongesturestart: (e: Event) => {
+      e.preventDefault();
+      gestureLast = (e as GestureLike).scale || 1;
+    },
+    ongesturechange: (e: Event) => {
+      e.preventDefault();
+      const g = e as GestureLike;
+      if (gestureLast > 0 && g.scale > 0) viewport.zoomAt(screenOf(g), g.scale / gestureLast);
+      gestureLast = g.scale;
+    },
+    ongestureend: (e: Event) => e.preventDefault(),
+  };
 </script>
 
 <div
@@ -215,6 +253,7 @@
     onpointerup={onPointerUp}
     onpointercancel={onPointerUp}
     onwheel={onWheel}
+    {...gestureHandlers}
   >
     {#if tools.gridEnabled && tools.gridSize * viewport.scale >= 5}
       {@const step = tools.gridSize * viewport.scale}
