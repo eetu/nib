@@ -5,6 +5,7 @@
   import { canvas } from "$lib/stores/canvas.svelte";
   import { editor } from "$lib/stores/document.svelte";
   import { interaction } from "$lib/stores/interaction.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
   import { tools } from "$lib/stores/tool.svelte";
   import { viewport } from "$lib/stores/viewport.svelte";
   import { getTool, type Hit, hitTest } from "$lib/tools";
@@ -150,7 +151,13 @@
   }
 </script>
 
-<div class="canvas-wrap" bind:this={wrap} bind:clientWidth={pxW} bind:clientHeight={pxH}>
+<div
+  class="canvas-wrap"
+  data-bg={settings.canvasBg}
+  bind:this={wrap}
+  bind:clientWidth={pxW}
+  bind:clientHeight={pxH}
+>
   <svg
     bind:this={svgEl}
     class="canvas"
@@ -202,9 +209,23 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
+  }
+
+  /* Backdrop the artwork previews against (settings.canvasBg). "checker" is the
+     transparency grid; light/dark are absolute surfaces, independent of the UI
+     theme, so an SVG can be checked on either. */
+  .canvas-wrap[data-bg="checker"] {
     background: repeating-conic-gradient(var(--halo-bg-light) 0% 25%, transparent 0% 50%) 50% / 20px
       20px;
     background-color: var(--halo-bg-main);
+  }
+
+  .canvas-wrap[data-bg="light"] {
+    background: #ffffff;
+  }
+
+  .canvas-wrap[data-bg="dark"] {
+    background: #14161a;
   }
 
   .canvas {

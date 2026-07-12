@@ -3,7 +3,30 @@
 
   import type { Snippet } from "svelte";
 
+  import { settings } from "$lib/stores/settings.svelte";
+
   let { children }: { children: Snippet } = $props();
+
+  // Resolve the chosen theme mode to an effective 'light'/'dark' and apply it as
+  // data-theme on <html> (the halo tokens key off it). Only `auto` follows the
+  // system, re-resolving live when the OS appearance flips. The inline script in
+  // app.html does the same pre-paint, so this only handles later changes.
+  $effect(() => {
+    const mode = settings.themeMode;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const eff = mode === "auto" ? (mq.matches ? "dark" : "light") : mode;
+      document.documentElement.dataset.theme = eff;
+      document
+        .querySelector('meta[name="theme-color"]')
+        ?.setAttribute("content", eff === "dark" ? "#0f0f0f" : "#ffffff");
+    };
+    apply();
+    if (mode === "auto") {
+      mq.addEventListener("change", apply);
+      return () => mq.removeEventListener("change", apply);
+    }
+  });
 </script>
 
 {@render children()}

@@ -6,6 +6,7 @@
   import FolderOpen from "@lucide/svelte/icons/folder-open";
   import Redo2 from "@lucide/svelte/icons/redo-2";
   import Save from "@lucide/svelte/icons/save";
+  import Settings from "@lucide/svelte/icons/settings";
   import Undo2 from "@lucide/svelte/icons/undo-2";
 
   import { editor } from "$lib/stores/document.svelte";
@@ -13,7 +14,11 @@
 
   import Wordmark from "./Wordmark.svelte";
 
-  let { onPaste, onOpenFile }: { onPaste: () => void; onOpenFile: () => void } = $props();
+  let {
+    onPaste,
+    onOpenFile,
+    onSettings,
+  }: { onPaste: () => void; onOpenFile: () => void; onSettings: () => void } = $props();
 
   let copied = $state(false);
 
@@ -75,6 +80,9 @@
   </div>
 
   <div class="group right">
+    <button class="icon-btn" title="Settings" aria-label="Settings" onclick={onSettings}>
+      <Settings size={18} />
+    </button>
     <button
       class="icon-btn"
       title={copied ? "Copied" : "Copy SVG"}

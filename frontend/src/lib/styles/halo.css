@@ -1,9 +1,17 @@
 /* ----------------------------------------------------------------------
  * halo-design — canonical design tokens for the homebrew app family
  *
- * Shared visual identity across the homebrew web app family. Copied verbatim
- * from the halo-design skill (colors_and_type.css). Consume the --halo-* vars
- * in scoped <style> blocks; do not re-derive tokens by hand.
+ * Shared visual identity across the homebrew web app family, adopted from the
+ * halo-design skill (colors_and_type.css). Consume the --halo-* vars in scoped
+ * <style> blocks; do not re-derive tokens by hand.
+ *
+ * One deliberate deviation from the verbatim file: light/dark is driven by
+ * `data-theme` on <html>, NOT `@media (prefers-color-scheme)`, so nib can offer
+ * an explicit light/dark/auto switch (see stores/settings.svelte.ts). nib is
+ * light-first, so light is the `:root` default and `[data-theme='dark']`
+ * overrides. `auto` is resolved to a concrete `data-theme` by the root layout
+ * ($effect, re-resolving on system flips) and pre-paint by the inline shell
+ * script in app.html — so there is no flash and no CSS media query needed.
  * -------------------------------------------------------------------- */
 
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600&display=swap");
@@ -42,21 +50,19 @@
   --halo-d-med: 0.5s;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --halo-body: #0f0f0f;
-    --halo-bg-main: #252525;
-    --halo-bg-light: #1c1c1c;
-    --halo-text-main: #d6d6d6;
-    --halo-text-muted: #8a8a8a;
-    --halo-text-light: #646464;
-    --halo-border: #1f1f1f;
-    --halo-accent-bg: rgba(247, 143, 8, 0.2);
-    --halo-accent-soft: rgba(247, 143, 8, 0.2);
-    --halo-off-bg: #404040;
-    --halo-error: pink;
-    --halo-shadow: none;
-  }
+:root[data-theme="dark"] {
+  --halo-body: #0f0f0f;
+  --halo-bg-main: #252525;
+  --halo-bg-light: #1c1c1c;
+  --halo-text-main: #d6d6d6;
+  --halo-text-muted: #8a8a8a;
+  --halo-text-light: #646464;
+  --halo-border: #1f1f1f;
+  --halo-accent-bg: rgba(247, 143, 8, 0.2);
+  --halo-accent-soft: rgba(247, 143, 8, 0.2);
+  --halo-off-bg: #404040;
+  --halo-error: pink;
+  --halo-shadow: none;
 }
 
 /* ----------------------------------------------------------------------

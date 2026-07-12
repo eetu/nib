@@ -9,8 +9,22 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
 
-    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#0f0f0f" media="(prefers-color-scheme: dark)" />
+    <!-- Resolve the persisted theme (light/dark/auto) to a concrete data-theme
+         before first paint, so there's no flash of the wrong theme. The layout
+         then keeps it live (and re-resolves 'auto' on system flips). -->
+    <script>
+      (function () {
+        try {
+          var m = localStorage.getItem("nib:theme");
+          var dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          document.documentElement.dataset.theme =
+            m === "light" || m === "dark" ? m : dark ? "dark" : "light";
+        } catch (e) {
+          /* storage/matchMedia unavailable — layout applies the default */
+        }
+      })();
+    </script>
+    <meta name="theme-color" content="#0f0f0f" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="nib" />

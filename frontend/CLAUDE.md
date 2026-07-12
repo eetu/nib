@@ -14,8 +14,8 @@ src/lib/snap/       snap engine (nearest anchor, close-loop detection, grid)
 src/lib/canvas/     gesture statechart (XState) — idle / panning / dragging
 src/lib/tools/      pluggable editing tools + hit-testing (select / pen / circle / add / delete)
 src/lib/workspace/  File System Access API wrappers + fallbacks
-src/lib/stores/     rune stores: document (+history), viewport, tool, workspace, interaction
-src/lib/components/ EditorCanvas, Overlay, ToolRail, Inspector, ColorInput, TopBar, SourceView, FileList, ImportDialog, Wordmark
+src/lib/stores/     rune stores: document (+history), viewport, tool, workspace, interaction, settings (theme + canvas bg)
+src/lib/components/ EditorCanvas, Overlay, ToolRail, Inspector, ColorInput, TopBar, SourceView, FileList, ImportDialog, SettingsDialog, Wordmark
 src/routes/         +layout (tokens + global control base), +page (composition root)
 ```
 
@@ -37,5 +37,12 @@ Use yarn (the repo-vendored release). Unit tests cover the pure-TS core
   reduces any path to absolute M/L/H/V/C/Z before the walker builds anchor nodes.
 - File System Access picker types aren't in this TS lib version — augmented in
   `src/lib/workspace/file-system-access.d.ts`.
+- **Theme is `data-theme`-driven, not a media query** (so light/dark/auto can be
+  chosen — see `stores/settings.svelte.ts` + `SettingsDialog`). `halo.css` is
+  light-first (`:root`) + `[data-theme='dark']`; the root `+layout` resolves the
+  mode to a concrete `data-theme` on `<html>` (re-resolving `auto` on system
+  flips), and an inline script in `app.html` does the same pre-paint (no flash).
+  `settings.canvasBg` (checker/light/dark) is the artwork's preview surface —
+  absolute colours, orthogonal to the UI theme.
 - EditorCanvas imports the artwork imperatively into a `<g>` it owns (that's why
   `svelte/no-dom-manipulating` is disabled at those two lines).

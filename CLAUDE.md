@@ -94,7 +94,14 @@ Per-area detail in `frontend/CLAUDE.md`.
 - **Shared state = rune stores** (`frontend/src/lib/stores/*.svelte.ts`), read
   directly, never prop-drilled: `document` (doc + selection + mutations +
   history), `viewport`, `tool` (+ snap/grid settings), `workspace`, `interaction`
-  (transient drag feedback).
+  (transient drag feedback), `settings` (theme + canvas backdrop).
+- **Theming.** Light/dark/auto via `data-theme` on `<html>` (not a media query),
+  so it's user-selectable in `SettingsDialog`. `halo.css` is light-first +
+  `[data-theme='dark']`; the root `+layout` resolves the mode (auto → system,
+  live) and `app.html` sets it pre-paint (no flash). `settings.canvasBg`
+  (checker/light/dark) is the *artwork* preview surface — absolute, orthogonal
+  to the UI theme. Accent stays the brand orange (a purple axis could drop in
+  later, like scene's `data-accent`).
 
 ## Working on this repo
 

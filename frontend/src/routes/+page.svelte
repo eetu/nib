@@ -3,6 +3,7 @@
   import FileList from "$lib/components/FileList.svelte";
   import ImportDialog from "$lib/components/ImportDialog.svelte";
   import Inspector from "$lib/components/Inspector.svelte";
+  import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import SourceView from "$lib/components/SourceView.svelte";
   import ToolRail from "$lib/components/ToolRail.svelte";
   import TopBar from "$lib/components/TopBar.svelte";
@@ -14,6 +15,7 @@
   import { finishPen } from "$lib/tools";
 
   let pasteOpen = $state(false);
+  let settingsOpen = $state(false);
   let dragging = $state(false);
   let fileInput = $state<HTMLInputElement | null>(null);
 
@@ -42,7 +44,7 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (pasteOpen || typing(e.target)) return;
+    if (pasteOpen || settingsOpen || typing(e.target)) return;
 
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.toLowerCase();
@@ -152,7 +154,11 @@
      file" button covers the same action, so the shell needs no ARIA role. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="app" ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop}>
-  <TopBar onPaste={() => (pasteOpen = true)} onOpenFile={openFile} />
+  <TopBar
+    onPaste={() => (pasteOpen = true)}
+    onOpenFile={openFile}
+    onSettings={() => (settingsOpen = true)}
+  />
 
   <div class="body">
     {#if workspace.files.length}
@@ -202,6 +208,7 @@
 </div>
 
 <ImportDialog open={pasteOpen} onClose={() => (pasteOpen = false)} />
+<SettingsDialog open={settingsOpen} onClose={() => (settingsOpen = false)} />
 
 <input
   class="hidden-file"
