@@ -1,0 +1,4 @@
+.DS_Store
+Thumbs.db
+
+# Nested .gitignore in frontend/ covers node_modules, dist, .svelte-kit, yarn caches.

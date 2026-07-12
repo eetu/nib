@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"
+     fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Maskable variant: the same nib glyph shrunk to the ~60% centre safe zone
+       so Android's adaptive mask can't clip it. Opaque white bg fills the tile. -->
+  <rect width="64" height="64" fill="#ffffff"/>
+  <g transform="translate(32 32) scale(0.6) translate(-32 -32)">
+    <path d="M12 42 C 24 18, 40 18, 52 42" stroke="#525252" stroke-width="3"/>
+    <line x1="18" y1="24" x2="46" y2="24" stroke="#525252" stroke-width="2.5"/>
+    <circle cx="18" cy="24" r="3.5" fill="#ffffff" stroke="#525252" stroke-width="2.5"/>
+    <circle cx="46" cy="24" r="3.5" fill="#ffffff" stroke="#525252" stroke-width="2.5"/>
+    <rect x="8.5" y="38.5" width="7" height="7" fill="#ffffff" stroke="#525252" stroke-width="2.5"/>
+    <rect x="48.5" y="38.5" width="7" height="7" fill="#ffffff" stroke="#525252" stroke-width="2.5"/>
+    <circle cx="32" cy="24" r="5" fill="#f78f08"/>
+  </g>
+</svg>

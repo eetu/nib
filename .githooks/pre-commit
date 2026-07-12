@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Pre-commit gate — runs the frontend checks only when frontend files are
+# staged. Installed by ./install-hooks.sh (sets core.hooksPath). Git runs it
+# from the repo root.
+#
+# COMMIT THIS FILE WITH MODE 755 (see install-hooks.sh). Git SILENTLY SKIPS a
+# non-executable core.hooksPath hook — the gate looks installed but never fires.
+# Verify: `git ls-files -s .githooks` → mode must read 100755.
+set -euo pipefail
+
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+[ -n "$staged" ] || exit 0
+
+run_front=0
+while IFS= read -r f; do
+	case "$f" in
+		frontend/*) run_front=1 ;;
+	esac
+done <<<"$staged"
+
+if [ "$run_front" = 1 ]; then
+	echo "pre-commit: frontend (lint + format)"
+	cd frontend
+	# Vendored yarn (no corepack), invoked via node.
+	node .yarn/releases/yarn-*.cjs lint
+	node .yarn/releases/yarn-*.cjs format
+fi

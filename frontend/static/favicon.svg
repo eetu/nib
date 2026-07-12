@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"
+     fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <!-- nib glyph: an editable bezier node. A curve with its two end anchors
+       (hollow squares) and, on the mid anchor, the classic tangent control
+       handle (a line with knobs). The active anchor is the family's warm
+       accent dot (#f78f08). Opaque white tile so it doubles as the raster
+       source for the home-screen / apple-touch icons; dark theme-text strokes
+       (#525252) match the family's light-tile icons. -->
+  <rect width="64" height="64" fill="#ffffff"/>
+  <path d="M12 42 C 24 18, 40 18, 52 42" stroke="#525252" stroke-width="3"/>
+  <line x1="18" y1="24" x2="46" y2="24" stroke="#525252" stroke-width="2.5"/>
+  <circle cx="18" cy="24" r="3.5" fill="#ffffff" stroke="#525252" stroke-width="2.5"/>
+  <circle cx="46" cy="24" r="3.5" fill="#ffffff" stroke="#525252" stroke-width="2.5"/>
+  <rect x="8.5" y="38.5" width="7" height="7" fill="#ffffff" stroke="#525252" stroke-width="2.5"/>
+  <rect x="48.5" y="38.5" width="7" height="7" fill="#ffffff" stroke="#525252" stroke-width="2.5"/>
+  <circle cx="32" cy="24" r="5" fill="#f78f08"/>
+</svg>
