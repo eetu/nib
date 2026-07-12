@@ -1,3 +1,5 @@
+import process from "node:process";
+
 import adapter from "@sveltejs/adapter-static";
 
 /** @type {import('@sveltejs/kit').Config} */
@@ -17,6 +19,12 @@ const config = {
       precompress: false,
       strict: true,
     }),
+    // Served from the root normally (dev + a future Rust backend), but from a
+    // subdirectory on GitHub Pages (a project page lives at /<repo>/). The Pages
+    // build sets BASE_PATH=/nib; every other build stays at the root.
+    paths: {
+      base: process.env.BASE_PATH ?? "",
+    },
   },
 };
 

@@ -6,11 +6,15 @@ save back. The LLM roughs out the shape; nib does the last-5% by-hand tuning
 that prose can't. Sibling in eetu's homebrew family ([halo](../halo),
 [ocular](../ocular), [scribe](../scribe)) — shares the halo-design system.
 
-**Frontend-only** today: a fully client-side SvelteKit SPA. There is no backend
-— nothing needs a server but serving the built files, and the app reads/writes
-the user's own files via the File System Access API. A rust-axum serve-shell +
-raspi deploy can drop in later without moving the frontend (the SPA already
-builds to `dist/` with `fallback: index.html`, the family backend contract).
+**Frontend-only, and staying that way.** A fully client-side SvelteKit SPA:
+nothing needs a server but serving the built files, and the app reads/writes the
+user's own files via the File System Access API. The **live demo** is a static
+build on **GitHub Pages** (`.github/workflows/pages.yaml` → https://eetu.github.io/nib/).
+Even if a rust-axum serve-shell + raspi deploy is added later, nib stays
+**SPA-only** — the backend would just be another way to serve the same `dist/`
+(the SPA already builds there with `fallback: index.html`, the family backend
+contract), not a place logic migrates to. Any future server bits (e.g. a folder
+API) are additive, never a rewrite of the client.
 
 ## Layout
 
@@ -108,6 +112,12 @@ Per-area detail in `frontend/CLAUDE.md`.
 - Dev: `just dev` (or `cd frontend && yarn dev`) → http://localhost:5173.
 - Validate: `just validate` (typecheck + lint + format). Tests: `just test`.
 - Yarn is the repo-vendored release (no corepack); recipes invoke it via node.
+- **Pages deploy:** a project page lives under `/nib/`, so the Pages build sets
+  `BASE_PATH=/nib` (→ `paths.base` in `svelte.config.js`); dev + any future
+  backend build stay at the root (`BASE_PATH` unset). Manual asset links in
+  `app.html` use `%sveltekit.assets%` so they resolve under the base. The
+  workflow copies `index.html`→`404.html` for deep-link fallback; `.nojekyll`
+  ships from `static/`.
 - **Folder mode (open a folder, save back) is Chromium-only** (File System
   Access API). Fallbacks work everywhere: paste text / open single file / download.
 - Hooks: `./install-hooks.sh` once (frontend lint+format pre-commit).

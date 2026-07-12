@@ -3,8 +3,14 @@
 > mightier than the prose.
 
 <p align="center">
-  <img src="docs/hero.png" width="820"
-       alt="nib editing an SVG path: a selected bezier node with its control handles extended, tool rail and inspector around a dark canvas" />
+  <a href="https://eetu.github.io/nib/"><strong>▶ Live demo</strong></a>
+</p>
+
+<p align="center">
+  <a href="https://eetu.github.io/nib/">
+    <img src="docs/hero.png" width="820"
+         alt="nib editing an SVG path: a selected bezier node with its control handles extended, tool rail and inspector around a dark canvas" />
+  </a>
 </p>
 
 A small, direct-manipulation **SVG path editor**. LLMs are great at roughing out
@@ -59,6 +65,10 @@ just build      # production build → frontend/dist
 
 Fully client-side (SvelteKit SPA). **Folder open/save is Chromium-only** (File
 System Access API); the paste / open-file / download fallbacks work everywhere.
+
+Deployed as a static build to **GitHub Pages** on every push to `main`
+(`.github/workflows/pages.yaml`). It stays SPA-only by design — a backend, if
+ever added, would just be another way to serve the same `dist/`.
 
 See [`CLAUDE.md`](./CLAUDE.md) for architecture and the `nib-design` skill for
 the visual identity.
