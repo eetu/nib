@@ -1,6 +1,6 @@
 import { parseSvg, serializeSvg } from "$lib/model/document";
 import { distance, normalize } from "$lib/model/geometry";
-import { closeSubpath, insertNodeAt } from "$lib/model/path";
+import { closeSubpath, insertNodeAt, reversedSubpath } from "$lib/model/path";
 import { ellipseNodes, ellipseSubpath } from "$lib/model/shapes";
 import type {
   NodeRef,
@@ -461,6 +461,16 @@ class DocumentStore {
     this.selection = ref;
     this.#markEdited(pathIndex);
     return ref;
+  }
+
+  /** Reverse a subpath's direction so its former start becomes the tail — lets
+   *  the pen resume drawing (appends to the tail) from either open endpoint. */
+  reverseSubpath(pathIndex: number, subpathIndex: number): void {
+    const path = this.doc?.paths[pathIndex];
+    const sp = path?.subpaths[subpathIndex];
+    if (!path || !sp) return;
+    path.subpaths[subpathIndex] = reversedSubpath(sp);
+    this.#markEdited(pathIndex);
   }
 
   /** Pen drag: shape the anchor into a smooth node with mirrored handles. */

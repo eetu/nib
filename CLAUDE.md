@@ -48,8 +48,10 @@ Per-area detail in `frontend/CLAUDE.md`.
   `{ id, cursor, begin() → DragSession?, hover?() }`. Add a tool = add a module +
   registry entry; the rail groups them (`ToolRail`: select · create · nodes) so
   it stays scannable as they grow. `hover()` drives live aids (pen rubber-band,
-  circle centre-snap). Tools: select/move, pen (draw new paths), circle (drag
-  out a closed 4-node bezier), add-node, delete-node. Shapes are built as
+  circle centre-snap). Tools: select/move, pen (draw new paths — and *resume*
+  an open subpath by clicking either endpoint; grabbing the head reverses the
+  subpath so appends still run off the tail, via `editor.reverseSubpath`),
+  circle (drag out a closed 4-node bezier), add-node, delete-node. Shapes are built as
   editable paths (`model/shapes.ts`), not native `<circle>`/`<rect>`.
 - **Selection = node + path.** `selection` is the active node; `selectedPath` is
   an explicit path selection (PATHS row / path-body click). `selectedPathIndex`

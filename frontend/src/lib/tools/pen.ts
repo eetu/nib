@@ -1,3 +1,4 @@
+import { distance } from "$lib/model/geometry";
 import type { NodeRef, Point } from "$lib/model/types";
 import { collectAnchors, findSnap, snapToGrid } from "$lib/snap";
 import { editor } from "$lib/stores/document.svelte";
@@ -7,6 +8,8 @@ import { viewport } from "$lib/stores/viewport.svelte";
 
 import type { DragSession, Tool } from "./types";
 
+const ENDPOINT_HIT_PX = 11;
+
 // The subpath currently being drawn — persists across clicks until finished.
 let drawing: { pathIndex: number; subpathIndex: number } | null = null;
 
@@ -15,6 +18,42 @@ export function finishPen(): void {
   drawing = null;
   interaction.penDrawing = false;
   interaction.penCursor = null;
+  interaction.resumePoint = null;
+}
+
+type EndpointHit = { pathIndex: number; subpathIndex: number; atHead: boolean; point: Point };
+
+/** The open-subpath endpoint under `docPoint` (within the hit radius), if any —
+ *  the anchor the pen would resume drawing from. Endpoints only, open subpaths
+ *  only; a lone-node subpath counts as a tail. Independent of the snap toggle. */
+function endpointAt(docPoint: Point): EndpointHit | null {
+  const doc = editor.doc;
+  if (!doc) return null;
+  const threshold = viewport.toDocLength(ENDPOINT_HIT_PX);
+  let best: EndpointHit | null = null;
+  let bestD = Infinity;
+  doc.paths.forEach((path, pathIndex) => {
+    if (path.deleted) return;
+    path.subpaths.forEach((sp, subpathIndex) => {
+      if (sp.closed || sp.nodes.length === 0) return;
+      const last = sp.nodes.length - 1;
+      const ends =
+        last === 0
+          ? [{ atHead: false, i: 0 }]
+          : [
+              { atHead: true, i: 0 },
+              { atHead: false, i: last },
+            ];
+      for (const e of ends) {
+        const d = distance(sp.nodes[e.i].point, docPoint);
+        if (d <= threshold && d < bestD) {
+          bestD = d;
+          best = { pathIndex, subpathIndex, atHead: e.atHead, point: { ...sp.nodes[e.i].point } };
+        }
+      }
+    });
+  });
+  return best;
 }
 
 function penDrag(ref: NodeRef): DragSession {
@@ -51,8 +90,13 @@ export const penTool: Tool = {
   id: "pen",
   cursor: () => "crosshair",
   hover(docPoint) {
-    // Rubber-band from the last-placed anchor to the cursor while drawing.
-    if (interaction.penDrawing) interaction.penCursor = docPoint;
+    if (interaction.penDrawing) {
+      // Rubber-band from the last-placed anchor to the cursor while drawing.
+      interaction.penCursor = docPoint;
+      return;
+    }
+    // Idle: cue the open endpoint the pen would pick up if clicked here.
+    interaction.resumePoint = endpointAt(docPoint)?.point ?? null;
   },
   begin(ctx) {
     editor.ensureBlank();
@@ -74,6 +118,22 @@ export const penTool: Tool = {
       }
       const ref = editor.appendNode(d.pathIndex, d.subpathIndex, point);
       return penDrag(ref);
+    }
+
+    // Not drawing: clicking an existing open endpoint resumes that path rather
+    // than starting a new one. Reverse the subpath if we grabbed its head, so
+    // appends (and the close-on-start check) work off the tail as usual. This
+    // is a pick-up only — the next click places the next node.
+    const resume = endpointAt(ctx.docPoint);
+    if (resume) {
+      const { pathIndex, subpathIndex } = resume;
+      if (resume.atHead) editor.reverseSubpath(pathIndex, subpathIndex);
+      drawing = { pathIndex, subpathIndex };
+      interaction.penDrawing = true;
+      interaction.resumePoint = null;
+      const nodes = editor.doc.paths[pathIndex]?.subpaths[subpathIndex]?.nodes.length ?? 1;
+      editor.select({ pathIndex, subpathIndex, nodeIndex: nodes - 1 });
+      return null;
     }
 
     const ref = editor.beginPath(point);

@@ -19,10 +19,13 @@ class Interaction {
   penDrawing = $state(false);
   /** Live pointer position while drawing, for the rubber-band to the cursor. */
   penCursor = $state<Point | null>(null);
+  /** Open endpoint the pen would resume from if clicked (hover affordance). */
+  resumePoint = $state<Point | null>(null);
 
   clearDrag(): void {
     this.snapPoint = null;
     this.closing = false;
+    this.resumePoint = null;
   }
 }
 

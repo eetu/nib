@@ -113,6 +113,11 @@
       <line class="pen-rubber" x1={a.x} y1={a.y} x2={b.x} y2={b.y} />
     {/if}
 
+    {#if interaction.resumePoint && !interaction.penDrawing}
+      {@const s = viewport.toScreen(interaction.resumePoint)}
+      <circle class="resume" cx={s.x} cy={s.y} r="9" />
+    {/if}
+
     {#if interaction.snapPoint}
       {@const s = viewport.toScreen(interaction.snapPoint)}
       <circle
@@ -208,6 +213,13 @@
 
   .snap {
     fill: none;
+    stroke: var(--halo-accent);
+    stroke-width: 2;
+  }
+
+  /* "resume drawing from here" ring on an open endpoint the pen can pick up. */
+  .resume {
+    fill: var(--halo-accent-soft);
     stroke: var(--halo-accent);
     stroke-width: 2;
   }

@@ -107,6 +107,22 @@ export function closeSubpath(sp: Subpath): void {
   foldClosingNode(sp);
 }
 
+/**
+ * The same subpath drawn in the opposite direction: node order reversed and
+ * each node's in/out handles swapped (they trade roles when the direction
+ * flips). Shape-identical — only which end is the start changes. Used so the
+ * pen can resume drawing from a subpath's *start* by first making it the tail.
+ */
+export function reversedSubpath(sp: Subpath): Subpath {
+  return {
+    closed: sp.closed,
+    nodes: sp.nodes
+      .slice()
+      .reverse()
+      .map((n) => ({ ...n, handleIn: n.handleOut, handleOut: n.handleIn })),
+  };
+}
+
 function inferNodeTypes(sp: Subpath): void {
   for (const node of sp.nodes) {
     if (node.handleIn && node.handleOut) {

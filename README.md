@@ -30,7 +30,8 @@ Point it at a **folder** of generated SVGs, refine each, save in place.
 - **Scale a shape** by dragging its selection-box handles (corners = both axes,
   edges = one; Shift keeps aspect).
 - **Draw new paths** with the pen (click for corners, drag for curves, click the
-  start to close) — from a blank canvas or on top of a loaded SVG.
+  start to close) — from a blank canvas or on top of a loaded SVG. **Resume** an
+  open path (drawn or imported) by clicking either endpoint and keep drawing.
 - **Draw a circle** (drag from centre, snaps to grid) — an editable closed path.
 - **Style any path** (drawn or imported): fill / stroke colour, stroke width,
   opacity — imported paths are rewritten surgically, rest of the tag preserved.

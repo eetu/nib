@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { parsePathD, pathToD } from "../path";
+import { parsePathD, pathToD, reversedSubpath } from "../path";
+import type { Subpath } from "../types";
 
 describe("parsePathD", () => {
   it("parses a line-based open path into anchor nodes", () => {
@@ -75,5 +76,51 @@ describe("pathToD round-trip", () => {
   it("rounds coordinates to the requested precision", () => {
     const out = pathToD(parsePathD("M 0.123456 0 L 10 0"), 2);
     expect(out).toBe("M 0.12 0 L 10 0");
+  });
+});
+
+describe("reversedSubpath", () => {
+  it("reverses node order and swaps each node's in/out handles", () => {
+    const sp: Subpath = {
+      closed: false,
+      nodes: [
+        { point: { x: 0, y: 0 }, type: "corner", handleOut: { x: 1, y: 1 } },
+        {
+          point: { x: 10, y: 0 },
+          type: "smooth",
+          handleIn: { x: 8, y: 0 },
+          handleOut: { x: 12, y: 0 },
+        },
+        { point: { x: 20, y: 0 }, type: "corner", handleIn: { x: 19, y: 1 } },
+      ],
+    };
+    const r = reversedSubpath(sp);
+    expect(r.closed).toBe(false);
+    expect(r.nodes.map((n) => n.point)).toEqual([
+      { x: 20, y: 0 },
+      { x: 10, y: 0 },
+      { x: 0, y: 0 },
+    ]);
+    // former tail's handleIn becomes the new head's handleOut
+    expect(r.nodes[0].handleOut).toEqual({ x: 19, y: 1 });
+    expect(r.nodes[0].handleIn).toBeUndefined();
+    // the middle node's handles trade places
+    expect(r.nodes[1].handleIn).toEqual({ x: 12, y: 0 });
+    expect(r.nodes[1].handleOut).toEqual({ x: 8, y: 0 });
+    // former head's handleOut becomes the new tail's handleIn
+    expect(r.nodes[2].handleIn).toEqual({ x: 1, y: 1 });
+    expect(r.nodes[2].handleOut).toBeUndefined();
+  });
+
+  it("re-serializes to the same geometry drawn backwards", () => {
+    const sp = parsePathD("M 0 0 C 0 10 10 10 10 0")[0];
+    expect(pathToD([reversedSubpath(sp)])).toBe("M 10 0 C 10 10 0 10 0 0");
+  });
+
+  it("does not mutate the input", () => {
+    const sp: Subpath = { closed: false, nodes: [{ point: { x: 0, y: 0 }, type: "corner" }] };
+    reversedSubpath(sp);
+    expect(sp.nodes).toHaveLength(1);
+    expect(sp.nodes[0].point).toEqual({ x: 0, y: 0 });
   });
 });
