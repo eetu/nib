@@ -45,6 +45,9 @@
   :global(body) {
     height: 100%;
     margin: 0;
+    /* Stop the trackpad two-finger horizontal swipe from triggering
+       browser back/forward navigation (notably Safari) over the canvas. */
+    overscroll-behavior: none;
   }
 
   :global(body) {
