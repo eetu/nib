@@ -53,7 +53,8 @@ Unedited markup is preserved byte-for-byte — only the paths you touch are rewr
 - `⌘/Ctrl+C/V/X` copy / paste / cut · `⌘/Ctrl+D` duplicate
 - `⌘/Ctrl+Z` undo · `⇧⌘Z` redo · `Delete` remove selected node/path
 - **Esc** back to the select tool (finishes a pen path) · `0` fit to view
-- **Space**-drag or middle-drag to pan · wheel to zoom
+- **Pinch** (or `⌘/Ctrl`+scroll) to zoom · two-finger scroll / wheel /
+  **Space**-drag / middle-drag to pan
 
 ## Develop
 

@@ -118,8 +118,35 @@
     canvas.send({ type: "CANCEL" });
   }
 
+  // Multi-touch pinch: track active pointers (screen coords, keyed by id); with
+  // two down, the gesture is a pinch-zoom (+ pan of the midpoint), not an edit.
+  let pointers: { id: number; p: Point }[] = [];
+  let pinch: { dist: number; mid: Point } | null = null;
+
+  function setPointer(id: number, p: Point): void {
+    const existing = pointers.find((q) => q.id === id);
+    if (existing) existing.p = p;
+    else pointers.push({ id, p });
+  }
+
+  function pinchState(): { dist: number; mid: Point } {
+    const [a, b] = pointers;
+    return {
+      dist: Math.hypot(b.p.x - a.p.x, b.p.y - a.p.y),
+      mid: { x: (a.p.x + b.p.x) / 2, y: (a.p.y + b.p.y) / 2 },
+    };
+  }
+
   function onPointerDown(e: PointerEvent) {
     if (!editor.doc) return;
+    setPointer(e.pointerId, screenOf(e));
+    // A second finger starts a pinch — abort any single-pointer gesture first.
+    if (pointers.length >= 2) {
+      svgEl.setPointerCapture(e.pointerId);
+      cancelDrag();
+      if (pointers.length === 2) pinch = pinchState();
+      return;
+    }
     const pan = e.button === 1 || interaction.spaceHeld;
     if (!pan && e.button !== 0) return;
     svgEl.setPointerCapture(e.pointerId);
@@ -129,6 +156,14 @@
   }
 
   function onPointerMove(e: PointerEvent) {
+    if (pointers.some((q) => q.id === e.pointerId)) setPointer(e.pointerId, screenOf(e));
+    if (pinch && pointers.length >= 2) {
+      const next = pinchState();
+      if (pinch.dist > 0) viewport.zoomAt(pinch.mid, next.dist / pinch.dist);
+      viewport.panBy(next.mid.x - pinch.mid.x, next.mid.y - pinch.mid.y);
+      pinch = next;
+      return;
+    }
     const screen = screenOf(e);
     if (!canvas.idle) {
       canvas.send({ type: "MOVE", docPoint: viewport.toDoc(screen), screen, event: e });
@@ -140,14 +175,25 @@
   }
 
   function onPointerUp(e: PointerEvent) {
+    pointers = pointers.filter((q) => q.id !== e.pointerId);
     if (svgEl.hasPointerCapture(e.pointerId)) svgEl.releasePointerCapture(e.pointerId);
+    if (pinch) {
+      if (pointers.length < 2) pinch = null; // pinch owned this gesture
+      return;
+    }
     canvas.send({ type: "UP", docPoint: viewport.toDoc(screenOf(e)) });
   }
 
   function onWheel(e: WheelEvent) {
     if (!editor.doc) return;
     e.preventDefault();
-    viewport.zoomAt(screenOf(e), e.deltaY < 0 ? 1.12 : 1 / 1.12);
+    // Trackpad pinch arrives as ctrl+wheel; ⌘/ctrl+wheel is the mouse zoom.
+    // A plain wheel / two-finger scroll pans (matching trackpad expectations).
+    if (e.ctrlKey || e.metaKey) {
+      viewport.zoomAt(screenOf(e), Math.exp(-e.deltaY * 0.0025));
+    } else {
+      viewport.panBy(-e.deltaX, -e.deltaY);
+    }
   }
 </script>
 

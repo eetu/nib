@@ -72,6 +72,25 @@ function penDrag(ref: NodeRef): DragSession {
   };
 }
 
+/** Resuming an endpoint: a plain click just picks the path up (no history — the
+ *  next click appends), but dragging from it shapes that endpoint's out-handle
+ *  into a smooth continuation, like the pen does for a freshly-placed node. */
+function resumeDrag(ref: NodeRef): DragSession {
+  let moved = false;
+  return {
+    move(docPoint) {
+      editor.setPenHandles(ref, docPoint);
+      moved = true;
+    },
+    up() {
+      if (moved) editor.commit();
+    },
+    cancel() {
+      if (moved) editor.revert();
+    },
+  };
+}
+
 /** Snap the placement point to an existing anchor (returning its ref, so a
  *  click on the start node can close the loop) or to the grid. */
 function penPoint(docPoint: Point): { point: Point; snapRef: NodeRef | null } {
@@ -132,8 +151,9 @@ export const penTool: Tool = {
       interaction.penDrawing = true;
       interaction.resumePoint = null;
       const nodes = editor.doc.paths[pathIndex]?.subpaths[subpathIndex]?.nodes.length ?? 1;
-      editor.select({ pathIndex, subpathIndex, nodeIndex: nodes - 1 });
-      return null;
+      const tail = { pathIndex, subpathIndex, nodeIndex: nodes - 1 };
+      editor.select(tail);
+      return resumeDrag(tail);
     }
 
     const ref = editor.beginPath(point);

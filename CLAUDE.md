@@ -88,7 +88,11 @@ Per-area detail in `frontend/CLAUDE.md`.
   transient `gesture` that branches on whether the tool returned a DragSession).
   EditorCanvas sends DOWN/MOVE/UP/CANCEL; the machine owns *when* pan/move/up/
   cancel fire and holds the active session. Tools stay the behavior units; add a
-  gesture state here, not another flag in the component.
+  gesture state here, not another flag in the component. **Zoom/pan bypass the
+  machine** (they're pure viewport, not edits): pinch — a trackpad pinch arrives
+  as `ctrl+wheel`, and two fingers on a touchscreen are tracked directly in
+  EditorCanvas — plus `⌘/ctrl+wheel` zoom; a plain wheel / two-finger scroll,
+  space-drag, or middle-drag pans. A second pointer cancels any in-flight edit.
 - **Live-edit then commit.** Mutations change the model continuously during a
   drag; the tool calls `editor.commit()` once at gesture end = one undo step. A
   plain click (no move) doesn't commit — selecting never dirties history.
