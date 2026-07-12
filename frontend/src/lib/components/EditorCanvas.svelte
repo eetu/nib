@@ -201,13 +201,19 @@
     canvas.send({ type: "UP", docPoint: viewport.toDoc(screenOf(e)) });
   }
 
+  // Zoom responsiveness knobs (bump for snappier zoom). WHEEL_ZOOM_SENS scales
+  // the ctrl/⌘+wheel step; PINCH_GAIN (>1) makes a Safari trackpad pinch zoom
+  // faster than the raw finger spread.
+  const WHEEL_ZOOM_SENS = 0.006;
+  const PINCH_GAIN = 1.8;
+
   function onWheel(e: WheelEvent) {
     if (!editor.doc) return;
     e.preventDefault();
     // Chromium/Firefox deliver a trackpad pinch as ctrl+wheel; ⌘/ctrl+wheel is
     // the mouse zoom. A plain wheel / two-finger scroll pans.
     if (e.ctrlKey || e.metaKey) {
-      viewport.zoomAt(screenOf(e), Math.exp(-e.deltaY * 0.0025));
+      viewport.zoomAt(screenOf(e), Math.exp(-e.deltaY * WHEEL_ZOOM_SENS));
     } else {
       viewport.panBy(-e.deltaX, -e.deltaY);
     }
@@ -228,7 +234,8 @@
     ongesturechange: (e: Event) => {
       e.preventDefault();
       const g = e as GestureLike;
-      if (gestureLast > 0 && g.scale > 0) viewport.zoomAt(screenOf(g), g.scale / gestureLast);
+      if (gestureLast > 0 && g.scale > 0)
+        viewport.zoomAt(screenOf(g), (g.scale / gestureLast) ** PINCH_GAIN);
       gestureLast = g.scale;
     },
     ongestureend: (e: Event) => e.preventDefault(),
