@@ -2109,6 +2109,12 @@ __metadata:
   languageName: node
   linkType: hard
 
+"nib-core@link:../core/pkg::locator=nib-frontend%40workspace%3A.":
+  version: 0.0.0-use.local
+  resolution: "nib-core@link:../core/pkg::locator=nib-frontend%40workspace%3A."
+  languageName: node
+  linkType: soft
+
 "nib-frontend@workspace:.":
   version: 0.0.0-use.local
   resolution: "nib-frontend@workspace:."
@@ -2120,6 +2126,7 @@ __metadata:
     "@sveltejs/vite-plugin-svelte": "npm:^7.1.2"
     eslint: "npm:^10.4.0"
     jsdom: "npm:^29.1.1"
+    nib-core: "link:../core/pkg"
     prettier: "npm:^3.8.3"
     prettier-plugin-svelte: "npm:^4.0.1"
     svelte: "npm:^5.56.3"

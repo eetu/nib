@@ -1,0 +1,13 @@
+# nib Rust workspace. `core/` (nib-core) is the document/geometry/op engine — it
+# compiles to WASM for the browser editor and native for the (later) backend + tests.
+# See CLAUDE.md / the roadmap: the model, op vocabulary, and geometry live here.
+[workspace]
+members = ["core"]
+resolver = "3"
+
+[profile.release]
+# Small, fast WASM: optimize for size, strip, fat LTO. Matters because the .wasm
+# ships to the browser alongside the SPA.
+opt-level = "s"
+lto = true
+strip = true

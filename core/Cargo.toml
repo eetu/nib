@@ -1,0 +1,25 @@
+[package]
+name = "nib-core"
+version = "0.0.0"
+edition = "2024"
+description = "nib's document/geometry/op engine — compiles to WASM (browser) and native (backend + tests)."
+license = "MIT"
+publish = false
+
+[lib]
+# cdylib → the .wasm for wasm-pack; rlib → usable natively (backend crate, `cargo test`).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2.126"
+serde = { version = "1.0.228", features = ["derive"] }
+serde-wasm-bindgen = "0.6.5"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3.76"
+
+# Modern rustc emits bulk-memory ops (memory.fill/copy); wasm-pack's bundled wasm-opt
+# rejects them unless the feature is enabled explicitly. Bulk memory is supported by all
+# current browsers, so enable it and keep size optimization (-O) on.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ['-O', '--enable-bulk-memory']

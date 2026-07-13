@@ -10,6 +10,9 @@ on:
     branches: [main]
     paths:
       - "frontend/**"
+      - "core/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/pages.yaml"
   workflow_dispatch:
 
@@ -30,6 +33,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      # The Rust `nib-core` crate compiles to WASM and is consumed by the frontend via a
+      # link: dep (../core/pkg). Build it BEFORE `yarn install` so the link target exists.
+      # ubuntu-latest ships rustup + stable, so we only add the wasm target + wasm-pack.
+      - name: Add wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      - name: Build the Rust core → WASM
+        working-directory: ${{ github.workspace }}
+        run: wasm-pack build core --target web
 
       - name: Install Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
