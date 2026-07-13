@@ -12,6 +12,9 @@
 
 use wasm_bindgen::prelude::*;
 
+pub mod model;
+pub mod snap;
+
 /// The nib editing engine. It **owns** the document + history + selection across calls;
 /// the JS side holds one `Editor` handle and drives it with ops and queries. In A1 it holds
 /// only its build version — enough to confirm the boundary works.
@@ -62,7 +65,10 @@ mod tests {
     fn echo_roundtrips_the_message() {
         let ed = Editor::new();
         let out = ed.echo("hello");
-        assert!(out.contains("hello"), "echo should include the message: {out}");
+        assert!(
+            out.contains("hello"),
+            "echo should include the message: {out}"
+        );
         assert!(out.contains("nib-core"), "echo should tag the core: {out}");
     }
 }
