@@ -2,8 +2,9 @@
 
 SvelteKit (Svelte 5 runes) + Vite, pure SPA (`adapter-static`, `ssr = false`,
 output to `dist/`). Consumes halo-design tokens via `src/lib/styles/halo.css`
-(copied verbatim); `--halo-*` vars in scoped `<style>` blocks. See the
-`nib-design` skill for the brand delta.
+(adopted from the canonical file, with one deliberate deviation — `data-theme`
+instead of a media query; see Notes); `--halo-*` vars in scoped `<style>`
+blocks. See the `nib-design` skill for the brand delta.
 
 ## Structure
 

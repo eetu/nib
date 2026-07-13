@@ -40,7 +40,9 @@ Point it at a **folder** of generated SVGs, refine each, save in place.
 - **Edit the SVG source directly** (SOURCE drawer) — re-parses, and bad markup
   is rejected without losing your document.
 - **Close a loop by snapping** an endpoint onto the subpath's start.
-- Zoom/pan, undo/redo.
+- Zoom/pan (pinch or ⌘/Ctrl-scroll to zoom), undo/redo.
+- **Settings**: light / dark / auto theme, and a canvas backdrop
+  (checker / light / dark) to preview the SVG against.
 - Save back in place (or download); live SVG source view + copy.
 
 Unedited markup is preserved byte-for-byte — only the paths you touch are rewritten.

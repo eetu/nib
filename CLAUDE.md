@@ -132,6 +132,7 @@ Per-area detail in `frontend/CLAUDE.md`.
 
 Stroke cap/join/dash controls, a shapes flyout in the rail (when shape count
 grows), other shape primitives (rect, polygon, line), boolean ops, rotate/skew
-transforms (scale is built), multi-select, layers/groups, gradients, backend + hosting. The `added`/`attributes` model +
-pluggable tools + grouped rail are shaped to absorb these. If a feature crosses
-into those areas, raise it before building.
+transforms (scale is built), multi-select, layers/groups, gradients, and a
+server backend (hosting is done — the static Pages demo). The
+`added`/`attributes` model + pluggable tools + grouped rail are shaped to absorb
+these. If a feature crosses into those areas, raise it before building.
