@@ -71,13 +71,41 @@
 
   function addStop() {
     if (!grad) return;
-    const last = grad.stops[grad.stops.length - 1];
-    editor.setGradient({ ...grad, stops: [...grad.stops, { offset: 1, color: last.color }] });
+    const stops = [...grad.stops, { offset: 0.5, color: grad.stops[0].color }];
+    editor.setGradient({ ...grad, stops });
+    selStop = stops.length - 1;
   }
 
   function removeStop(i: number) {
     if (!grad || grad.stops.length <= 2) return;
     editor.setGradient({ ...grad, stops: grad.stops.filter((_, j) => j !== i) });
+  }
+
+  // Draggable stop markers along the gradient bar.
+  let barEl = $state<HTMLDivElement>();
+  let dragStop = $state<number | null>(null);
+  let selStop = $state(0);
+
+  $effect(() => {
+    if (grad && selStop >= grad.stops.length) selStop = grad.stops.length - 1;
+  });
+
+  function stopDown(i: number, e: PointerEvent) {
+    selStop = i;
+    dragStop = i;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+  function stopMove(e: PointerEvent) {
+    if (dragStop === null || !barEl) return;
+    const r = barEl.getBoundingClientRect();
+    const t = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    updateStop(dragStop, { offset: Math.round(t * 100) / 100 }, true);
+  }
+  function stopUp() {
+    if (dragStop === null) return;
+    dragStop = null;
+    if (grad) editor.setGradient(grad); // commit the previewed offset as one undo step
   }
 
   // Linear direction as an angle (deg) ↔ the objectBoundingBox vector, centred on 0.5,0.5.
@@ -117,33 +145,35 @@
       onchange={(v) => setPaint(v)}
     />
   {:else if grad}
-    <div class="preview" style:background={previewBg}></div>
-    {#each grad.stops as s, i (i)}
-      <div class="stop">
-        <ColorInput
-          label=""
-          value={s.color}
-          editable
-          oninput={(v) => updateStop(i, { color: v }, true)}
-          onchange={(v) => updateStop(i, { color: v })}
-        />
-        <input
-          class="off"
-          type="number"
-          min="0"
-          max="1"
-          step="0.05"
-          value={s.offset}
-          onchange={(e) => updateStop(i, { offset: Number(e.currentTarget.value) })}
-        />
+    <div class="bar" bind:this={barEl} style:background={previewBg}>
+      {#each grad.stops as s, i (i)}
         <button
-          class="rm"
-          disabled={grad.stops.length <= 2}
-          aria-label="remove stop"
-          onclick={() => removeStop(i)}>×</button
-        >
-      </div>
-    {/each}
+          class="marker"
+          class:sel={selStop === i}
+          style:left="{s.offset * 100}%"
+          style:background={s.color}
+          onpointerdown={(e) => stopDown(i, e)}
+          onpointermove={stopMove}
+          onpointerup={stopUp}
+          aria-label="gradient stop {i + 1}"
+        ></button>
+      {/each}
+    </div>
+    <div class="stoprow">
+      <ColorInput
+        label=""
+        value={grad.stops[selStop]?.color ?? "#000000"}
+        editable
+        oninput={(v) => updateStop(selStop, { color: v }, true)}
+        onchange={(v) => updateStop(selStop, { color: v })}
+      />
+      <button
+        class="rm"
+        disabled={grad.stops.length <= 2}
+        aria-label="remove stop"
+        onclick={() => removeStop(selStop)}>×</button
+      >
+    </div>
     <div class="grow">
       <button class="addstop" onclick={addStop}>+ stop</button>
       {#if grad.kind === "linear"}
@@ -201,26 +231,42 @@
     background: var(--halo-accent-soft);
   }
 
-  .preview {
-    height: 14px;
-    margin-bottom: 6px;
+  .bar {
+    position: relative;
+    height: 18px;
+    margin: 2px 2px 12px;
     border: 1px solid var(--halo-border);
     border-radius: var(--halo-radius-pill);
   }
 
-  .stop {
+  .marker {
+    position: absolute;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    padding: 0;
+    transform: translate(-50%, -50%);
+    border: 2px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px var(--halo-text-muted);
+    cursor: ew-resize;
+    touch-action: none;
+  }
+
+  .marker.sel {
+    box-shadow: 0 0 0 2px var(--halo-accent);
+  }
+
+  .stoprow {
     display: flex;
     align-items: center;
     gap: 6px;
   }
 
-  .stop :global(.field) {
+  .stoprow :global(.field) {
     flex: 1;
-    margin-bottom: 4px;
-  }
-
-  .off {
-    width: 52px;
+    min-width: 0;
+    margin-bottom: 6px;
   }
 
   .rm {
