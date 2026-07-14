@@ -22,10 +22,17 @@ class Interaction {
   /** Open endpoint the pen would resume from if clicked (hover affordance). */
   resumePoint = $state<Point | null>(null);
 
+  /** Active smart-guide lines while dragging (document coords): vertical guides at these x,
+   *  horizontal guides at these y. Drawn full-canvas by the overlay. */
+  guidesX = $state<number[]>([]);
+  guidesY = $state<number[]>([]);
+
   clearDrag(): void {
     this.snapPoint = null;
     this.closing = false;
     this.resumePoint = null;
+    this.guidesX = [];
+    this.guidesY = [];
   }
 }
 

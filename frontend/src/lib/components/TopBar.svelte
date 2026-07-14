@@ -96,6 +96,9 @@
       <label class="snaprow sub">
         size <input type="number" min="1" max="200" bind:value={tools.gridSize} />
       </label>
+      <label class="snaprow">
+        <input type="checkbox" bind:checked={tools.guidesEnabled} /> smart guides
+      </label>
     </Popover>
     <button class="icon-btn" title="Settings" aria-label="Settings" onclick={onSettings}>
       <Settings size={18} />

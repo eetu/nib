@@ -38,6 +38,24 @@
 
 {#if doc}
   <g class="overlay">
+    {#each interaction.guidesX as gx (gx)}
+      <line
+        class="guide"
+        x1={viewport.toScreen({ x: gx, y: 0 }).x}
+        y1={0}
+        x2={viewport.toScreen({ x: gx, y: 0 }).x}
+        y2={viewport.pxHeight}
+      />
+    {/each}
+    {#each interaction.guidesY as gy (gy)}
+      <line
+        class="guide"
+        x1={0}
+        y1={viewport.toScreen({ x: 0, y: gy }).y}
+        x2={viewport.pxWidth}
+        y2={viewport.toScreen({ x: 0, y: gy }).y}
+      />
+    {/each}
     {#if outlineD}
       <!-- selection centerline: light casing + accent core so it reads on any
            stroke colour (Pixelmator-style) -->
@@ -168,6 +186,14 @@
     fill: var(--halo-bg-main);
     stroke: var(--halo-accent);
     stroke-width: 1.5;
+  }
+
+  /* smart alignment guides while dragging */
+  .guide {
+    stroke: var(--halo-accent);
+    stroke-width: 1;
+    opacity: 0.9;
+    pointer-events: none;
   }
 
   /* rotate knob above the box top-centre */

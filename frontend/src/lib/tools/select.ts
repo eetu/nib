@@ -6,7 +6,9 @@ import { interaction } from "$lib/stores/interaction.svelte";
 import { tools } from "$lib/stores/tool.svelte";
 import { viewport } from "$lib/stores/viewport.svelte";
 
+import { alignGuides } from "./guides";
 import {
+  type Bounds,
   boxCenter,
   handleAnchor,
   rotateSubpaths,
@@ -97,9 +99,22 @@ function handleDrag(ref: NodeRef, which: "in" | "out", anchor: Point): DragSessi
   };
 }
 
-/** Drag a path's body to move the whole shape (all nodes translate together).
- *  Shift locks the total translation to one axis. */
+// Snap distance (screen px) for smart guides — a bit tighter than anchor snapping.
+const GUIDE_PX = 6;
+
+/** Drag a path's body to move the whole shape (all nodes translate together). Shift locks
+ *  the translation to one axis; otherwise smart guides align its edges/centre to other
+ *  shapes + the canvas (when enabled). */
 function pathDrag(pathIndex: number, start: Point): DragSession {
+  const doc = editor.doc;
+  const base = doc?.paths[pathIndex] ? subpathsBounds(doc.paths[pathIndex].subpaths) : null;
+  // Other shapes' bounds, captured once, as smart-guide targets.
+  const others: Bounds[] = [];
+  doc?.paths.forEach((p, i) => {
+    if (i === pathIndex || p.deleted) return;
+    const b = subpathsBounds(p.subpaths);
+    if (b) others.push(b);
+  });
   let appliedX = 0;
   let appliedY = 0;
   let moved = false;
@@ -110,6 +125,20 @@ function pathDrag(pathIndex: number, start: Point): DragSession {
       if (event.shiftKey) {
         if (Math.abs(tx) >= Math.abs(ty)) ty = 0;
         else tx = 0;
+        interaction.guidesX = [];
+        interaction.guidesY = [];
+      } else if (tools.guidesEnabled && base && doc) {
+        const moving = {
+          minX: base.minX + tx,
+          minY: base.minY + ty,
+          maxX: base.maxX + tx,
+          maxY: base.maxY + ty,
+        };
+        const g = alignGuides(moving, others, doc.viewBox, viewport.toDocLength(GUIDE_PX));
+        tx += g.dx;
+        ty += g.dy;
+        interaction.guidesX = g.gx;
+        interaction.guidesY = g.gy;
       }
       const dx = tx - appliedX;
       const dy = ty - appliedY;
@@ -120,9 +149,11 @@ function pathDrag(pathIndex: number, start: Point): DragSession {
       moved = true;
     },
     up() {
+      interaction.clearDrag();
       if (moved) editor.commit();
     },
     cancel() {
+      interaction.clearDrag();
       if (moved) editor.revert();
     },
   };
