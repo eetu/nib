@@ -7,6 +7,11 @@
   import AlignStartHorizontal from "@lucide/svelte/icons/align-start-horizontal";
   import AlignStartVertical from "@lucide/svelte/icons/align-start-vertical";
   import AlignVerticalDistributeCenter from "@lucide/svelte/icons/align-vertical-distribute-center";
+  import ChevronDown from "@lucide/svelte/icons/chevron-down";
+  import ChevronUp from "@lucide/svelte/icons/chevron-up";
+  import Eye from "@lucide/svelte/icons/eye";
+  import EyeOff from "@lucide/svelte/icons/eye-off";
+  import Plus from "@lucide/svelte/icons/plus";
   import Trash2 from "@lucide/svelte/icons/trash-2";
 
   import { subpathsBounds } from "$lib/model/geometry";
@@ -124,6 +129,23 @@
       editor.setSubpaths(pathIndex, scaleSubpaths(path.subpaths, anchor, 1, v / h));
     else return;
     editor.commit();
+  }
+
+  // Layers shown top-of-stack first (the array is bottom → top), each with its real index.
+  const layersTopFirst = $derived(editor.layers.map((l, i) => ({ l, i })).reverse());
+
+  let renamingLayer = $state<string | null>(null);
+  let layerRenameValue = $state("");
+
+  function startLayerRename(id: string, current: string) {
+    renamingLayer = id;
+    layerRenameValue = current;
+  }
+
+  function commitLayerRename(id: string) {
+    if (renamingLayer !== id) return;
+    editor.renameLayer(id, layerRenameValue);
+    renamingLayer = null;
   }
 
   let renaming = $state<number | null>(null);
@@ -313,6 +335,84 @@
       </button>
     </section>
   {/if}
+
+  <section class="layers">
+    <div class="lhead">
+      <h2>layers</h2>
+      <button
+        class="add"
+        title="add layer"
+        aria-label="add layer"
+        onclick={() => editor.addLayer(`layer ${editor.layers.length + 1}`)}
+      >
+        <Plus size={14} />
+      </button>
+    </div>
+    {#if editor.layers.length}
+      <ul class="layerlist">
+        {#each layersTopFirst as { l, i } (l.id)}
+          <li class:active={editor.activeLayer === l.id}>
+            <button
+              class="eye"
+              title={l.visible ? "hide layer" : "show layer"}
+              aria-label="toggle layer visibility"
+              onclick={() => editor.setLayerVisible(l.id, !l.visible)}
+            >
+              {#if l.visible}<Eye size={14} />{:else}<EyeOff size={14} />{/if}
+            </button>
+            {#if renamingLayer === l.id}
+              <input
+                class="rename"
+                bind:value={layerRenameValue}
+                use:autofocus
+                onblur={() => commitLayerRename(l.id)}
+                onkeydown={(e) => {
+                  if (e.key === "Enter") commitLayerRename(l.id);
+                  else if (e.key === "Escape") renamingLayer = null;
+                }}
+              />
+            {:else}
+              <button
+                class="lname"
+                onclick={() => editor.setActiveLayer(l.id)}
+                ondblclick={() => startLayerRename(l.id, l.name)}
+                title="click to make active · double-click to rename"
+              >
+                {l.name}
+              </button>
+            {/if}
+            <button
+              class="mv"
+              title="raise"
+              aria-label="raise layer"
+              disabled={i === editor.layers.length - 1}
+              onclick={() => editor.reorderLayer(l.id, i + 1)}><ChevronUp size={13} /></button
+            >
+            <button
+              class="mv"
+              title="lower"
+              aria-label="lower layer"
+              disabled={i === 0}
+              onclick={() => editor.reorderLayer(l.id, i - 1)}><ChevronDown size={13} /></button
+            >
+            <button
+              class="trash"
+              title="delete layer"
+              aria-label="delete layer"
+              onclick={() => editor.deleteLayer(l.id)}><Trash2 size={13} /></button
+            >
+          </li>
+        {/each}
+      </ul>
+      {#if editor.selectedPaths.length > 0 && editor.activeLayer}
+        <button class="assign" onclick={() => editor.assignSelectionToLayer(editor.activeLayer)}>
+          move selection here
+        </button>
+      {/if}
+    {:else}
+      <p class="empty">no layers · new shapes stay unassigned</p>
+    {/if}
+  </section>
 
   <section class="paths">
     <h2>paths</h2>
@@ -533,6 +633,90 @@
     margin: 2px 0 0;
     font-size: 11px;
     color: var(--halo-text-muted);
+  }
+
+  /* layers panel */
+  .lhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .lhead .add {
+    display: inline-flex;
+    padding: 3px;
+    border: none;
+    border-radius: var(--halo-radius-pill);
+    background: transparent;
+    color: var(--halo-text-muted);
+  }
+
+  .lhead .add:hover {
+    color: var(--halo-accent);
+    background: var(--halo-bg-main);
+  }
+
+  .layerlist {
+    list-style: none;
+    margin: 0 0 6px;
+    padding: 0;
+  }
+
+  .layerlist li {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 1px 2px;
+    border-radius: var(--halo-radius-pill);
+  }
+
+  .layerlist li.active {
+    background: var(--halo-accent-soft);
+  }
+
+  .layerlist .eye,
+  .layerlist .mv {
+    display: inline-flex;
+    padding: 4px;
+    border: none;
+    background: transparent;
+    color: var(--halo-text-muted);
+  }
+
+  .layerlist .mv:disabled {
+    opacity: 0.3;
+  }
+
+  .layerlist .eye:hover,
+  .layerlist .mv:hover:not(:disabled) {
+    color: var(--halo-accent);
+  }
+
+  .layerlist .lname {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 2px;
+    border: none;
+    background: transparent;
+    color: var(--halo-text-main);
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  li.active .lname {
+    color: var(--halo-accent);
+  }
+
+  .assign {
+    width: 100%;
+    padding: 5px 0;
+    border: 1px solid var(--halo-accent);
+    border-radius: var(--halo-radius-pill);
+    background: var(--halo-bg-main);
+    color: var(--halo-accent);
+    font-size: 12px;
   }
 
   /* align / distribute icon buttons */

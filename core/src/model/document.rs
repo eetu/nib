@@ -194,6 +194,7 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
                 style_override: None,
                 deleted: false,
                 renamed: false,
+                layer: None,
             }
         })
         .collect();
@@ -203,6 +204,8 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
         source: source.to_string(),
         view_box,
         paths,
+        layers: Vec::new(),
+        active_layer: None,
     })
 }
 
@@ -293,34 +296,97 @@ fn attrs_to_string(attrs: Option<&IndexMap<String, String>>) -> String {
     }
 }
 
-/// Insert in-app-drawn paths (no source location) just before the closing `</svg>`.
+/// A drawn path is exportable if it has real geometry.
+fn is_exportable_drawn(p: &PathElement) -> bool {
+    p.added && !p.deleted && p.subpaths.iter().any(|sp| sp.nodes.len() >= 2)
+}
+
+/// Serialize one drawn `<path …>` (indented). `indent` is the leading whitespace.
+fn drawn_path_tag(p: &PathElement, precision: usize, indent: &str) -> String {
+    let id = if p.renamed {
+        format!(" id=\"{}\"", p.id)
+    } else {
+        String::new()
+    };
+    format!(
+        "{}<path{} d=\"{}\"{} />",
+        indent,
+        id,
+        path_to_d_prec(&p.subpaths, precision),
+        attrs_to_string(p.attributes.as_ref())
+    )
+}
+
+/// Escape a string for use inside a double-quoted XML attribute value.
+fn escape_attr(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;")
+}
+
+/// Insert in-app-drawn paths (no source location) just before the closing `</svg>`. With no
+/// named layers this is a flat list (byte-preservation for the rest of the doc is untouched);
+/// with layers, drawn paths group into `<g id="…">` blocks in layer z-order (a hidden layer's
+/// group carries `display="none"`), and any unassigned drawn paths append bare after them.
 fn append_drawn_paths(out: &str, doc: &SvgDocument, precision: usize) -> String {
-    let drawn: Vec<String> = doc
-        .paths
-        .iter()
-        .filter(|p| p.added && !p.deleted && p.subpaths.iter().any(|sp| sp.nodes.len() >= 2))
-        .map(|p| {
-            let id = if p.renamed {
-                format!(" id=\"{}\"", p.id)
-            } else {
+    let block = if doc.layers.is_empty() {
+        doc.paths
+            .iter()
+            .filter(|p| is_exportable_drawn(p))
+            .map(|p| drawn_path_tag(p, precision, "  "))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        let mut blocks: Vec<String> = Vec::new();
+        for layer in &doc.layers {
+            let inner: Vec<String> = doc
+                .paths
+                .iter()
+                .filter(|p| is_exportable_drawn(p) && p.layer.as_deref() == Some(layer.id.as_str()))
+                .map(|p| drawn_path_tag(p, precision, "    "))
+                .collect();
+            if inner.is_empty() {
+                continue;
+            }
+            let hidden = if layer.visible {
                 String::new()
+            } else {
+                " display=\"none\"".to_string()
             };
-            format!(
-                "  <path{} d=\"{}\"{} />",
-                id,
-                path_to_d_prec(&p.subpaths, precision),
-                attrs_to_string(p.attributes.as_ref())
-            )
-        })
-        .collect();
-    let drawn = drawn.join("\n");
-    if drawn.is_empty() {
+            blocks.push(format!(
+                "  <g id=\"{}\"{}>\n{}\n  </g>",
+                escape_attr(&layer.name),
+                hidden,
+                inner.join("\n")
+            ));
+        }
+        // Unassigned drawn paths (no layer) append bare, after the layer groups.
+        let assigned: std::collections::HashSet<&str> =
+            doc.layers.iter().map(|l| l.id.as_str()).collect();
+        let loose: Vec<String> = doc
+            .paths
+            .iter()
+            .filter(|p| {
+                is_exportable_drawn(p) && !p.layer.as_deref().is_some_and(|l| assigned.contains(l))
+            })
+            .map(|p| drawn_path_tag(p, precision, "  "))
+            .collect();
+        blocks.extend(loose);
+        blocks.join("\n")
+    };
+    if block.is_empty() {
         return out.to_string();
     }
     match out.rfind("</svg>") {
-        Some(close) => format!("{}{}\n{}", &out[..close], drawn, &out[close..]),
-        None => format!("{out}\n{drawn}"),
+        Some(close) => format!("{}{}\n{}", &out[..close], block, &out[close..]),
+        None => format!("{out}\n{block}"),
     }
+}
+
+/// Whether an imported path sits on a hidden layer (so it exports with `display="none"`).
+fn on_hidden_layer(doc: &SvgDocument, p: &PathElement) -> bool {
+    p.layer
+        .as_deref()
+        .and_then(|id| doc.layers.iter().find(|l| l.id == id))
+        .is_some_and(|l| !l.visible)
 }
 
 /// Serialize the document to SVG at the TS default precision (3).
@@ -347,9 +413,10 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
         };
         let idx = cursor + rel;
         let end = idx + tag.len();
+        let hidden = on_hidden_layer(doc, p);
         if p.deleted {
             out.push_str(&src[cursor..idx]); // drop the tag
-        } else if p.edited || p.renamed || style_overridden(p) {
+        } else if p.edited || p.renamed || style_overridden(p) || hidden {
             let mut t = tag.clone();
             if p.edited {
                 t = with_attr(&t, "d", &path_to_d_prec(&p.subpaths, precision));
@@ -361,6 +428,9 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
                 for (k, v) in so {
                     t = with_attr(&t, k, v);
                 }
+            }
+            if hidden {
+                t = with_attr(&t, "display", "none");
             }
             out.push_str(&src[cursor..idx]);
             out.push_str(&t);
@@ -376,7 +446,25 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::types::Point;
+    use crate::model::path::parse_path_d;
+    use crate::model::types::{Layer, Point};
+
+    fn drawn_on_layer(id: &str, layer: &str) -> PathElement {
+        PathElement {
+            id: id.to_string(),
+            index: 0,
+            original_d: String::new(),
+            subpaths: parse_path_d("M 0 0 L 10 10"),
+            edited: true,
+            added: true,
+            attributes: None,
+            style_override: None,
+            original_tag: None,
+            deleted: false,
+            renamed: false,
+            layer: Some(layer.to_string()),
+        }
+    }
 
     const SAMPLE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <rect x="0" y="0" width="100" height="100" fill="#eee"/>
@@ -465,6 +553,53 @@ mod tests {
         assert!(out.contains(r#"d="M 10 10 L 90 10 L 90 90""#));
         assert!(out.contains(r#"d="M 20 20 L 70 70""#));
         assert!(!out.contains(r#"d="M 20 20 L 80 80""#));
+    }
+
+    #[test]
+    fn drawn_paths_group_into_layer_g_elements_and_honor_visibility() {
+        let mut doc =
+            parse_svg("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n</svg>")
+                .unwrap();
+        doc.layers.push(Layer {
+            id: "L1".into(),
+            name: "outline".into(),
+            visible: true,
+        });
+        doc.paths.push(drawn_on_layer("s1", "L1"));
+        let out = serialize_svg(&doc);
+        assert!(out.contains(r#"<g id="outline">"#), "grouped: {out}");
+        assert!(out.contains("<path"));
+        assert!(out.contains("</g>"));
+
+        // Hiding the layer stamps display:none on its group.
+        doc.layers[0].visible = false;
+        let out2 = serialize_svg(&doc);
+        assert!(
+            out2.contains(r#"<g id="outline" display="none">"#),
+            "hidden: {out2}"
+        );
+    }
+
+    #[test]
+    fn imported_path_on_a_hidden_layer_gets_display_none() {
+        let mut doc = parse_svg(SAMPLE).unwrap();
+        doc.layers.push(Layer {
+            id: "L1".into(),
+            name: "hidden".into(),
+            visible: false,
+        });
+        doc.paths[0].layer = Some("L1".into());
+        let out = serialize_svg(&doc);
+        assert!(out.contains("display=\"none\""), "{out}");
+        // The other path (no layer) is untouched.
+        assert!(out.contains(r#"<path d="M 20 20 L 80 80" stroke="red"/>"#));
+    }
+
+    #[test]
+    fn empty_layers_keep_byte_for_byte_preservation() {
+        let doc = parse_svg(SAMPLE).unwrap();
+        assert!(doc.layers.is_empty());
+        assert_eq!(serialize_svg(&doc), SAMPLE);
     }
 
     #[test]

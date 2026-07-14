@@ -57,6 +57,8 @@ export type PathElement = {
   deleted?: boolean;
   /** The user renamed this path — write its `id` into the exported markup. */
   renamed?: boolean;
+  /** Id of the layer this path belongs to (absent = unassigned / default). */
+  layer?: string;
 };
 
 export type ViewBox = {
@@ -66,11 +68,23 @@ export type ViewBox = {
   height: number;
 };
 
+/** A named layer — a flat, ordered grouping over paths (z-order + show/hide + active-target
+ *  for new shapes). Exports as a top-level `<g>`. Matches the Rust `Layer`. */
+export type Layer = {
+  id: string;
+  name: string;
+  visible: boolean;
+};
+
 export type SvgDocument = {
   /** Original SVG text, kept so unedited markup exports byte-for-byte. */
   source: string;
   viewBox: ViewBox;
   paths: PathElement[];
+  /** Named layers in z-order (bottom → top); empty = no explicit layers. */
+  layers?: Layer[];
+  /** The layer new shapes are added to. */
+  activeLayer?: string;
 };
 
 /** Addresses one anchor node inside the document — the unit of selection and

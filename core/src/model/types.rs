@@ -72,6 +72,21 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+fn default_true() -> bool {
+    true
+}
+
+/// A named layer — a flat, ordered organizational grouping over paths. New shapes land on the
+/// active layer; layers give z-order + show/hide, and export as top-level `<g>` wrappers. An
+/// LLM organizes generated shapes onto layers far more cleanly than into a flat path list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Layer {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub visible: bool,
+}
+
 /// A single `<path>` element: its editable model plus what we need to write the edit back
 /// into the original SVG source without disturbing anything else.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -118,6 +133,9 @@ pub struct PathElement {
     /// The user renamed this path — write its `id` into the exported markup.
     #[serde(skip_serializing_if = "is_false", default)]
     pub renamed: bool,
+    /// Id of the layer this path belongs to (`None` = unassigned / the implicit default).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub layer: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -127,6 +145,13 @@ pub struct SvgDocument {
     #[serde(rename = "viewBox")]
     pub view_box: ViewBox,
     pub paths: Vec<PathElement>,
+    /// Named layers, in z-order (bottom → top). Empty = no explicit layers → the document
+    /// exports via the byte-preserving splice; once populated, drawn paths group into `<g>`s.
+    #[serde(default)]
+    pub layers: Vec<Layer>,
+    /// The layer new shapes are added to (`None` = unassigned).
+    #[serde(rename = "activeLayer", skip_serializing_if = "Option::is_none", default)]
+    pub active_layer: Option<String>,
 }
 
 /// Addresses one anchor node inside the document — the unit of selection and the identity a

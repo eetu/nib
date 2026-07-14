@@ -54,6 +54,17 @@ Per-area detail in `frontend/CLAUDE.md`.
   "drawn">`, not the imperatively-imported artwork) and are *appended* before
   `</svg>` on export. Everything else treats them like any path (editable,
   snappable, undoable, persisted).
+- **Named layers** (`nib-core` `Layer` + `SvgDocument.layers`/`activeLayer` +
+  `PathElement.layer`) are a flat, ordered grouping over paths: z-order, show/hide,
+  and an *active* layer new shapes land on. **Export stays byte-preserving while
+  `layers` is empty**; once layers exist, drawn paths group into top-level
+  `<g id="name">` blocks (a hidden layer's `<g>` carries `display="none"`) and
+  imported paths on a hidden layer get `display="none"` spliced into their tag —
+  the first *active re-serialization of structure* (everything else still splices
+  verbatim). Layer CRUD/reorder/visibility/assign are ops (`addLayer` … `setPathLayer`),
+  so they sync + undo like any edit; the Inspector LAYERS panel + the store's layer
+  methods + `EditorCanvas` (drawn paths ordered by layer z-order, hidden layers
+  filtered) drive them.
 - **Two coordinate systems in the canvas.** Artwork is drawn in a scaled `<g>`
   (document units); the editing overlay is drawn in screen space so handles stay
   a constant pixel size at any zoom. `viewport.toScreen/toDoc` bridge them.

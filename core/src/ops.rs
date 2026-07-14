@@ -16,7 +16,9 @@ use serde::{Deserialize, Serialize};
 use crate::model::geometry::{distance, normalize};
 use crate::model::path::{close_subpath, insert_node_at, reversed_subpath};
 use crate::model::shapes::{ellipse_nodes, line_nodes, polygon_nodes, rect_nodes, star_nodes};
-use crate::model::types::{NodeRef, NodeType, PathElement, PathNode, Point, Subpath, SvgDocument};
+use crate::model::types::{
+    Layer, NodeRef, NodeType, PathElement, PathNode, Point, Subpath, SvgDocument,
+};
 
 /// Which control handle of a node an op targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +138,28 @@ pub enum Op {
         path: usize,
         key: String,
         value: Option<String>,
+    },
+
+    /// Create a new layer (client supplies the id) and make it the active layer.
+    AddLayer { id: String, name: String },
+    /// Rename a layer.
+    RenameLayer { id: String, name: String },
+    /// Remove a layer; its paths become unassigned (the layer's contents are not deleted).
+    DeleteLayer { id: String },
+    /// Show or hide a layer (hidden layers omit their paths from render + export).
+    SetLayerVisible { id: String, visible: bool },
+    /// Move a layer to a new z-index in the ordered layers list.
+    ReorderLayer { id: String, to: usize },
+    /// Set (or clear, with `None`) the active layer new shapes are added to.
+    SetActiveLayer {
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        id: Option<String>,
+    },
+    /// Assign a path to a layer (`None` = unassign).
+    SetPathLayer {
+        path: usize,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        layer: Option<String>,
     },
 }
 
@@ -311,6 +335,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             attributes,
         } => {
             let index = doc.paths.len();
+            let layer = doc.active_layer.clone();
             doc.paths.push(PathElement {
                 id: id.clone(),
                 index,
@@ -323,6 +348,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 original_tag: None,
                 deleted: false,
                 renamed: false,
+                layer,
             });
             true
         }
@@ -333,6 +359,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
         } => {
             let (nodes, closed) = spec.build();
             let index = doc.paths.len();
+            let layer = doc.active_layer.clone();
             doc.paths.push(PathElement {
                 id: id.clone(),
                 index,
@@ -345,6 +372,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 original_tag: None,
                 deleted: false,
                 renamed: false,
+                layer,
             });
             true
         }
@@ -384,6 +412,95 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                     map.shift_remove(key);
                 }
             }
+            true
+        }
+
+        Op::AddLayer { id, name } => {
+            if doc.layers.iter().any(|l| &l.id == id) {
+                return false;
+            }
+            doc.layers.push(Layer {
+                id: id.clone(),
+                name: name.clone(),
+                visible: true,
+            });
+            doc.active_layer = Some(id.clone());
+            true
+        }
+        Op::RenameLayer { id, name } => {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                return false;
+            }
+            let Some(l) = doc.layers.iter_mut().find(|l| &l.id == id) else {
+                return false;
+            };
+            l.name = trimmed.to_string();
+            true
+        }
+        Op::DeleteLayer { id } => {
+            let before = doc.layers.len();
+            doc.layers.retain(|l| &l.id != id);
+            if doc.layers.len() == before {
+                return false;
+            }
+            for p in doc.paths.iter_mut() {
+                if p.layer.as_deref() == Some(id.as_str()) {
+                    p.layer = None;
+                }
+            }
+            if doc.active_layer.as_deref() == Some(id.as_str()) {
+                doc.active_layer = None;
+            }
+            true
+        }
+        Op::SetLayerVisible { id, visible } => {
+            let Some(l) = doc.layers.iter_mut().find(|l| &l.id == id) else {
+                return false;
+            };
+            if l.visible == *visible {
+                return false;
+            }
+            l.visible = *visible;
+            true
+        }
+        Op::ReorderLayer { id, to } => {
+            let Some(from) = doc.layers.iter().position(|l| &l.id == id) else {
+                return false;
+            };
+            let to = (*to).min(doc.layers.len().saturating_sub(1));
+            if from == to {
+                return false;
+            }
+            let l = doc.layers.remove(from);
+            doc.layers.insert(to, l);
+            true
+        }
+        Op::SetActiveLayer { id } => {
+            if let Some(id) = id
+                && !doc.layers.iter().any(|l| &l.id == id)
+            {
+                return false;
+            }
+            if doc.active_layer == *id {
+                return false;
+            }
+            doc.active_layer = id.clone();
+            true
+        }
+        Op::SetPathLayer { path, layer } => {
+            if let Some(id) = layer
+                && !doc.layers.iter().any(|l| &l.id == id)
+            {
+                return false;
+            }
+            let Some(p) = doc.paths.get_mut(*path) else {
+                return false;
+            };
+            if p.layer == *layer {
+                return false;
+            }
+            p.layer = layer.clone();
             true
         }
     }
@@ -482,7 +599,10 @@ mod tests {
                 original_tag: None,
                 deleted: false,
                 renamed: false,
+                layer: None,
             }],
+            layers: Vec::new(),
+            active_layer: None,
         }
     }
 
@@ -661,6 +781,86 @@ mod tests {
         assert_eq!(p.id, "drawn-1");
         assert_eq!(p.index, 1);
         assert!(p.added && p.edited);
+        assert_eq!(p.layer, None); // no active layer → unassigned
+    }
+
+    #[test]
+    fn layer_lifecycle_and_active_assignment() {
+        let mut doc = doc_from("M 0 0 L 10 0", false);
+        // Add a layer → it becomes active.
+        assert!(apply(
+            &mut doc,
+            &Op::AddLayer {
+                id: "L1".into(),
+                name: "shapes".into()
+            }
+        ));
+        assert_eq!(doc.layers.len(), 1);
+        assert_eq!(doc.active_layer.as_deref(), Some("L1"));
+        // A duplicate id is a no-op.
+        assert!(!apply(
+            &mut doc,
+            &Op::AddLayer {
+                id: "L1".into(),
+                name: "dupe".into()
+            }
+        ));
+        // A new drawn shape lands on the active layer.
+        assert!(apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "s1".into(),
+                subpaths: parse_path_d("M 1 1 L 2 2"),
+                attributes: IndexMap::new(),
+            }
+        ));
+        assert_eq!(doc.paths[1].layer.as_deref(), Some("L1"));
+        // Hide + rename.
+        assert!(apply(
+            &mut doc,
+            &Op::SetLayerVisible {
+                id: "L1".into(),
+                visible: false
+            }
+        ));
+        assert!(!doc.layers[0].visible);
+        assert!(apply(
+            &mut doc,
+            &Op::RenameLayer {
+                id: "L1".into(),
+                name: "outline".into()
+            }
+        ));
+        assert_eq!(doc.layers[0].name, "outline");
+        // Deleting the layer unassigns its paths + clears active.
+        assert!(apply(&mut doc, &Op::DeleteLayer { id: "L1".into() }));
+        assert!(doc.layers.is_empty());
+        assert_eq!(doc.paths[1].layer, None);
+        assert_eq!(doc.active_layer, None);
+    }
+
+    #[test]
+    fn reorder_layer_moves_within_the_z_order() {
+        let mut doc = doc_from("M 0 0 L 10 0", false);
+        for id in ["a", "b", "c"] {
+            apply(
+                &mut doc,
+                &Op::AddLayer {
+                    id: id.into(),
+                    name: id.into(),
+                },
+            );
+        }
+        // a,b,c → move c to front (index 0)
+        assert!(apply(
+            &mut doc,
+            &Op::ReorderLayer {
+                id: "c".into(),
+                to: 0
+            }
+        ));
+        let order: Vec<&str> = doc.layers.iter().map(|l| l.id.as_str()).collect();
+        assert_eq!(order, ["c", "a", "b"]);
     }
 
     #[test]

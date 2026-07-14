@@ -1,6 +1,7 @@
 import { Editor as WasmEditor } from "$lib/core";
 import { subpathsBounds } from "$lib/model/geometry";
 import type {
+  Layer,
   NodeRef,
   NodeType,
   PathElement,
@@ -370,6 +371,50 @@ class DocumentStore {
     this.#wasm?.deselect();
     this.selectedPaths = [];
     this.commit();
+  }
+
+  // --- layers ------------------------------------------------------------
+
+  get layers(): Layer[] {
+    return this.doc?.layers ?? [];
+  }
+  get activeLayer(): string | null {
+    return this.doc?.activeLayer ?? null;
+  }
+
+  /** Create a layer (auto-id) and make it active. */
+  addLayer(name: string): void {
+    const id = crypto.randomUUID();
+    if (this.#apply({ type: "addLayer", id, name })) this.commit();
+  }
+  renameLayer(id: string, name: string): void {
+    if (this.#apply({ type: "renameLayer", id, name })) this.commit();
+  }
+  deleteLayer(id: string): void {
+    if (this.#apply({ type: "deleteLayer", id })) this.commit();
+  }
+  setLayerVisible(id: string, visible: boolean): void {
+    if (this.#apply({ type: "setLayerVisible", id, visible })) this.commit();
+  }
+  reorderLayer(id: string, to: number): void {
+    if (this.#apply({ type: "reorderLayer", id, to })) this.commit();
+  }
+  setActiveLayer(id: string | null): void {
+    if (this.#apply({ type: "setActiveLayer", id: id ?? undefined })) this.commit();
+  }
+  /** Assign a path (or the whole current object selection) to a layer (`null` = unassign). */
+  setPathLayer(pathIndex: number, layer: string | null): void {
+    if (this.#apply({ type: "setPathLayer", path: pathIndex, layer: layer ?? undefined }))
+      this.commit();
+  }
+  /** Move every selected path onto a layer (one undo step). */
+  assignSelectionToLayer(layer: string | null): void {
+    if (this.selectedPaths.length === 0) return;
+    let changed = false;
+    for (const i of this.selectedPaths)
+      changed =
+        this.#apply({ type: "setPathLayer", path: i, layer: layer ?? undefined }) || changed;
+    if (changed) this.commit();
   }
 
   // --- gesture lifecycle -------------------------------------------------
