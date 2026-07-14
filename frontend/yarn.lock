@@ -2162,7 +2162,6 @@ __metadata:
     prettier-plugin-svelte: "npm:^4.0.1"
     svelte: "npm:^5.56.3"
     svelte-check: "npm:^4.6.0"
-    svg-pathdata: "npm:^9.0.0"
     typescript: "npm:^6.0.3"
     typescript-eslint: "npm:^8.60.1"
     vite: "npm:^8.0.16"
@@ -2634,13 +2633,6 @@ __metadata:
     magic-string: "npm:^0.30.11"
     zimmerframe: "npm:^1.1.2"
   checksum: 10c0/949e07077cd1a2bd4ab96bd09fe536c925064bcc3cbb3f0d4ac39f3acef56c0bbb61e49765b08c2e63bddfd05aa0d4f3ef3f3a79c87d84b2d5b23bb2a9158f7a
-  languageName: node
-  linkType: hard
-
-"svg-pathdata@npm:^9.0.0":
-  version: 9.0.0
-  resolution: "svg-pathdata@npm:9.0.0"
-  checksum: 10c0/33996e58dd9eac42f81bc0fc3b148fa5773abe89852caeefaa237a74bb5f6e253ec8f550bec60d7392208a0cdd596d0ca0fb9106f9db4d3a4d79936bd4368741
   languageName: node
   linkType: hard
 

@@ -12,10 +12,10 @@ blocks. See the `nib-design` skill for the brand delta.
 src/lib/core/       thin wrapper around the nib-core WASM engine (one-time init +
                     the Editor handle); the authoritative model/ops/geometry/undo
                     live in the Rust core (../core), not here
-src/lib/model/      TRANSITIONAL: a parallel TS copy (types, geometry, path <-> d,
-                    parse/serialize, shapes) kept as pure render/geometry helpers
-                    for the tools + canvas until the A5b cleanup migrates them
-src/lib/snap/       TRANSITIONAL: TS snap helpers the tools use (mirrored in core)
+src/lib/model/      client view helpers over the WASM data contract: types (the TS
+                    shape of the core's JSON), geometry math, pathToD +
+                    nearestOnSubpath (render + hit-test), shapes (ellipse), STYLE_KEYS
+src/lib/snap/       client snapping over the doc mirror (nearest anchor, close-loop, grid)
 src/lib/canvas/     gesture statechart (XState) — idle / panning / dragging
 src/lib/tools/      pluggable editing tools + hit-testing (select / pen / circle / add / delete)
 src/lib/workspace/  File System Access API wrappers + fallbacks

@@ -12,7 +12,7 @@
     "format": "prettier --check src",
     "format:fix": "prettier --write src",
     "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "test:e2e": "playwright test",
     "validate": "yarn typecheck && yarn lint && yarn format",
     "prepare": "svelte-kit sync || echo ''"
@@ -37,7 +37,6 @@
   "dependencies": {
     "@lucide/svelte": "^1.17.0",
     "nib-core": "link:../core/pkg",
-    "svg-pathdata": "^9.0.0",
     "xstate": "^5.32.4"
   },
   "packageManager": "yarn@4.16.0"

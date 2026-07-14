@@ -40,9 +40,11 @@ Per-area detail in `frontend/CLAUDE.md`.
   (M/L/H/V/C/S/Q/T/A fold in via `kurbo::BezPath::from_svg`, quads elevated to
   cubics); every edit is an `Op` applied by a pure reducer, and the Svelte
   `document` store is a thin facade over the WASM `Editor`. The TS unit tests were
-  ported to `cargo test` as the parity oracle. (A parallel TS copy under
-  `frontend/src/lib/model` + `snap` lingers as pure render/geometry helpers pending
-  the A5b cleanup — the authoritative engine is the Rust core.)
+  ported to `cargo test` as the parity oracle. The parallel TS *engine*
+  (parse/serialize/edit) is gone; `frontend/src/lib/model` + `snap` keep only the
+  pure client render + hit-test + snap helpers the canvas/tools need locally, plus
+  the TS type contract for the untyped WASM boundary — the authoritative engine is
+  the Rust core.
 - **Byte-for-byte preservation.** The original SVG source is kept; on export
   only *edited* paths get their `d` re-serialized (spliced in place). Everything
   else — other elements, attributes, unedited paths — is preserved verbatim.

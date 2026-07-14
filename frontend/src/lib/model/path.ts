@@ -1,135 +1,10 @@
-import { SVGPathData } from "svg-pathdata";
-
-import { cubicAt, distance, handlesCollinear, lerp, splitCubic } from "./geometry";
+import { cubicAt, distance } from "./geometry";
 import type { PathNode, Point, Subpath } from "./types";
 
-// After this pipeline the command stream is absolute and contains only
-// M / L / H / V / C / Z — every curve is a cubic, so one code path handles all.
-function normalizedCommands(d: string) {
-  return new SVGPathData(d).toAbs().normalizeST().qtToC().aToC().commands;
-}
-
-const EPS = 1e-4;
-
-function pushLine(sp: Subpath, point: Point): void {
-  // Straight segment: the previous node's handleOut and this node's handleIn
-  // both stay absent.
-  sp.nodes.push({ point, type: "corner" });
-}
-
-/** Parse a path `d` string into editable subpaths of cubic anchor nodes. */
-export function parsePathD(d: string): Subpath[] {
-  const commands = normalizedCommands(d);
-  const subpaths: Subpath[] = [];
-  let current: Subpath | null = null;
-  let cur: Point = { x: 0, y: 0 };
-  let start: Point = { x: 0, y: 0 };
-
-  for (const c of commands) {
-    switch (c.type) {
-      case SVGPathData.MOVE_TO: {
-        cur = { x: c.x, y: c.y };
-        start = cur;
-        current = { nodes: [{ point: cur, type: "corner" }], closed: false };
-        subpaths.push(current);
-        break;
-      }
-      case SVGPathData.LINE_TO: {
-        cur = { x: c.x, y: c.y };
-        if (current) pushLine(current, cur);
-        break;
-      }
-      case SVGPathData.HORIZ_LINE_TO: {
-        cur = { x: c.x, y: cur.y };
-        if (current) pushLine(current, cur);
-        break;
-      }
-      case SVGPathData.VERT_LINE_TO: {
-        cur = { x: cur.x, y: c.y };
-        if (current) pushLine(current, cur);
-        break;
-      }
-      case SVGPathData.CURVE_TO: {
-        if (current) {
-          const prev = current.nodes[current.nodes.length - 1];
-          prev.handleOut = { x: c.x1, y: c.y1 };
-          current.nodes.push({
-            point: { x: c.x, y: c.y },
-            handleIn: { x: c.x2, y: c.y2 },
-            type: "corner",
-          });
-        }
-        cur = { x: c.x, y: c.y };
-        break;
-      }
-      case SVGPathData.CLOSE_PATH: {
-        if (current) current.closed = true;
-        cur = start;
-        break;
-      }
-      default:
-        // Unreachable after normalization, but keep the walker total.
-        break;
-    }
-  }
-
-  for (const sp of subpaths) foldClosingNode(sp);
-  for (const sp of subpaths) inferNodeTypes(sp);
-  return subpaths;
-}
-
-/**
- * When a closed subpath's last node lands on its first node (a curve that ended
- * exactly at the start before Z), fold that trailing node's incoming handle
- * onto the first node and drop it — leaving a clean cyclic model where the
- * closing segment is last→first.
- */
-function foldClosingNode(sp: Subpath): void {
-  if (!sp.closed || sp.nodes.length < 2) return;
-  const first = sp.nodes[0];
-  const last = sp.nodes[sp.nodes.length - 1];
-  if (distance(first.point, last.point) <= EPS) {
-    if (last.handleIn) first.handleIn = last.handleIn;
-    sp.nodes.pop();
-  }
-}
-
-/**
- * Mark a subpath closed. Its nodes are kept as-is (the closing segment runs
- * from the last node back to the first, emitting a trailing Z); a last node
- * that already coincides with the first is folded away so there's no
- * zero-length seam. Merging a dragged endpoint onto the start (close-by-snap)
- * is the caller's job — see the document store's closeLoop.
- */
-export function closeSubpath(sp: Subpath): void {
-  if (sp.nodes.length < 2) return;
-  sp.closed = true;
-  foldClosingNode(sp);
-}
-
-/**
- * The same subpath drawn in the opposite direction: node order reversed and
- * each node's in/out handles swapped (they trade roles when the direction
- * flips). Shape-identical — only which end is the start changes. Used so the
- * pen can resume drawing from a subpath's *start* by first making it the tail.
- */
-export function reversedSubpath(sp: Subpath): Subpath {
-  return {
-    closed: sp.closed,
-    nodes: sp.nodes
-      .slice()
-      .reverse()
-      .map((n) => ({ ...n, handleIn: n.handleOut, handleOut: n.handleIn })),
-  };
-}
-
-function inferNodeTypes(sp: Subpath): void {
-  for (const node of sp.nodes) {
-    if (node.handleIn && node.handleOut) {
-      node.type = handlesCollinear(node.handleIn, node.point, node.handleOut) ? "smooth" : "corner";
-    }
-  }
-}
+// Client-side render + hit-test helpers over the document contract. The authoritative
+// parse/serialize/edit logic lives in the Rust core (core/src/model/path.rs); these are the
+// pure functions the canvas + tools need locally: serialize a subpath to a `d` string for
+// rendering, and find the nearest point on an outline for hit-testing.
 
 function fmt(v: number, precision: number): string {
   return String(Number(v.toFixed(precision)));
@@ -139,8 +14,8 @@ function pt(p: Point, precision: number): string {
   return `${fmt(p.x, precision)} ${fmt(p.y, precision)}`;
 }
 
-/** A segment a→b: a line iff both adjoining handles are absent, else a cubic
- *  (a missing control defaults to its own anchor, i.e. a "half-straight"). */
+/** A segment a→b: a line iff both adjoining handles are absent, else a cubic (a missing
+ *  control defaults to its own anchor, i.e. a "half-straight"). */
 function segment(a: PathNode, b: PathNode, precision: number): string {
   if (!a.handleOut && !b.handleIn) {
     return `L ${pt(b.point, precision)}`;
@@ -166,11 +41,9 @@ export type SegmentHit = {
   distance: number;
 };
 
-/** Nearest point on a subpath's outline to `target`. A coarse per-segment sample
- *  picks the winning segment + rough parameter, then a local ternary refinement
- *  pins the true nearest point — so the reported distance is accurate at any
- *  zoom (a coarse-only scan can overshoot the hit threshold on a click that is
- *  genuinely on the curve). segmentIndex is the node the segment leaves. */
+/** Nearest point on a subpath's outline to `target`. A coarse per-segment sample picks the
+ *  winning segment + rough parameter, then a local ternary refinement pins the true nearest
+ *  point — accurate at any zoom. segmentIndex is the node the segment leaves. */
 export function nearestOnSubpath(sp: Subpath, target: Point, samples = 32): SegmentHit | null {
   const n = sp.nodes.length;
   if (n < 2) return null;
@@ -208,32 +81,8 @@ export function nearestOnSubpath(sp: Subpath, target: Point, samples = 32): Segm
   return { segmentIndex: bestSeg, t, point, distance: distance(point, target) };
 }
 
-/** Insert a node on the segment leaving node `i` at parameter `t`, preserving
- *  the curve's shape (de Casteljau split; a straight segment stays straight). */
-export function insertNodeAt(sp: Subpath, i: number, t: number): number {
-  const n = sp.nodes.length;
-  const a = sp.nodes[i];
-  const b = sp.nodes[(i + 1) % n];
-  if (!a.handleOut && !b.handleIn) {
-    const point = lerp(a.point, b.point, t);
-    sp.nodes.splice(i + 1, 0, { point, type: "corner" });
-    return i + 1;
-  }
-  const [p0, p1, p2, p3] = segmentControlPoints(sp, i);
-  const { left, right, point } = splitCubic(p0, p1, p2, p3, t);
-  if (a.handleOut) a.handleOut = left[1];
-  if (b.handleIn) b.handleIn = right[2];
-  const newNode: PathNode = {
-    point,
-    handleIn: left[2],
-    handleOut: right[1],
-    type: "smooth",
-  };
-  sp.nodes.splice(i + 1, 0, newNode);
-  return i + 1;
-}
-
-/** Serialize subpaths back to a compact absolute `d` string. */
+/** Serialize subpaths to a compact absolute `d` string for rendering. Mirrors the core's
+ *  serializer (core/src/model/path.rs) so on-canvas geometry matches the exported `d`. */
 export function pathToD(subpaths: Subpath[], precision = 3): string {
   const parts: string[] = [];
   for (const sp of subpaths) {
@@ -246,8 +95,6 @@ export function pathToD(subpaths: Subpath[], precision = 3): string {
     if (sp.closed && n.length >= 2) {
       const last = n[n.length - 1];
       const first = n[0];
-      // Emit an explicit closing curve only when the seam actually curves;
-      // a straight close is just Z (implicit line back to the start).
       if (last.handleOut || first.handleIn) {
         parts.push(segment(last, first, precision));
       }
