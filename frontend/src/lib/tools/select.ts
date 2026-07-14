@@ -1,4 +1,4 @@
-import { subpathsBounds } from "$lib/model/geometry";
+import { tightBounds } from "$lib/model/geometry";
 import type { NodeRef, Point, Subpath } from "$lib/model/types";
 import { collectAnchors, findSnap, isCloseLoop, snapToGrid } from "$lib/snap";
 import { editor } from "$lib/stores/document.svelte";
@@ -117,7 +117,7 @@ function selectionDrag(start: Point, primary: number, wasMulti: boolean): DragSe
   const others: Bounds[] = [];
   doc?.paths.forEach((p, i) => {
     if (sel.has(i) || p.deleted) return;
-    const b = subpathsBounds(p.subpaths);
+    const b = tightBounds(p.subpaths);
     if (b) others.push(b);
   });
   let appliedX = 0;
@@ -191,7 +191,7 @@ function marqueeDrag(start: Point): DragSession {
       const hits: number[] = [];
       doc.paths.forEach((p, i) => {
         if (p.deleted) return;
-        const b = subpathsBounds(p.subpaths);
+        const b = tightBounds(p.subpaths);
         if (b && bboxIntersects(b, rect)) hits.push(i);
       });
       if (hits.length) editor.setSelectedPaths(hits);
@@ -208,7 +208,7 @@ function marqueeDrag(start: Point): DragSession {
 function rotateDrag(pathIndex: number, start: Point): DragSession {
   const path = editor.doc?.paths[pathIndex];
   const ref = path ? (JSON.parse(JSON.stringify(path.subpaths)) as Subpath[]) : [];
-  const bb = subpathsBounds(ref);
+  const bb = tightBounds(ref);
   const center = bb ? boxCenter(bb) : { x: 0, y: 0 };
   const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
   let moved = false;
@@ -237,7 +237,7 @@ function rotateDrag(pathIndex: number, start: Point): DragSession {
 function scaleDrag(pathIndex: number, handle: TransformHandle): DragSession {
   const path = editor.doc?.paths[pathIndex];
   const ref = path ? (JSON.parse(JSON.stringify(path.subpaths)) as Subpath[]) : [];
-  const bb = subpathsBounds(ref);
+  const bb = tightBounds(ref);
   let moved = false;
   return {
     move(cursor, event) {

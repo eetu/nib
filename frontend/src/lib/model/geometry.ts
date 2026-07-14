@@ -114,3 +114,72 @@ export function cubicAt(p0: Point, p1: Point, p2: Point, p3: Point, t: number): 
     y: w0 * p0.y + w1 * p1.y + w2 * p2.y + w3 * p3.y,
   };
 }
+
+/** Interior t-values (0,1) where a cubic's derivative is zero on one axis (its extrema). */
+function axisExtrema(p0: number, p1: number, p2: number, p3: number): number[] {
+  const a = p1 - p0;
+  const b = p2 - p1;
+  const c = p3 - p2;
+  const qa = a - 2 * b + c;
+  const qb = 2 * (b - a);
+  const qc = a;
+  const ts: number[] = [];
+  const push = (t: number) => {
+    if (t > 1e-6 && t < 1 - 1e-6) ts.push(t);
+  };
+  if (Math.abs(qa) < 1e-9) {
+    if (Math.abs(qb) > 1e-9) push(-qc / qb);
+  } else {
+    const disc = qb * qb - 4 * qa * qc;
+    if (disc >= 0) {
+      const s = Math.sqrt(disc);
+      push((-qb + s) / (2 * qa));
+      push((-qb - s) / (2 * qa));
+    }
+  }
+  return ts;
+}
+
+/** Tight bounding box of the *rendered* curves (anchors + bezier extrema), unlike
+ *  {@link subpathsBounds} which uses the control-point hull — a long handle can balloon the
+ *  hull far past the visible curve, so use this for the selection/transform box. */
+export function tightBounds(
+  subpaths: Subpath[],
+): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let any = false;
+  const acc = (x: number, y: number) => {
+    any = true;
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  };
+  for (const sp of subpaths) {
+    const nodes = sp.nodes;
+    const n = nodes.length;
+    if (n === 0) continue;
+    for (const nd of nodes) acc(nd.point.x, nd.point.y);
+    const segs = sp.closed ? n : n - 1;
+    for (let i = 0; i < segs; i++) {
+      const na = nodes[i];
+      const nb = nodes[(i + 1) % n];
+      const p0 = na.point;
+      const p1 = na.handleOut ?? na.point;
+      const p2 = nb.handleIn ?? nb.point;
+      const p3 = nb.point;
+      for (const t of axisExtrema(p0.x, p1.x, p2.x, p3.x)) {
+        const p = cubicAt(p0, p1, p2, p3, t);
+        acc(p.x, p.y);
+      }
+      for (const t of axisExtrema(p0.y, p1.y, p2.y, p3.y)) {
+        const p = cubicAt(p0, p1, p2, p3, t);
+        acc(p.x, p.y);
+      }
+    }
+  }
+  return any ? { minX, minY, maxX, maxY } : null;
+}

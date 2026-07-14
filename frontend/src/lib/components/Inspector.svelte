@@ -16,7 +16,7 @@
   import Pipette from "@lucide/svelte/icons/pipette";
   import Trash2 from "@lucide/svelte/icons/trash-2";
 
-  import { subpathsBounds } from "$lib/model/geometry";
+  import { tightBounds } from "$lib/model/geometry";
   import { pathToD } from "$lib/model/path";
   import type { Layer, NodeType, PathElement } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
@@ -115,7 +115,7 @@
   }
 
   // The selected path's bounding box, for the numeric transform panel.
-  const bounds = $derived(path ? subpathsBounds(path.subpaths) : null);
+  const bounds = $derived(path ? tightBounds(path.subpaths) : null);
 
   // Edit a bbox field: x/y translate the whole path; w/h scale it about its top-left corner.
   function setBBox(axis: "x" | "y" | "w" | "h", e: Event) {
@@ -450,7 +450,7 @@
   {/if}
 
   {#snippet pathRow(p: PathElement, index: number, nested: boolean)}
-    {@const b = subpathsBounds(p.subpaths)}
+    {@const b = tightBounds(p.subpaths)}
     <li
       class="pathrow"
       class:nested

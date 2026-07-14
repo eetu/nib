@@ -1,4 +1,4 @@
-import { cubicAt, distance, subpathsBounds } from "$lib/model/geometry";
+import { cubicAt, distance, tightBounds } from "$lib/model/geometry";
 import { nearestOnSubpath, segmentControlPoints } from "$lib/model/path";
 import type { NodeRef, Point, Subpath } from "$lib/model/types";
 import { editor } from "$lib/stores/document.svelte";
@@ -104,7 +104,7 @@ export function hitTest(screen: Point): Hit {
   if (editor.objectSelected && editor.selectedPathIndex !== null) {
     const p = doc.paths[editor.selectedPathIndex];
     if (p && !p.deleted) {
-      const raw = subpathsBounds(p.subpaths);
+      const raw = tightBounds(p.subpaths);
       if (raw) {
         const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX));
         // Rotate knob, above the box's top-centre.

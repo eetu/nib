@@ -1,6 +1,6 @@
 import { Editor as WasmEditor } from "$lib/core";
 import { STYLE_KEYS } from "$lib/model/document";
-import { subpathsBounds } from "$lib/model/geometry";
+import { tightBounds } from "$lib/model/geometry";
 import type {
   Gradient,
   Layer,
@@ -183,7 +183,7 @@ class DocumentStore {
     for (const i of this.selectedPaths) {
       const p = this.doc.paths[i];
       if (!p || p.deleted) continue;
-      const b = subpathsBounds(p.subpaths);
+      const b = tightBounds(p.subpaths);
       if (!b) continue;
       box = box
         ? {
@@ -352,7 +352,7 @@ class DocumentStore {
     for (const i of this.selectedPaths) {
       const p = doc.paths[i];
       if (!p || p.deleted) continue;
-      const b = subpathsBounds(p.subpaths);
+      const b = tightBounds(p.subpaths);
       if (!b) continue;
       let dx = 0;
       let dy = 0;
@@ -372,7 +372,7 @@ class DocumentStore {
     const doc = this.doc;
     if (!doc) return;
     const items = this.selectedPaths
-      .map((i) => ({ i, b: subpathsBounds(doc.paths[i]?.subpaths ?? []) }))
+      .map((i) => ({ i, b: tightBounds(doc.paths[i]?.subpaths ?? []) }))
       .filter((x): x is { i: number; b: Bounds } => !!x.b && !doc.paths[x.i]?.deleted);
     if (items.length < 3) return;
     const mid = (b: Bounds) => (axis === "h" ? (b.minX + b.maxX) / 2 : (b.minY + b.maxY) / 2);

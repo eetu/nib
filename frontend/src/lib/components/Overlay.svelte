@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { subpathsBounds } from "$lib/model/geometry";
+  import { tightBounds } from "$lib/model/geometry";
   import { pathToD } from "$lib/model/path";
   import { nodeRefEquals, type Subpath } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
@@ -79,7 +79,7 @@
       <path class="sel-outline" d={outlineD} />
     {/if}
     {#if boxPath && !boxPath.deleted}
-      {@const raw = subpathsBounds(boxPath.subpaths)}
+      {@const raw = tightBounds(boxPath.subpaths)}
       {#if raw}
         {@const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX))}
         {@const tl = viewport.toScreen({ x: bb.minX, y: bb.minY })}
