@@ -1,9 +1,11 @@
 <script lang="ts">
   import Trash2 from "@lucide/svelte/icons/trash-2";
 
+  import { subpathsBounds } from "$lib/model/geometry";
   import type { NodeType } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
   import { tools } from "$lib/stores/tool.svelte";
+  import { scaleSubpaths } from "$lib/tools/transform";
 
   import ColorInput from "./ColorInput.svelte";
 
@@ -68,18 +70,52 @@
     setStyle("opacity", pct >= 100 ? null : String(round(pct / 100)));
   }
 
+  // Evaluate a numeric field that may hold a simple arithmetic expression ("100+20",
+  // "3*4"). No eval/Function — a plain number or one binary op of + - * /.
+  function evalNum(raw: string): number | null {
+    const s = raw.trim();
+    if (/^[-+]?\d*\.?\d+$/.test(s)) return Number(s);
+    const m = s.match(/^([-+]?\d*\.?\d+)\s*([-+*/])\s*([-+]?\d*\.?\d+)$/);
+    if (!m) return null;
+    const a = Number(m[1]);
+    const b = Number(m[3]);
+    const r =
+      m[2] === "+" ? a + b : m[2] === "-" ? a - b : m[2] === "*" ? a * b : b !== 0 ? a / b : NaN;
+    return Number.isFinite(r) ? r : null;
+  }
+
   function setX(e: Event) {
-    const v = Number((e.currentTarget as HTMLInputElement).value);
-    if (sel && node && Number.isFinite(v)) editor.setNodePoint(sel, { x: v, y: node.point.y });
+    const v = evalNum((e.currentTarget as HTMLInputElement).value);
+    if (sel && node && v !== null) editor.setNodePoint(sel, { x: v, y: node.point.y });
   }
 
   function setY(e: Event) {
-    const v = Number((e.currentTarget as HTMLInputElement).value);
-    if (sel && node && Number.isFinite(v)) editor.setNodePoint(sel, { x: node.point.x, y: v });
+    const v = evalNum((e.currentTarget as HTMLInputElement).value);
+    if (sel && node && v !== null) editor.setNodePoint(sel, { x: node.point.x, y: v });
   }
 
   function setType(type: NodeType) {
     if (sel) editor.setNodeType(sel, type);
+  }
+
+  // The selected path's bounding box, for the numeric transform panel.
+  const bounds = $derived(path ? subpathsBounds(path.subpaths) : null);
+
+  // Edit a bbox field: x/y translate the whole path; w/h scale it about its top-left corner.
+  function setBBox(axis: "x" | "y" | "w" | "h", e: Event) {
+    const v = evalNum((e.currentTarget as HTMLInputElement).value);
+    if (v === null || !bounds || !path || pathIndex === null) return;
+    const anchor = { x: bounds.minX, y: bounds.minY };
+    const w = bounds.maxX - bounds.minX;
+    const h = bounds.maxY - bounds.minY;
+    if (axis === "x") editor.movePathBy(pathIndex, v - bounds.minX, 0);
+    else if (axis === "y") editor.movePathBy(pathIndex, 0, v - bounds.minY);
+    else if (axis === "w" && w > 0)
+      editor.setSubpaths(pathIndex, scaleSubpaths(path.subpaths, anchor, v / w, 1));
+    else if (axis === "h" && h > 0)
+      editor.setSubpaths(pathIndex, scaleSubpaths(path.subpaths, anchor, 1, v / h));
+    else return;
+    editor.commit();
   }
 
   let renaming = $state<number | null>(null);
@@ -172,15 +208,51 @@
   </section>
 
   <section>
+    <h2>transform</h2>
+    {#if path && bounds}
+      <div class="coords">
+        <label
+          >x <input
+            type="text"
+            value={round(bounds.minX)}
+            onchange={(e) => setBBox("x", e)}
+          /></label
+        >
+        <label
+          >y <input
+            type="text"
+            value={round(bounds.minY)}
+            onchange={(e) => setBBox("y", e)}
+          /></label
+        >
+      </div>
+      <div class="coords">
+        <label
+          >w <input
+            type="text"
+            value={round(bounds.maxX - bounds.minX)}
+            onchange={(e) => setBBox("w", e)}
+          /></label
+        >
+        <label
+          >h <input
+            type="text"
+            value={round(bounds.maxY - bounds.minY)}
+            onchange={(e) => setBBox("h", e)}
+          /></label
+        >
+      </div>
+    {:else}
+      <p class="empty">no path selected</p>
+    {/if}
+  </section>
+
+  <section>
     <h2>node</h2>
     {#if node && sel}
       <div class="coords">
-        <label
-          >x <input type="number" step="0.5" value={round(node.point.x)} onchange={setX} /></label
-        >
-        <label
-          >y <input type="number" step="0.5" value={round(node.point.y)} onchange={setY} /></label
-        >
+        <label>x <input type="text" value={round(node.point.x)} onchange={setX} /></label>
+        <label>y <input type="text" value={round(node.point.y)} onchange={setY} /></label>
       </div>
       <div class="typerow">
         <button class:active={node.type === "corner"} onclick={() => setType("corner")}
