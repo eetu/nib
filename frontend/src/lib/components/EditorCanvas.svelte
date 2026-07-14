@@ -124,6 +124,27 @@
     }
   });
 
+  // Draw imported paths in the model's order so the PATHS list (drag-drop reorder) controls
+  // their z-order. appendChild moves each imported <path> to the end in array order; non-path
+  // siblings (e.g. a background <rect>) keep their place, so reordered paths render above them.
+  // Gated on the order signature so it only touches the DOM when the draw order actually
+  // changes (reordering the DOM on every selection would reset the browser's dblclick count).
+  let lastOrder = "";
+  $effect(() => {
+    const doc = editor.doc;
+    if (!doc || !artworkGroup) return;
+    const imported = doc.paths.filter((p) => !p.added);
+    const order = imported.map((p) => p.index).join(",");
+    if (order === lastOrder) return;
+    lastOrder = order;
+    for (const p of imported) {
+      if (p.deleted) continue;
+      const el = livePaths[p.index];
+      // eslint-disable-next-line svelte/no-dom-manipulating
+      if (el && el.parentNode === artworkGroup) artworkGroup.appendChild(el);
+    }
+  });
+
   // Space to pan, Escape to cancel a drag.
   $effect(() => {
     function typing(): boolean {

@@ -214,6 +214,27 @@ fn style_overridden(p: &PathElement) -> bool {
     p.style_override.as_ref().is_some_and(|m| !m.is_empty())
 }
 
+/// An imported path's opening tag with its edits applied (d / id / style-override / hidden).
+/// With no edits it returns the original tag verbatim, so unchanged paths stay byte-for-byte.
+fn edited_tag(p: &PathElement, precision: usize, hidden: bool) -> String {
+    let mut t = p.original_tag.clone().unwrap_or_default();
+    if p.edited {
+        t = with_attr(&t, "d", &path_to_d_prec(&p.subpaths, precision));
+    }
+    if p.renamed {
+        t = with_attr(&t, "id", &p.id);
+    }
+    if let Some(so) = &p.style_override {
+        for (k, v) in so {
+            t = with_attr(&t, k, v);
+        }
+    }
+    if hidden {
+        t = with_attr(&t, "display", "none");
+    }
+    t
+}
+
 /// Set (or insert) one attribute in a `<path …>` tag string, preserving the rest of the tag
 /// byte-for-byte. Replaces the quoted value if the key is present, else inserts the attr
 /// just before the closing `>`/`/>`.
@@ -464,12 +485,17 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
     let src = &doc.source;
     let mut out = String::new();
     let mut cursor = 0;
-    // Splice imported paths in *source* order (their `index`), independent of the array's
-    // draw order — so reordering paths (ReorderPath) never breaks the moving-cursor splice.
-    let mut imported: Vec<&PathElement> = doc.paths.iter().filter(|p| !p.added).collect();
-    imported.sort_by_key(|p| p.index);
-    for p in imported {
-        let Some(tag) = &p.original_tag else {
+    // The `<path>` slots in the source, in source order, locate the byte spans (found via a
+    // moving cursor, so duplicate tags still map right). We *fill* each non-deleted slot with
+    // the next imported path in **draw order** (array order) — so reordering paths reorders
+    // the exported z-order while non-path content + slot positions stay byte-for-byte. With no
+    // reordering, each slot gets its own path back → byte-for-byte.
+    let ordered: Vec<&PathElement> = doc.paths.iter().filter(|p| !p.added && !p.deleted).collect();
+    let mut slots: Vec<&PathElement> = doc.paths.iter().filter(|p| !p.added).collect();
+    slots.sort_by_key(|p| p.index);
+    let mut oi = 0;
+    for slot in slots {
+        let Some(tag) = &slot.original_tag else {
             continue;
         };
         let Some(rel) = src[cursor..].find(tag.as_str()) else {
@@ -477,30 +503,13 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
         };
         let idx = cursor + rel;
         let end = idx + tag.len();
-        let hidden = on_hidden_layer(doc, p);
-        if p.deleted {
-            out.push_str(&src[cursor..idx]); // drop the tag
-        } else if p.edited || p.renamed || style_overridden(p) || hidden {
-            let mut t = tag.clone();
-            if p.edited {
-                t = with_attr(&t, "d", &path_to_d_prec(&p.subpaths, precision));
-            }
-            if p.renamed {
-                t = with_attr(&t, "id", &p.id);
-            }
-            if let Some(so) = &p.style_override {
-                for (k, v) in so {
-                    t = with_attr(&t, k, v);
-                }
-            }
-            if hidden {
-                t = with_attr(&t, "display", "none");
-            }
-            out.push_str(&src[cursor..idx]);
-            out.push_str(&t);
-        } else {
-            out.push_str(&src[cursor..end]); // verbatim
+        out.push_str(&src[cursor..idx]);
+        if !slot.deleted && oi < ordered.len() {
+            let p = ordered[oi];
+            oi += 1;
+            out.push_str(&edited_tag(p, precision, on_hidden_layer(doc, p)));
         }
+        // a deleted slot drops its tag (emits only the preceding span)
         cursor = end;
     }
     out.push_str(&src[cursor..]);
@@ -661,12 +670,18 @@ mod tests {
     }
 
     #[test]
-    fn reordering_imported_paths_keeps_byte_for_byte_export() {
+    fn reordering_imported_paths_swaps_their_export_positions() {
         let mut doc = parse_svg(SAMPLE).unwrap();
-        // Swapping imported paths in the array must not disturb the source (splice is
-        // source-ordered), only draw order of *drawn* paths follows the array.
-        doc.paths.swap(0, 1);
+        // No reorder → byte-for-byte.
         assert_eq!(serialize_svg(&doc), SAMPLE);
+        // Swap draw order → the two <path> tags swap document positions (z-order follows the
+        // array); non-path content (the rect) stays byte-for-byte in place.
+        doc.paths.swap(0, 1);
+        let out = serialize_svg(&doc);
+        let red = out.find(r#"<path d="M 20 20 L 80 80" stroke="red"/>"#).unwrap();
+        let black = out.find(r#"d="M 10 10 L 90 10 L 90 90""#).unwrap();
+        assert!(red < black, "draw order should follow the array: {out}");
+        assert!(out.contains(r##"<rect x="0" y="0" width="100" height="100" fill="#eee"/>"##));
     }
 
     #[test]
