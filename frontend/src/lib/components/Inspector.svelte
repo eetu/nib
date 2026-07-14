@@ -478,9 +478,12 @@
       oncontextmenu={(e) => openPathMenu(e, index, p.id)}
     >
       {#if b && b.maxX > b.minX && b.maxY > b.minY}
+        {@const w = b.maxX - b.minX}
+        {@const h = b.maxY - b.minY}
+        {@const pad = Math.max(w, h) * 0.15}
         <svg
           class="thumb"
-          viewBox="{b.minX} {b.minY} {b.maxX - b.minX} {b.maxY - b.minY}"
+          viewBox="{b.minX - pad} {b.minY - pad} {w + pad * 2} {h + pad * 2}"
           preserveAspectRatio="xMidYMid meet"
           aria-hidden="true"
         >
@@ -855,9 +858,6 @@
     width: 20px;
     height: 20px;
     flex: none;
-    padding: 2px;
-    border-radius: 3px;
-    background: var(--halo-bg-main);
   }
 
   .thumb.empty {
