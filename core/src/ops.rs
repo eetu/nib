@@ -131,6 +131,8 @@ pub enum Op {
     RenamePath { path: usize, name: String },
     /// Soft-delete a whole path.
     DeletePath { path: usize },
+    /// Move a path within the ordered paths list — changes draw order (later = drawn on top).
+    ReorderPath { from: usize, to: usize },
 
     /// Set (`value: Some`) or clear (`value: None`) one presentation attribute. Added paths
     /// edit their own `attributes`; imported paths accumulate a `style_override`.
@@ -398,6 +400,18 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 return false;
             };
             p.deleted = true;
+            true
+        }
+        Op::ReorderPath { from, to } => {
+            if *from >= doc.paths.len() {
+                return false;
+            }
+            let to = (*to).min(doc.paths.len() - 1);
+            if *from == to {
+                return false;
+            }
+            let p = doc.paths.remove(*from);
+            doc.paths.insert(to, p);
             true
         }
         Op::SetStyle { path, key, value } => {
@@ -860,6 +874,33 @@ mod tests {
         assert!(doc.layers.is_empty());
         assert_eq!(doc.paths[1].layer, None);
         assert_eq!(doc.active_layer, None);
+    }
+
+    #[test]
+    fn reorder_path_moves_within_the_draw_order() {
+        let mut doc = doc_from("M 0 0 L 1 1", true);
+        apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "b".into(),
+                subpaths: parse_path_d("M 0 0 L 2 2"),
+                attributes: IndexMap::new(),
+            },
+        );
+        apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "c".into(),
+                subpaths: parse_path_d("M 0 0 L 3 3"),
+                attributes: IndexMap::new(),
+            },
+        );
+        // p0, b, c → move c (index 2) to the front
+        assert!(apply(&mut doc, &Op::ReorderPath { from: 2, to: 0 }));
+        let ids: Vec<&str> = doc.paths.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["c", "p0", "b"]);
+        // a no-op move returns false
+        assert!(!apply(&mut doc, &Op::ReorderPath { from: 1, to: 1 }));
     }
 
     #[test]

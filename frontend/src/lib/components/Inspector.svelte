@@ -151,6 +151,16 @@
   let renaming = $state<number | null>(null);
   let renameValue = $state("");
 
+  // Drag-drop reordering of the PATHS list (changes draw order).
+  let dragFrom = $state<number | null>(null);
+  let dragOver = $state<number | null>(null);
+
+  function onDrop(pi: number) {
+    if (dragFrom !== null && dragFrom !== pi) editor.reorderPath(dragFrom, pi);
+    dragFrom = null;
+    dragOver = null;
+  }
+
   function startRename(pi: number, current: string) {
     renaming = pi;
     renameValue = current;
@@ -420,7 +430,29 @@
           {#if !p.deleted}
             {@const nodes = p.subpaths.reduce((n, sp) => n + sp.nodes.length, 0)}
             {@const closed = p.subpaths.some((sp) => sp.closed)}
-            <li>
+            <li
+              class:dragover={dragOver === pi}
+              draggable={renaming !== pi}
+              ondragstart={(e) => {
+                dragFrom = pi;
+                if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+              }}
+              ondragover={(e) => {
+                e.preventDefault();
+                dragOver = pi;
+              }}
+              ondragleave={() => {
+                if (dragOver === pi) dragOver = null;
+              }}
+              ondrop={(e) => {
+                e.preventDefault();
+                onDrop(pi);
+              }}
+              ondragend={() => {
+                dragFrom = null;
+                dragOver = null;
+              }}
+            >
               {#if renaming === pi}
                 <input
                   class="rename"
@@ -751,6 +783,11 @@
     display: flex;
     align-items: center;
     gap: 2px;
+  }
+
+  /* drop indicator while dragging a path to reorder draw order */
+  .paths li.dragover {
+    box-shadow: inset 0 2px 0 var(--halo-accent);
   }
 
   .row-btn {

@@ -464,10 +464,11 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
     let src = &doc.source;
     let mut out = String::new();
     let mut cursor = 0;
-    for p in &doc.paths {
-        if p.added {
-            continue;
-        }
+    // Splice imported paths in *source* order (their `index`), independent of the array's
+    // draw order — so reordering paths (ReorderPath) never breaks the moving-cursor splice.
+    let mut imported: Vec<&PathElement> = doc.paths.iter().filter(|p| !p.added).collect();
+    imported.sort_by_key(|p| p.index);
+    for p in imported {
         let Some(tag) = &p.original_tag else {
             continue;
         };
@@ -657,6 +658,15 @@ mod tests {
         assert!(out.contains("display=\"none\""), "{out}");
         // The other path (no layer) is untouched.
         assert!(out.contains(r#"<path d="M 20 20 L 80 80" stroke="red"/>"#));
+    }
+
+    #[test]
+    fn reordering_imported_paths_keeps_byte_for_byte_export() {
+        let mut doc = parse_svg(SAMPLE).unwrap();
+        // Swapping imported paths in the array must not disturb the source (splice is
+        // source-ordered), only draw order of *drawn* paths follows the array.
+        doc.paths.swap(0, 1);
+        assert_eq!(serialize_svg(&doc), SAMPLE);
     }
 
     #[test]
