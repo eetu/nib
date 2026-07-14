@@ -15,9 +15,9 @@
   import PaintBucket from "@lucide/svelte/icons/paint-bucket";
   import Pipette from "@lucide/svelte/icons/pipette";
   import Trash2 from "@lucide/svelte/icons/trash-2";
-  import Ungroup from "@lucide/svelte/icons/ungroup";
 
   import { subpathsBounds } from "$lib/model/geometry";
+  import { pathToD } from "$lib/model/path";
   import type { Layer, NodeType, PathElement } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
   import { tools } from "$lib/stores/tool.svelte";
@@ -167,6 +167,48 @@
   let collapsed = $state<string[]>([]);
   function toggleCollapse(id: string) {
     collapsed = collapsed.includes(id) ? collapsed.filter((x) => x !== id) : [...collapsed, id];
+  }
+
+  // Right-click context menu for a row (path or group) — an action list at the cursor.
+  type Menu = {
+    x: number;
+    y: number;
+    items: { label: string; danger?: boolean; run: () => void }[];
+  };
+  let menu = $state<Menu | null>(null);
+
+  function openPathMenu(e: MouseEvent, index: number, name: string) {
+    e.preventDefault();
+    menu = {
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        { label: "rename", run: () => startRename(index, name) },
+        { label: "duplicate", run: () => (editor.selectPath(index), editor.duplicateSelected()) },
+        { label: "delete", danger: true, run: () => editor.deletePath(index) },
+      ],
+    };
+  }
+
+  function openGroupMenu(e: MouseEvent, id: string, name: string) {
+    e.preventDefault();
+    menu = {
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        { label: "rename", run: () => startLayerRename(id, name) },
+        { label: "ungroup", run: () => editor.ungroup(id) },
+      ],
+    };
+  }
+
+  // A path's thumbnail fill/stroke: use its hex fill if any, else outline it in the accent.
+  function thumbFill(p: PathElement): string {
+    const f = p.attributes?.fill ?? p.styleOverride?.fill;
+    return f && f.startsWith("#") ? f : "none";
+  }
+  function thumbStroke(p: PathElement): string {
+    return thumbFill(p) === "none" ? "var(--halo-text-muted)" : "none";
   }
 
   let renamingLayer = $state<string | null>(null);
@@ -408,6 +450,7 @@
   {/if}
 
   {#snippet pathRow(p: PathElement, index: number, nested: boolean)}
+    {@const b = subpathsBounds(p.subpaths)}
     <li
       class="pathrow"
       class:nested
@@ -432,15 +475,26 @@
         dragFrom = null;
         dragOver = null;
       }}
+      oncontextmenu={(e) => openPathMenu(e, index, p.id)}
     >
-      <button
-        class="eye"
-        title={p.hidden ? "show" : "hide"}
-        aria-label="toggle visibility"
-        onclick={() => editor.setPathHidden(index, !p.hidden)}
-      >
-        {#if p.hidden}<EyeOff size={13} />{:else}<Eye size={13} />{/if}
-      </button>
+      {#if b && b.maxX > b.minX && b.maxY > b.minY}
+        <svg
+          class="thumb"
+          viewBox="{b.minX} {b.minY} {b.maxX - b.minX} {b.maxY - b.minY}"
+          preserveAspectRatio="xMidYMid meet"
+          aria-hidden="true"
+        >
+          <path
+            d={pathToD(p.subpaths)}
+            fill={thumbFill(p)}
+            stroke={thumbStroke(p)}
+            stroke-width="1.5"
+            vector-effect="non-scaling-stroke"
+          />
+        </svg>
+      {:else}
+        <span class="thumb empty"></span>
+      {/if}
       {#if renaming === index}
         <input
           class="rename"
@@ -458,18 +512,18 @@
           class:active={editor.selectedPaths.includes(index)}
           onclick={(e) => (e.shiftKey ? editor.togglePath(index) : editor.selectPath(index))}
           ondblclick={() => startRename(index, p.id)}
-          title="click to select · shift-click multi · double-click to rename"
+          title="click to select · shift-click multi · double-click to rename · right-click for more"
         >
           <span class="pid">{p.id}</span>
         </button>
       {/if}
       <button
-        class="trash"
-        title="delete"
-        aria-label="delete path"
-        onclick={() => editor.deletePath(index)}
+        class="eye"
+        title={p.hidden ? "show" : "hide"}
+        aria-label="toggle visibility"
+        onclick={() => editor.setPathHidden(index, !p.hidden)}
       >
-        <Trash2 size={13} />
+        {#if p.hidden}<EyeOff size={13} />{:else}<Eye size={13} />{/if}
       </button>
     </li>
   {/snippet}
@@ -492,7 +546,11 @@
       <ul class="layerlist">
         {#each rows as row (row.kind === "group" ? `g:${row.layer.id}` : `p:${row.index}`)}
           {#if row.kind === "group"}
-            <li class="grouphead" class:active={editor.activeLayer === row.layer.id}>
+            <li
+              class="grouphead"
+              class:active={editor.activeLayer === row.layer.id}
+              oncontextmenu={(e) => openGroupMenu(e, row.layer.id, row.layer.name)}
+            >
               <button
                 class="chev"
                 aria-label="collapse group"
@@ -501,14 +559,6 @@
                 {#if collapsed.includes(row.layer.id)}<ChevronRight size={13} />{:else}<ChevronDown
                     size={13}
                   />{/if}
-              </button>
-              <button
-                class="eye"
-                title={row.layer.visible ? "hide group" : "show group"}
-                aria-label="toggle group visibility"
-                onclick={() => editor.setLayerVisible(row.layer.id, !row.layer.visible)}
-              >
-                {#if row.layer.visible}<Eye size={13} />{:else}<EyeOff size={13} />{/if}
               </button>
               {#if renamingLayer === row.layer.id}
                 <input
@@ -526,17 +576,19 @@
                   class="lname"
                   onclick={() => editor.setActiveLayer(row.layer.id)}
                   ondblclick={() => startLayerRename(row.layer.id, row.layer.name)}
-                  title="click to make active · double-click to rename"
+                  title="click to make active · double-click to rename · right-click for more"
                 >
                   {row.layer.name}
                 </button>
               {/if}
               <button
-                class="trash"
-                title="ungroup"
-                aria-label="ungroup"
-                onclick={() => editor.ungroup(row.layer.id)}><Ungroup size={13} /></button
+                class="eye"
+                title={row.layer.visible ? "hide group" : "show group"}
+                aria-label="toggle group visibility"
+                onclick={() => editor.setLayerVisible(row.layer.id, !row.layer.visible)}
               >
+                {#if row.layer.visible}<Eye size={13} />{:else}<EyeOff size={13} />{/if}
+              </button>
             </li>
             {#if !collapsed.includes(row.layer.id)}
               {#each row.items as it (it.index)}
@@ -552,6 +604,29 @@
       <p class="empty">no shapes</p>
     {/if}
   </section>
+
+  {#if menu}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div
+      class="ctx-scrim"
+      onclick={() => (menu = null)}
+      oncontextmenu={(e) => {
+        e.preventDefault();
+        menu = null;
+      }}
+    ></div>
+    <div class="ctx" style:left="{menu.x}px" style:top="{menu.y}px" role="menu">
+      {#each menu.items as it (it.label)}
+        <button
+          class:danger={it.danger}
+          onclick={() => {
+            it.run();
+            menu = null;
+          }}>{it.label}</button
+        >
+      {/each}
+    </div>
+  {/if}
 </aside>
 
 <style>
@@ -775,6 +850,60 @@
     padding-left: 16px;
   }
 
+  /* per-shape thumbnail on the left of a row */
+  .thumb {
+    width: 20px;
+    height: 20px;
+    flex: none;
+    padding: 2px;
+    border-radius: 3px;
+    background: var(--halo-bg-main);
+  }
+
+  .thumb.empty {
+    display: inline-block;
+  }
+
+  /* right-click context menu */
+  .ctx-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+  }
+
+  .ctx {
+    position: fixed;
+    z-index: 61;
+    min-width: 120px;
+    padding: 4px;
+    border: 1px solid var(--halo-border);
+    border-radius: var(--halo-radius);
+    background: var(--halo-bg-light);
+    box-shadow: var(--halo-shadow, 0 8px 24px rgb(0 0 0 / 0.25));
+  }
+
+  .ctx button {
+    display: block;
+    width: 100%;
+    padding: 6px 10px;
+    border: none;
+    border-radius: var(--halo-radius);
+    background: transparent;
+    color: var(--halo-text-main);
+    text-align: left;
+    font-size: 13px;
+  }
+
+  .ctx button:hover {
+    background: var(--halo-accent-soft);
+    color: var(--halo-accent);
+  }
+
+  .ctx button.danger:hover {
+    background: var(--halo-accent-soft);
+    color: var(--halo-error);
+  }
+
   /* drop indicator while dragging to reorder draw order */
   .layerlist li.dragover {
     box-shadow: inset 0 2px 0 var(--halo-accent);
@@ -890,22 +1019,6 @@
     min-width: 0;
     margin: 2px 0;
     font-size: 12px;
-  }
-
-  .trash {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    padding: 5px;
-    border: none;
-    border-radius: var(--halo-radius-pill);
-    background: transparent;
-    color: var(--halo-text-muted);
-  }
-
-  .trash:hover {
-    color: var(--halo-error);
-    background: var(--halo-bg-main);
   }
 
   .pid {
