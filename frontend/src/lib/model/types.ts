@@ -76,6 +76,23 @@ export type Layer = {
   visible: boolean;
 };
 
+export type GradientStop = { offset: number; color: string; opacity?: number };
+
+/** A gradient paint, referenced by fill/stroke as `url(#id)` and injected into `<defs>` on
+ *  export. Coords are objectBoundingBox fractions (0..1). Matches the Rust `Gradient`. */
+export type Gradient = {
+  id: string;
+  kind: "linear" | "radial";
+  stops: GradientStop[];
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  cx: number;
+  cy: number;
+  r: number;
+};
+
 export type SvgDocument = {
   /** Original SVG text, kept so unedited markup exports byte-for-byte. */
   source: string;
@@ -85,6 +102,8 @@ export type SvgDocument = {
   layers?: Layer[];
   /** The layer new shapes are added to. */
   activeLayer?: string;
+  /** Gradient paints, injected into a `<defs>` on export. */
+  gradients?: Gradient[];
 };
 
 /** Addresses one anchor node inside the document — the unit of selection and

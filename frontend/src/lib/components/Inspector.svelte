@@ -20,7 +20,7 @@
   import { tools } from "$lib/stores/tool.svelte";
   import { scaleSubpaths } from "$lib/tools/transform";
 
-  import ColorInput from "./ColorInput.svelte";
+  import PaintInput from "./PaintInput.svelte";
 
   const doc = $derived(editor.doc);
   const sel = $derived(editor.selection);
@@ -223,20 +223,18 @@
           </div>
         </div>
       {/snippet}
-      <ColorInput
+      <PaintInput
         label="fill"
         value={style.fill ?? "none"}
-        editable
-        oninput={(v) => previewStyle("fill", v)}
-        onchange={(v) => setStyle("fill", v)}
+        setPaint={(v) => setStyle("fill", v)}
+        previewPaint={(v) => previewStyle("fill", v)}
       />
       {@render seg("fill rule", "fill-rule", ["nonzero", "evenodd"], "nonzero")}
-      <ColorInput
+      <PaintInput
         label="stroke"
         value={style.stroke ?? "none"}
-        editable
-        oninput={(v) => previewStyle("stroke", v)}
-        onchange={(v) => setStyle("stroke", v)}
+        setPaint={(v) => setStyle("stroke", v)}
+        previewPaint={(v) => previewStyle("stroke", v)}
       />
       <label class="row">
         width <input

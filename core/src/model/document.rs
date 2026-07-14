@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use kurbo::{BezPath, Shape};
 
 use super::path::{parse_path_d, path_to_d_prec};
-use super::types::{PathElement, SvgDocument, ViewBox};
+use super::types::{Gradient, PathElement, SvgDocument, ViewBox};
 
 const DEFAULT_VIEWBOX: ViewBox = ViewBox {
     min_x: 0.0,
@@ -206,6 +206,7 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
         paths,
         layers: Vec::new(),
         active_layer: None,
+        gradients: Vec::new(),
     })
 }
 
@@ -389,6 +390,68 @@ fn on_hidden_layer(doc: &SvgDocument, p: &PathElement) -> bool {
         .is_some_and(|l| !l.visible)
 }
 
+/// One gradient as a `<linearGradient>` / `<radialGradient>` element.
+fn gradient_to_svg(g: &Gradient) -> String {
+    let stops: String = g
+        .stops
+        .iter()
+        .map(|s| {
+            let op = s
+                .opacity
+                .map(|o| format!(" stop-opacity=\"{o}\""))
+                .unwrap_or_default();
+            format!(
+                "      <stop offset=\"{}\" stop-color=\"{}\"{} />",
+                s.offset,
+                escape_attr(&s.color),
+                op
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if g.kind == "radial" {
+        format!(
+            "    <radialGradient id=\"{}\" cx=\"{}\" cy=\"{}\" r=\"{}\">\n{}\n    </radialGradient>",
+            escape_attr(&g.id),
+            g.cx,
+            g.cy,
+            g.r,
+            stops
+        )
+    } else {
+        format!(
+            "    <linearGradient id=\"{}\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\">\n{}\n    </linearGradient>",
+            escape_attr(&g.id),
+            g.x1,
+            g.y1,
+            g.x2,
+            g.y2,
+            stops
+        )
+    }
+}
+
+/// Inject nib's gradient paints as a `<defs>` right after the `<svg …>` open tag (a
+/// head-injection step, parallel to appending drawn paths — the source is otherwise
+/// untouched). No-op when there are no gradients.
+fn inject_defs(out: &str, doc: &SvgDocument) -> String {
+    if doc.gradients.is_empty() {
+        return out.to_string();
+    }
+    let body = doc
+        .gradients
+        .iter()
+        .map(gradient_to_svg)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let defs = format!("  <defs>\n{body}\n  </defs>");
+    let lower = out.to_ascii_lowercase();
+    match lower.find("<svg").and_then(|s| out[s..].find('>').map(|g| s + g + 1)) {
+        Some(pos) => format!("{}\n{}{}", &out[..pos], defs, &out[pos..]),
+        None => out.to_string(),
+    }
+}
+
 /// Serialize the document to SVG at the TS default precision (3).
 pub fn serialize_svg(doc: &SvgDocument) -> String {
     serialize_svg_prec(doc, 3)
@@ -440,7 +503,8 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
         cursor = end;
     }
     out.push_str(&src[cursor..]);
-    append_drawn_paths(&out, doc, precision)
+    let with_drawn = append_drawn_paths(&out, doc, precision);
+    inject_defs(&with_drawn, doc)
 }
 
 #[cfg(test)]
@@ -600,6 +664,44 @@ mod tests {
         let doc = parse_svg(SAMPLE).unwrap();
         assert!(doc.layers.is_empty());
         assert_eq!(serialize_svg(&doc), SAMPLE);
+    }
+
+    #[test]
+    fn gradients_inject_a_defs_after_the_svg_open_tag() {
+        use crate::model::types::{Gradient, GradientStop};
+        let mut doc = parse_svg(SAMPLE).unwrap();
+        // No gradients → byte-for-byte still.
+        assert_eq!(serialize_svg(&doc), SAMPLE);
+        doc.gradients.push(Gradient {
+            id: "g1".into(),
+            kind: "linear".into(),
+            stops: vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: "#f00".into(),
+                    opacity: None,
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: "#00f".into(),
+                    opacity: Some(0.5),
+                },
+            ],
+            x1: 0.0,
+            y1: 0.0,
+            x2: 1.0,
+            y2: 0.0,
+            cx: 0.5,
+            cy: 0.5,
+            r: 0.5,
+        });
+        let out = serialize_svg(&doc);
+        assert!(out.contains("<defs>"), "{out}");
+        assert!(out.contains(r#"<linearGradient id="g1""#), "{out}");
+        assert!(out.contains(r##"stop-color="#f00""##));
+        assert!(out.contains(r#"stop-opacity="0.5""#));
+        // The original content is still present (defs is additive).
+        assert!(out.contains(r##"<rect x="0" y="0" width="100" height="100" fill="#eee"/>"##));
     }
 
     #[test]

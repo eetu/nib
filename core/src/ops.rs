@@ -17,7 +17,7 @@ use crate::model::geometry::{distance, normalize};
 use crate::model::path::{close_subpath, insert_node_at, reversed_subpath};
 use crate::model::shapes::{ellipse_nodes, line_nodes, polygon_nodes, rect_nodes, star_nodes};
 use crate::model::types::{
-    Layer, NodeRef, NodeType, PathElement, PathNode, Point, Subpath, SvgDocument,
+    Gradient, Layer, NodeRef, NodeType, PathElement, PathNode, Point, Subpath, SvgDocument,
 };
 
 /// Which control handle of a node an op targets.
@@ -161,6 +161,11 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         layer: Option<String>,
     },
+
+    /// Upsert a gradient paint (matched by id) into the document's defs.
+    SetGradient { gradient: Gradient },
+    /// Remove a gradient by id.
+    RemoveGradient { id: String },
 }
 
 /// Apply an op to the document in place. Returns `true` if it found its target and mutated,
@@ -503,6 +508,23 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             p.layer = layer.clone();
             true
         }
+
+        Op::SetGradient { gradient } => {
+            if let Some(g) = doc.gradients.iter_mut().find(|g| g.id == gradient.id) {
+                if g == gradient {
+                    return false;
+                }
+                *g = gradient.clone();
+            } else {
+                doc.gradients.push(gradient.clone());
+            }
+            true
+        }
+        Op::RemoveGradient { id } => {
+            let before = doc.gradients.len();
+            doc.gradients.retain(|g| &g.id != id);
+            doc.gradients.len() != before
+        }
     }
 }
 
@@ -603,6 +625,7 @@ mod tests {
             }],
             layers: Vec::new(),
             active_layer: None,
+            gradients: Vec::new(),
         }
     }
 

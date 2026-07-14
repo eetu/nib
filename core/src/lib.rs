@@ -21,7 +21,7 @@ pub mod snap;
 
 use history::History;
 use model::document::{parse_svg, serialize_svg};
-use model::types::{Layer, NodeRef, PathElement, SvgDocument};
+use model::types::{Gradient, Layer, NodeRef, PathElement, SvgDocument};
 use ops::Op;
 
 const BLANK_SVG: &str =
@@ -34,6 +34,7 @@ struct Snapshot {
     paths: Vec<PathElement>,
     layers: Vec<Layer>,
     active_layer: Option<String>,
+    gradients: Vec<Gradient>,
     selection: Option<NodeRef>,
     selected_path: Option<usize>,
 }
@@ -56,6 +57,7 @@ impl Editor {
             paths: doc.map(|d| d.paths.clone()).unwrap_or_default(),
             layers: doc.map(|d| d.layers.clone()).unwrap_or_default(),
             active_layer: doc.and_then(|d| d.active_layer.clone()),
+            gradients: doc.map(|d| d.gradients.clone()).unwrap_or_default(),
             selection: self.selection,
             selected_path: self.selected_path,
         }
@@ -66,6 +68,7 @@ impl Editor {
             doc.paths = snap.paths.clone();
             doc.layers = snap.layers.clone();
             doc.active_layer = snap.active_layer.clone();
+            doc.gradients = snap.gradients.clone();
         }
         self.selection = snap.selection;
         self.selected_path = snap.selected_path;
@@ -162,6 +165,7 @@ impl Editor {
             paths: Vec::new(),
             layers: Vec::new(),
             active_layer: None,
+            gradients: Vec::new(),
             selection: None,
             selected_path: None,
         });

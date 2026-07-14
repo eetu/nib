@@ -309,6 +309,25 @@
       </defs>
       <rect class="grid" width="100%" height="100%" fill="url(#nib-grid)" />
     {/if}
+    {#if editor.doc?.gradients?.length}
+      <defs>
+        {#each editor.doc.gradients as g (g.id)}
+          {#if g.kind === "radial"}
+            <radialGradient id={g.id} cx={g.cx} cy={g.cy} r={g.r}>
+              {#each g.stops as s, i (i)}
+                <stop offset={s.offset} stop-color={s.color} stop-opacity={s.opacity ?? 1} />
+              {/each}
+            </radialGradient>
+          {:else}
+            <linearGradient id={g.id} x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2}>
+              {#each g.stops as s, i (i)}
+                <stop offset={s.offset} stop-color={s.color} stop-opacity={s.opacity ?? 1} />
+              {/each}
+            </linearGradient>
+          {/if}
+        {/each}
+      </defs>
+    {/if}
     <g
       class="scene"
       transform={`translate(${viewport.tx} ${viewport.ty}) scale(${viewport.scale})`}

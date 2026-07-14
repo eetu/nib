@@ -1,6 +1,7 @@
 import { Editor as WasmEditor } from "$lib/core";
 import { subpathsBounds } from "$lib/model/geometry";
 import type {
+  Gradient,
   Layer,
   NodeRef,
   NodeType,
@@ -133,6 +134,16 @@ class DocumentStore {
     this.selectedPath = st.selectedPath ?? null;
     this.#canUndo = st.canUndo;
     this.#canRedo = st.canRedo;
+    // Keep the client object-selection set consistent with the core's single selection when
+    // it was set outside the multi-select facade (drawing + paste use the low-level select).
+    // A live multi-selection (length > 1) is client-owned, so it's left intact.
+    if (this.selection) {
+      const p = this.selection.pathIndex;
+      if (this.selectedPaths.length !== 1 || this.selectedPaths[0] !== p) this.selectedPaths = [p];
+    } else if (this.selectedPaths.length <= 1) {
+      const want = this.selectedPath != null ? [this.selectedPath] : [];
+      if (this.selectedPaths[0] !== want[0]) this.selectedPaths = want;
+    }
   }
 
   /** Apply one op to the core (live edit, no commit). Returns whether it mutated. */
@@ -417,6 +428,27 @@ class DocumentStore {
     if (changed) this.commit();
   }
 
+  // --- gradients ---------------------------------------------------------
+
+  get gradients(): Gradient[] {
+    return this.doc?.gradients ?? [];
+  }
+  gradientById(id: string): Gradient | null {
+    return this.doc?.gradients?.find((g) => g.id === id) ?? null;
+  }
+  /** Upsert a gradient def as one undo step. */
+  setGradient(gradient: Gradient): void {
+    if (this.#apply({ type: "setGradient", gradient })) this.commit();
+  }
+  /** Live-preview a gradient edit (e.g. a stop-colour drag) without committing. */
+  previewGradient(gradient: Gradient): void {
+    this.#apply({ type: "setGradient", gradient });
+    this.#sync();
+  }
+  removeGradient(id: string): void {
+    if (this.#apply({ type: "removeGradient", id })) this.commit();
+  }
+
   // --- gesture lifecycle -------------------------------------------------
 
   /** Record the live-edited state as one undo step. */
@@ -634,6 +666,7 @@ class DocumentStore {
       attributes: { ...this.#clipboard.attributes },
     });
     this.#wasm.selectPath(pathIndex); // object-select the paste (transform box, not nodes)
+    this.selectedPaths = [pathIndex];
     this.nodeEditIndex = null;
     this.commit();
   }

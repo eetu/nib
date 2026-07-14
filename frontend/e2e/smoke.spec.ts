@@ -205,6 +205,38 @@ test("layers: add a layer, draw onto it, then hide it", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("gradients: convert a shape's fill to a linear gradient", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "new drawing" }).click();
+
+  // Draw a rectangle, then switch to select → it's object-selected (transform box).
+  await page.keyboard.press("r");
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * 0.65);
+  await page.mouse.up();
+  await page.keyboard.press("v");
+  await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
+
+  // Fill → linear gradient: a <linearGradient> def appears and the shape references it.
+  await page.locator(".paint").filter({ hasText: "fill" }).getByRole("button", { name: "linear" }).click();
+  await expect(page.locator("svg.canvas defs linearGradient")).toHaveCount(1);
+  await expect(page.locator("svg.canvas g.drawn path")).toHaveAttribute("fill", /url\(#grad-/);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("clicking a filled shape's interior selects it (fill hit-test)", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
