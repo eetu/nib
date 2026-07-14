@@ -41,7 +41,9 @@
     { label: "Toggle grid", run: () => (tools.gridEnabled = !tools.gridEnabled) },
     { label: "Toggle snap to points", run: () => (tools.snapEnabled = !tools.snapEnabled) },
     { label: "Toggle smart guides", run: () => (tools.guidesEnabled = !tools.guidesEnabled) },
+    { label: "New drawing", run: () => workspace.newDocument() },
     { label: "Save", run: () => void workspace.save(), enabled: () => editor.hasDocument },
+    { label: "Save as…", run: () => void workspace.saveAs(), enabled: () => editor.hasDocument },
     {
       label: "Copy SVG",
       run: () => void navigator.clipboard.writeText(editor.toSvg()),

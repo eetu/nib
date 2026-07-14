@@ -15,6 +15,10 @@ export function supportsFilePicker(): boolean {
   return typeof window !== "undefined" && "showOpenFilePicker" in window;
 }
 
+export function supportsSaveFilePicker(): boolean {
+  return typeof window !== "undefined" && "showSaveFilePicker" in window;
+}
+
 function isAbort(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
 }
@@ -49,6 +53,22 @@ export async function pickSvgFile(): Promise<WorkspaceFile | null> {
       types: [{ description: "SVG", accept: { "image/svg+xml": [".svg"] } }],
     });
     return { name: handle.name, handle };
+  } catch (err) {
+    if (isAbort(err)) return null;
+    throw err;
+  }
+}
+
+/** Prompt for a save location + name (Save As). Returns null if cancelled. */
+export async function pickSaveFile(suggestedName: string): Promise<FileSystemFileHandle | null> {
+  const name = suggestedName.toLowerCase().endsWith(".svg")
+    ? suggestedName
+    : `${suggestedName}.svg`;
+  try {
+    return await window.showSaveFilePicker({
+      suggestedName: name,
+      types: [{ description: "SVG", accept: { "image/svg+xml": [".svg"] } }],
+    });
   } catch (err) {
     if (isAbort(err)) return null;
     throw err;

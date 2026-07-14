@@ -70,6 +70,26 @@ test("draws a rectangle with the rect shape tool", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("New drawing creates a blank document from the top bar", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+
+  // The empty state is up; New in the top bar makes a blank document.
+  await page.locator("header").getByRole("button", { name: "New", exact: true }).click();
+  await expect(page.locator("svg.canvas")).toBeVisible();
+  await expect(page.locator("header .name")).toHaveText("untitled.svg");
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("the command palette opens and runs an action", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

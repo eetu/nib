@@ -2,11 +2,13 @@
   import ClipboardPaste from "@lucide/svelte/icons/clipboard-paste";
   import Copy from "@lucide/svelte/icons/copy";
   import Download from "@lucide/svelte/icons/download";
+  import File from "@lucide/svelte/icons/file";
   import FilePlus from "@lucide/svelte/icons/file-plus";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
   import Magnet from "@lucide/svelte/icons/magnet";
   import Redo2 from "@lucide/svelte/icons/redo-2";
   import Save from "@lucide/svelte/icons/save";
+  import SaveAll from "@lucide/svelte/icons/save-all";
   import Settings from "@lucide/svelte/icons/settings";
   import Undo2 from "@lucide/svelte/icons/undo-2";
 
@@ -36,6 +38,14 @@
   <Wordmark />
 
   <div class="group">
+    <button
+      class="icon-btn"
+      title="New drawing"
+      aria-label="New"
+      onclick={() => workspace.newDocument()}
+    >
+      <File size={18} />
+    </button>
     {#if workspace.foldersSupported}
       <button
         class="icon-btn"
@@ -112,6 +122,15 @@
       class:ok={copied}
     >
       <Copy size={18} />
+    </button>
+    <button
+      class="icon-btn"
+      title="Save as…"
+      aria-label="Save as"
+      onclick={() => workspace.saveAs()}
+      disabled={!editor.hasDocument || workspace.busy}
+    >
+      <SaveAll size={18} />
     </button>
     <button
       class="save"

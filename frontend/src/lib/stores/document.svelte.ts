@@ -246,6 +246,18 @@ class DocumentStore {
     this.#persist();
   }
 
+  /** Start a fresh blank document unconditionally (New), replacing any current one. */
+  newDocument(name = "untitled.svg"): void {
+    this.#wasm?.clear();
+    this.#wasm?.ensureBlank();
+    this.selectedPaths = [];
+    this.nodeEditIndex = null;
+    this.fileName = name;
+    this.dirty = false;
+    this.#sync();
+    this.#persist();
+  }
+
   /** Current document serialized back to SVG (unedited markup preserved byte-for-byte). */
   toSvg(): string {
     return this.#wasm?.toSvg() ?? "";
