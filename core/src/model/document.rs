@@ -20,8 +20,9 @@ const DEFAULT_VIEWBOX: ViewBox = ViewBox {
 
 /// Presentation attributes the STYLE panel can read/edit on any path. Parsed from imported
 /// paths so they can be styled + reset.
-pub const STYLE_KEYS: [&str; 9] = [
+pub const STYLE_KEYS: [&str; 10] = [
     "fill",
+    "fill-rule",
     "stroke",
     "stroke-width",
     "opacity",

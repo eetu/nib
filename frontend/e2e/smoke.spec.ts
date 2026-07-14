@@ -70,5 +70,13 @@ test("clicking a filled shape's interior selects it (fill hit-test)", async ({ p
   // The whole path is now object-selected → the transform box is drawn in the overlay.
   await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
 
+  // Styling round-trips through the core: set the stroke cap and see it on the element.
+  await page
+    .locator(".segrow")
+    .filter({ hasText: "cap" })
+    .getByRole("button", { name: "round" })
+    .click();
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveAttribute("stroke-linecap", "round");
+
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });

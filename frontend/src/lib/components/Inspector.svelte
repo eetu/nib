@@ -52,6 +52,12 @@
     if (Number.isFinite(v) && v >= 0) setStyle("stroke-width", String(v));
   }
 
+  function onDash(e: Event) {
+    // A dash pattern like "4 2"; blank clears it back to a solid stroke.
+    const v = (e.currentTarget as HTMLInputElement).value.trim();
+    setStyle("stroke-dasharray", v || null);
+  }
+
   function onOpacityInput(e: Event) {
     opacityLive = Number((e.currentTarget as HTMLInputElement).value);
   }
@@ -99,6 +105,18 @@
 <aside class="inspector">
   <section>
     <h2>{path ? "style" : isCreateTool ? "new shape style" : "style"}</h2>
+    {#snippet seg(label: string, key: string, options: string[], dflt: string)}
+      <div class="segrow">
+        <span class="seglbl">{label}</span>
+        <div class="segbtns">
+          {#each options as opt (opt)}
+            <button class:active={(style[key] ?? dflt) === opt} onclick={() => setStyle(key, opt)}>
+              {opt}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/snippet}
     {#if path || isCreateTool}
       <ColorInput
         label="fill"
@@ -107,6 +125,7 @@
         oninput={(v) => previewStyle("fill", v)}
         onchange={(v) => setStyle("fill", v)}
       />
+      {@render seg("fill rule", "fill-rule", ["nonzero", "evenodd"], "nonzero")}
       <ColorInput
         label="stroke"
         value={style.stroke ?? "none"}
@@ -121,6 +140,18 @@
           step="0.5"
           value={style["stroke-width"] ?? "1"}
           onchange={setWidth}
+        />
+      </label>
+      {@render seg("cap", "stroke-linecap", ["butt", "round", "square"], "butt")}
+      {@render seg("join", "stroke-linejoin", ["miter", "round", "bevel"], "miter")}
+      <label class="row">
+        dash <input
+          class="dash"
+          type="text"
+          value={style["stroke-dasharray"] ?? ""}
+          placeholder="none"
+          onchange={onDash}
+          spellcheck="false"
         />
       </label>
       <label class="row">
@@ -297,6 +328,50 @@
     text-align: right;
     color: var(--halo-text-muted);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Segmented style controls (cap / join / fill-rule). */
+  .segrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .seglbl {
+    width: 44px;
+    color: var(--halo-text-muted);
+  }
+
+  .segbtns {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    gap: 4px;
+  }
+
+  .segbtns button {
+    flex: 1;
+    min-width: 0;
+    padding: 3px 0;
+    border: 1px solid var(--halo-border);
+    border-radius: var(--halo-radius-pill);
+    background: var(--halo-bg-main);
+    color: var(--halo-text-muted);
+    font-size: 11px;
+    text-transform: capitalize;
+  }
+
+  .segbtns button.active {
+    border-color: var(--halo-accent);
+    color: var(--halo-accent);
+    background: var(--halo-accent-soft);
+  }
+
+  .dash {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
   }
 
   .coords {
