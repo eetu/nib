@@ -21,7 +21,7 @@
   import type { Layer, NodeType, PathElement } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
   import { tools } from "$lib/stores/tool.svelte";
-  import { scaleSubpaths } from "$lib/tools/transform";
+  import { scaleSubpaths, shearSubpaths } from "$lib/tools/transform";
 
   import PaintInput from "./PaintInput.svelte";
 
@@ -48,6 +48,8 @@
 
   let opacityLive = $state<number | null>(null);
   const opacityShown = $derived(opacityLive ?? opacityPct);
+
+  let offsetDist = $state(4);
 
   function round(v: number): number {
     return Math.round(v * 100) / 100;
@@ -131,6 +133,22 @@
     else if (axis === "h" && h > 0)
       editor.setSubpaths(pathIndex, scaleSubpaths(path.subpaths, anchor, 1, v / h));
     else return;
+    editor.commit();
+  }
+
+  // Shear the selected path by a one-shot angle (deg) about the transform pivot (default box
+  // centre); the input resets to 0 so each entry applies once.
+  function skew(axis: "x" | "y", e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const deg = evalNum(input.value);
+    input.value = "0";
+    if (deg === null || deg === 0 || !path || pathIndex === null || !bounds) return;
+    const center = { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2 };
+    const k = Math.tan((deg * Math.PI) / 180);
+    editor.setSubpaths(
+      pathIndex,
+      shearSubpaths(path.subpaths, center, axis === "x" ? k : 0, axis === "y" ? k : 0),
+    );
     editor.commit();
   }
 
@@ -425,6 +443,28 @@
       <div class="pathops">
         <button class="ghost-btn" onclick={() => editor.simplifyPath()}>simplify</button>
         <button class="ghost-btn" onclick={() => editor.outlineStroke()}>outline stroke</button>
+      </div>
+      <div class="offsetrow">
+        <span class="seglbl">offset</span>
+        <input type="number" step="1" bind:value={offsetDist} />
+        <button class="ghost-btn" onclick={() => editor.offsetPath(offsetDist)}>apply</button>
+      </div>
+      <div class="offsetrow">
+        <span class="seglbl">skew°</span>
+        <input
+          type="number"
+          step="1"
+          value="0"
+          title="skew X (degrees)"
+          onchange={(e) => skew("x", e)}
+        />
+        <input
+          type="number"
+          step="1"
+          value="0"
+          title="skew Y (degrees)"
+          onchange={(e) => skew("y", e)}
+        />
       </div>
       {#if editor.objectSelected}
         <p class="hint">double-click to edit nodes</p>
@@ -842,6 +882,22 @@
 
   .pathops .ghost-btn {
     flex: 1;
+    justify-content: center;
+  }
+
+  .offsetrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .offsetrow input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .offsetrow .ghost-btn {
     justify-content: center;
   }
 

@@ -195,6 +195,13 @@ pub enum Op {
         width: f64,
         id: String,
     },
+    /// Offset a path's outline by `distance` (outward if positive, inward if negative), adding
+    /// the result as a new path (`id`) that inherits the source's style; the source is kept.
+    OffsetPath {
+        path: usize,
+        distance: f64,
+        id: String,
+    },
 }
 
 /// Apply an op to the document in place. Returns `true` if it found its target and mutated,
@@ -693,6 +700,44 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 (subpaths, m, p.layer.clone())
             };
             doc.paths[*path].deleted = true;
+            let index = doc.paths.len();
+            doc.paths.push(PathElement {
+                id: id.clone(),
+                index,
+                original_d: String::new(),
+                subpaths,
+                edited: true,
+                added: true,
+                attributes: Some(attributes),
+                style_override: None,
+                original_tag: None,
+                deleted: false,
+                renamed: false,
+                layer,
+                hidden: false,
+            });
+            true
+        }
+        Op::OffsetPath { path, distance, id } => {
+            let (subpaths, attributes, layer) = {
+                let Some(p) = doc.paths.get(*path) else {
+                    return false;
+                };
+                if p.deleted {
+                    return false;
+                }
+                let subpaths = match crate::model::booleans::offset_path(&p.subpaths, *distance) {
+                    Some(s) => s,
+                    None => return false,
+                };
+                let mut m = p.attributes.clone().unwrap_or_default();
+                if let Some(so) = &p.style_override {
+                    for (k, v) in so {
+                        m.insert(k.clone(), v.clone());
+                    }
+                }
+                (subpaths, m, p.layer.clone())
+            };
             let index = doc.paths.len();
             doc.paths.push(PathElement {
                 id: id.clone(),

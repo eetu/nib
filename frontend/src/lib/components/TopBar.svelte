@@ -135,7 +135,7 @@
     <button
       class="save"
       onclick={() => workspace.save()}
-      disabled={!editor.hasDocument || workspace.busy}
+      disabled={!editor.hasDocument || workspace.busy || (workspace.savesInPlace && !editor.dirty)}
     >
       {#if workspace.savesInPlace}<Save size={16} />Save{:else}<Download size={16} />Download{/if}
     </button>
