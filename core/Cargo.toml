@@ -19,10 +19,12 @@ roxmltree = "0.21.1"
 indexmap = { version = "2.14.0", features = ["serde"] }
 
 [dev-dependencies]
+serde_json = "1.0.150"
 wasm-bindgen-test = "0.3.76"
 
-# Modern rustc emits bulk-memory ops (memory.fill/copy); wasm-pack's bundled wasm-opt
-# rejects them unless the feature is enabled explicitly. Bulk memory is supported by all
-# current browsers, so enable it and keep size optimization (-O) on.
+# wasm-pack's bundled wasm-opt is too old for the post-MVP wasm features modern rustc emits
+# by default (bulk-memory, sign-ext, nontrapping-fptoint, …), and chasing --enable-* flags
+# is brittle. Disable it — cargo's release profile (opt-level="s" + lto + strip) already
+# shrinks the .wasm. TODO: add a modern binaryen wasm-opt pass (local + CI) for extra size.
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ['-O', '--enable-bulk-memory']
+wasm-opt = false

@@ -4,20 +4,17 @@
   import type { Snippet } from "svelte";
   import { onMount } from "svelte";
 
-  import { core_version, Editor, initCore } from "$lib/core";
+  import { core_version, initCore } from "$lib/core";
   import { settings } from "$lib/stores/settings.svelte";
 
   let { children }: { children: Snippet } = $props();
 
-  // Bring the Rust/WASM core online at boot (client-only; the app is ssr=false). A1 proves
-  // the pipeline end to end — construct an Editor, round-trip a call — and records the core
-  // version as data-core-version on <html> so it's observable in the DOM. A2+ hands the
-  // Editor handle to the rune stores.
+  // Bring the Rust/WASM core online at boot (client-only; the app is ssr=false), and record
+  // its version as data-core-version on <html> so it's observable in the DOM. The rune
+  // stores take over the Editor handle when they're rewired onto the core (Phase A5).
   onMount(async () => {
     await initCore();
-    const editor = new Editor();
     document.documentElement.dataset.coreVersion = core_version();
-    console.info(editor.echo("boot"));
   });
 
   // Resolve the chosen theme mode to an effective 'light'/'dark' and apply it as
