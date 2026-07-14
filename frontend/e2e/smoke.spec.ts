@@ -266,6 +266,38 @@ test("gradients: convert a shape's fill to a linear gradient", async ({ page }) 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("copy style transfers a fill from one path to another", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><path d="M10 10 H40 V40 H10 Z" fill="#ff0000"/><path d="M60 60 H90 V90 H60 Z" fill="#0000ff"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // Rows are top-of-stack first, so nth(1) is the red path (index 0) and nth(0) is the blue
+  // (index 1). Copy red's style, then paste it onto blue → blue's fill becomes red.
+  const rows = page.locator(".layerlist .row-btn");
+  await rows.nth(1).click();
+  await page.getByRole("button", { name: "copy style" }).click();
+  await rows.nth(0).click();
+  await page.getByRole("button", { name: "paste style" }).click();
+  await expect(page.locator("svg.canvas g.artwork path").nth(1)).toHaveAttribute("fill", "#ff0000");
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("boolean union combines two shapes into one", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

@@ -12,6 +12,8 @@
   import Eye from "@lucide/svelte/icons/eye";
   import EyeOff from "@lucide/svelte/icons/eye-off";
   import Group from "@lucide/svelte/icons/group";
+  import PaintBucket from "@lucide/svelte/icons/paint-bucket";
+  import Pipette from "@lucide/svelte/icons/pipette";
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import Ungroup from "@lucide/svelte/icons/ungroup";
 
@@ -259,7 +261,26 @@
 
   {#if path || isCreateTool}
     <section>
-      <h2>{path ? "style" : "new shape style"}</h2>
+      <div class="lhead">
+        <h2>{path ? "style" : "new shape style"}</h2>
+        {#if path}
+          <div class="lhead-actions">
+            <button
+              class="ghost-btn"
+              title="copy style"
+              aria-label="copy style"
+              onclick={() => editor.copyStyle()}><Pipette size={13} /></button
+            >
+            <button
+              class="ghost-btn"
+              title="paste style"
+              aria-label="paste style"
+              disabled={!editor.canPasteStyle}
+              onclick={() => editor.pasteStyle()}><PaintBucket size={13} /></button
+            >
+          </div>
+        {/if}
+      </div>
       {#snippet seg(label: string, key: string, options: string[], dflt: string)}
         <div class="segrow">
           <span class="seglbl">{label}</span>
@@ -717,9 +738,18 @@
     font-size: 11px;
   }
 
-  .ghost-btn:hover {
+  .ghost-btn:hover:not(:disabled) {
     border-color: var(--halo-accent);
     color: var(--halo-accent);
+  }
+
+  .ghost-btn:disabled {
+    opacity: 0.4;
+  }
+
+  .lhead-actions {
+    display: flex;
+    gap: 4px;
   }
 
   .layerlist {

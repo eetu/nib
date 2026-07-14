@@ -38,6 +38,8 @@
       enabled: hasSelection,
     },
     { label: "Deselect", run: () => editor.deselect() },
+    { label: "Copy style", run: () => editor.copyStyle(), enabled: hasSelection },
+    { label: "Paste style", run: () => editor.pasteStyle(), enabled: () => editor.canPasteStyle },
     ...(["union", "subtract", "intersect", "exclude"] as const).map((op) => ({
       label: `Boolean: ${op}`,
       run: () => editor.booleanOp(op),

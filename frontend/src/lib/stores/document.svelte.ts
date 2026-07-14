@@ -1,4 +1,5 @@
 import { Editor as WasmEditor } from "$lib/core";
+import { STYLE_KEYS } from "$lib/model/document";
 import { subpathsBounds } from "$lib/model/geometry";
 import type {
   Gradient,
@@ -492,6 +493,43 @@ class DocumentStore {
   }
   removeGradient(id: string): void {
     if (this.#apply({ type: "removeGradient", id })) this.commit();
+  }
+
+  // --- copy / paste style (paint) ----------------------------------------
+
+  #styleClipboard = $state<{ style: Record<string, string>; gradients: Gradient[] } | null>(null);
+
+  get canPasteStyle(): boolean {
+    return this.#styleClipboard !== null;
+  }
+
+  /** Copy the selected path's effective paint/style (+ any referenced gradient defs). */
+  copyStyle(): void {
+    const p = this.selectedPathElement;
+    if (!p) return;
+    const eff = { ...(p.attributes ?? {}), ...(p.styleOverride ?? {}) };
+    const style: Record<string, string> = {};
+    for (const k of STYLE_KEYS) if (eff[k] != null) style[k] = eff[k];
+    const gradients: Gradient[] = [];
+    for (const v of Object.values(style)) {
+      const id = v.startsWith("url(#") ? v.slice(5, -1) : null;
+      const g = id ? this.gradientById(id) : null;
+      if (g && !gradients.some((x) => x.id === g.id)) gradients.push(clone(g));
+    }
+    this.#styleClipboard = { style, gradients };
+  }
+
+  /** Apply the copied style to every selected path (one undo step); upserts its gradients. */
+  pasteStyle(): void {
+    const clip = this.#styleClipboard;
+    if (!clip || this.selectedPaths.length === 0) return;
+    let changed = false;
+    for (const g of clip.gradients)
+      changed = this.#apply({ type: "setGradient", gradient: g }) || changed;
+    for (const i of this.selectedPaths)
+      for (const [key, value] of Object.entries(clip.style))
+        changed = this.#apply({ type: "setStyle", path: i, key, value }) || changed;
+    if (changed) this.commit();
   }
 
   // --- gesture lifecycle -------------------------------------------------
