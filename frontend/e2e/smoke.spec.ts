@@ -365,6 +365,36 @@ test("outline stroke turns a stroked line into a filled shape", async ({ page })
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("offset path adds a second, larger path", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M30 30 H70 V70 H30 Z" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+  await page.locator(".layerlist .row-btn").first().click();
+
+  await page.keyboard.press("Meta+k");
+  await page.locator(".palette .q").fill("offset path outward");
+  await page.keyboard.press("Enter");
+  // The offset result is a new drawn path (source kept).
+  await expect(page.locator("svg.canvas g.drawn path")).toHaveCount(1);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("boolean union combines two shapes into one", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

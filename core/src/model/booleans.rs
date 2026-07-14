@@ -33,11 +33,31 @@ fn subpath_to_contour(sp: &Subpath) -> Vec<[f64; 2]> {
     pts
 }
 
-fn path_to_contours(p: &PathElement) -> Vec<Vec<[f64; 2]>> {
-    p.subpaths
+fn subpaths_to_contours(subpaths: &[Subpath]) -> Vec<Vec<[f64; 2]>> {
+    subpaths
         .iter()
         .map(subpath_to_contour)
         .filter(|c| c.len() >= 3)
+        .collect()
+}
+
+fn path_to_contours(p: &PathElement) -> Vec<Vec<[f64; 2]>> {
+    subpaths_to_contours(&p.subpaths)
+}
+
+/// Convert an i_overlay result (shapes → contours → points) into closed corner-node subpaths.
+fn shapes_to_subpaths(shapes: &[Vec<Vec<[f64; 2]>>]) -> Vec<Subpath> {
+    shapes
+        .iter()
+        .flat_map(|shape| shape.iter())
+        .filter(|contour| contour.len() >= 3)
+        .map(|contour| Subpath {
+            nodes: contour
+                .iter()
+                .map(|pt| PathNode::corner(Point::new(pt[0], pt[1])))
+                .collect(),
+            closed: true,
+        })
         .collect()
 }
 
@@ -72,19 +92,34 @@ pub fn boolean(op: &str, paths: &[&PathElement]) -> Option<Vec<Subpath>> {
         }
         acc = acc.overlay(&clip, rule, FillRule::NonZero);
     }
-    let subpaths: Vec<Subpath> = acc
-        .iter()
-        .flat_map(|shape| shape.iter())
-        .filter(|contour| contour.len() >= 3)
-        .map(|contour| Subpath {
-            nodes: contour
-                .iter()
-                .map(|pt| PathNode::corner(Point::new(pt[0], pt[1])))
-                .collect(),
-            closed: true,
-        })
-        .collect();
+    let subpaths = shapes_to_subpaths(&acc);
     (!subpaths.is_empty()).then_some(subpaths)
+}
+
+/// Offset a path's outline by `d` document units (outward if positive, inward if negative).
+/// Built from the kernels we already have: a stroke band of width `2|d|` unioned onto the fill
+/// grows it by `d`; subtracting the band from the fill shrinks it by `d`. Flattened result.
+pub fn offset_path(subpaths: &[Subpath], d: f64) -> Option<Vec<Subpath>> {
+    if d.abs() < 1e-9 {
+        return Some(subpaths.to_vec());
+    }
+    let fill = subpaths_to_contours(subpaths);
+    if fill.is_empty() {
+        return None;
+    }
+    let band_subpaths = crate::model::path::outline_stroke(subpaths, 2.0 * d.abs(), 0.25);
+    let band = subpaths_to_contours(&band_subpaths);
+    if band.is_empty() {
+        return None;
+    }
+    let rule = if d > 0.0 {
+        OverlayRule::Union
+    } else {
+        OverlayRule::Difference
+    };
+    let acc = fill.overlay(&band, rule, FillRule::NonZero);
+    let out = shapes_to_subpaths(&acc);
+    (!out.is_empty()).then_some(out)
 }
 
 #[cfg(test)]
@@ -157,5 +192,21 @@ mod tests {
         let a = rect(0.0, 0.0, 10.0, 10.0);
         let b = rect(5.0, 5.0, 15.0, 15.0);
         assert!(boolean("nope", &[&a, &b]).is_none());
+    }
+
+    #[test]
+    fn offset_outward_grows_bounds() {
+        let r = rect(10.0, 10.0, 30.0, 30.0);
+        let out = offset_path(&r.subpaths, 5.0).unwrap();
+        let (x0, y0, x1, y1) = bounds(&out);
+        assert!(x0 <= 6.0 && y0 <= 6.0 && x1 >= 34.0 && y1 >= 34.0, "{x0},{y0},{x1},{y1}");
+    }
+
+    #[test]
+    fn offset_inward_shrinks_bounds() {
+        let r = rect(0.0, 0.0, 20.0, 20.0);
+        let out = offset_path(&r.subpaths, -5.0).unwrap();
+        let (x0, y0, x1, y1) = bounds(&out);
+        assert!(x0 >= 4.0 && y0 >= 4.0 && x1 <= 16.0 && y1 <= 16.0, "{x0},{y0},{x1},{y1}");
     }
 }

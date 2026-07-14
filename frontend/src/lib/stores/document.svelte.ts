@@ -408,6 +408,17 @@ class DocumentStore {
     if (this.#apply({ type: "simplifyPath", path: i, tolerance: tol })) this.commit();
   }
 
+  /** Offset the selected path's outline by `distance` (outward if positive), adding a new path. */
+  offsetPath(distance: number): void {
+    const i = this.selectedPathIndex;
+    if (i === null || !Number.isFinite(distance) || distance === 0) return;
+    const id = this.#freshId("offset");
+    if (this.#apply({ type: "offsetPath", path: i, distance, id })) {
+      this.commit();
+      this.selectPath((this.doc?.paths.length ?? 1) - 1);
+    }
+  }
+
   /** Expand the selected path's stroke into a filled outline shape. */
   outlineStroke(): void {
     const i = this.selectedPathIndex;

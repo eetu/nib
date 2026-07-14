@@ -55,6 +55,16 @@
       run: () => editor.outlineStroke(),
       enabled: () => editor.selectedPathIndex !== null,
     },
+    {
+      label: "Offset path outward",
+      run: () => editor.offsetPath(4),
+      enabled: () => editor.selectedPathIndex !== null,
+    },
+    {
+      label: "Offset path inward",
+      run: () => editor.offsetPath(-4),
+      enabled: () => editor.selectedPathIndex !== null,
+    },
     { label: "Toggle grid", run: () => (tools.gridEnabled = !tools.gridEnabled) },
     { label: "Toggle snap to points", run: () => (tools.snapEnabled = !tools.snapEnabled) },
     { label: "Toggle smart guides", run: () => (tools.guidesEnabled = !tools.guidesEnabled) },

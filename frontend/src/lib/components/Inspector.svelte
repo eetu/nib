@@ -49,6 +49,8 @@
   let opacityLive = $state<number | null>(null);
   const opacityShown = $derived(opacityLive ?? opacityPct);
 
+  let offsetDist = $state(4);
+
   function round(v: number): number {
     return Math.round(v * 100) / 100;
   }
@@ -425,6 +427,11 @@
       <div class="pathops">
         <button class="ghost-btn" onclick={() => editor.simplifyPath()}>simplify</button>
         <button class="ghost-btn" onclick={() => editor.outlineStroke()}>outline stroke</button>
+      </div>
+      <div class="offsetrow">
+        <span class="seglbl">offset</span>
+        <input type="number" step="1" bind:value={offsetDist} />
+        <button class="ghost-btn" onclick={() => editor.offsetPath(offsetDist)}>apply</button>
       </div>
       {#if editor.objectSelected}
         <p class="hint">double-click to edit nodes</p>
@@ -842,6 +849,22 @@
 
   .pathops .ghost-btn {
     flex: 1;
+    justify-content: center;
+  }
+
+  .offsetrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .offsetrow input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .offsetrow .ghost-btn {
     justify-content: center;
   }
 
