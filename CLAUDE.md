@@ -189,14 +189,16 @@ client-side pro pillars, all running on the core):
   numeric-precision inspector; **unified layers = objects + groups** (Figma/
   Pixelmator model, one level — z-order/drag-reorder, show/hide, thumbnails, group/
   ungroup via `<g>`, active layer, right-click context menus); multi-select +
-  marquee + align/distribute; rotate (about the box centre); **boolean ops**
-  (union/subtract/intersect/exclude via the `i_overlay` kernel), **simplify** (RDP),
-  **outline-stroke** (kurbo); smart guides; **gradients** (linear/radial, draggable
-  stops, radial cx/cy/r); command palette (⌘K); plus workflow polish (New/Save-As,
-  copy-style, source prettify + reveal, double-click node editing, friendly path
-  names, content-aware fit + export viewBox, tight selection bounds).
-- **B tails still open (nice-to-have):** offset-path (proper joins), rotate/skew
-  about a *movable* pivot.
+  marquee + align/distribute; **rotate** (box centre) + **skew** (numeric);
+  **path craft** — boolean ops (union/subtract/intersect/exclude via `i_overlay`),
+  **simplify** (RDP), **outline-stroke** + **offset-path** (kurbo stroke ⊕ i_overlay);
+  smart guides; **gradients** (linear/radial, draggable stops, radial cx/cy/r);
+  command palette (⌘K); plus workflow polish (New/Save-As, copy-style, source
+  prettify + reveal, double-click node editing, friendly path names, content-aware
+  fit + export viewBox, tight selection bounds).
+- **Deferred (needs a dedicated rotate tool):** rotate/skew about a *freely-movable*
+  pivot — a centre pivot handle conflicts with the unified select tool's
+  drag-to-move + double-click-to-node-edit.
 - **Phase C (next — additive, flag-gated):** rust-axum backend running the same core —
   op-log-over-WebSocket sync + an MCP tool surface. **The op vocabulary the editor
   already runs on IS the surface** (`moveNode` … `booleanOp` … `groupPaths`).
