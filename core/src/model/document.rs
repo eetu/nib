@@ -459,6 +459,76 @@ fn inject_defs(out: &str, doc: &SvgDocument) -> String {
     }
 }
 
+/// Union bounds (nodes + handles) of every non-deleted path, or None if empty.
+fn union_content_bounds(doc: &SvgDocument) -> Option<(f64, f64, f64, f64)> {
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    let mut any = false;
+    for p in &doc.paths {
+        if p.deleted {
+            continue;
+        }
+        for sp in &p.subpaths {
+            for n in &sp.nodes {
+                for pt in [Some(n.point), n.handle_in, n.handle_out].into_iter().flatten() {
+                    any = true;
+                    min_x = min_x.min(pt.x);
+                    min_y = min_y.min(pt.y);
+                    max_x = max_x.max(pt.x);
+                    max_y = max_y.max(pt.y);
+                }
+            }
+        }
+    }
+    (any && max_x > min_x && max_y > min_y).then_some((min_x, min_y, max_x, max_y))
+}
+
+/// The viewBox to export: the declared artboard, grown to include any content drawn outside
+/// it — so a shape placed beyond the source viewBox isn't clipped when the file is reopened
+/// elsewhere. Equals the source viewBox when all content fits (→ no rewrite).
+fn export_view_box(doc: &SvgDocument) -> ViewBox {
+    let vb = doc.view_box;
+    match union_content_bounds(doc) {
+        Some((x0, y0, x1, y1)) => {
+            let min_x = vb.min_x.min(x0);
+            let min_y = vb.min_y.min(y0);
+            ViewBox {
+                min_x,
+                min_y,
+                width: (vb.min_x + vb.width).max(x1) - min_x,
+                height: (vb.min_y + vb.height).max(y1) - min_y,
+            }
+        }
+        None => vb,
+    }
+}
+
+fn round3(n: f64) -> f64 {
+    (n * 1000.0).round() / 1000.0
+}
+
+/// Rewrite the `<svg …>` opening tag's `viewBox` attribute (used only when content overflows).
+fn rewrite_svg_viewbox(out: &str, vb: ViewBox) -> String {
+    let lower = out.to_ascii_lowercase();
+    let Some(start) = lower.find("<svg") else {
+        return out.to_string();
+    };
+    let Some(gt) = out[start..].find('>').map(|g| start + g + 1) else {
+        return out.to_string();
+    };
+    let value = format!(
+        "{} {} {} {}",
+        round3(vb.min_x),
+        round3(vb.min_y),
+        round3(vb.width),
+        round3(vb.height)
+    );
+    let new_tag = with_attr(&out[start..gt], "viewBox", &value);
+    format!("{}{}{}", &out[..start], new_tag, &out[gt..])
+}
+
 /// Serialize the document to SVG at the TS default precision (3).
 pub fn serialize_svg(doc: &SvgDocument) -> String {
     serialize_svg_prec(doc, 3)
@@ -500,7 +570,13 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
     }
     out.push_str(&src[cursor..]);
     let with_drawn = append_drawn_paths(&out, doc, precision);
-    inject_defs(&with_drawn, doc)
+    let with_defs = inject_defs(&with_drawn, doc);
+    let evb = export_view_box(doc);
+    if evb != doc.view_box {
+        rewrite_svg_viewbox(&with_defs, evb)
+    } else {
+        with_defs
+    }
 }
 
 #[cfg(test)]
@@ -669,6 +745,22 @@ mod tests {
         let black = out.find(r#"d="M 10 10 L 90 10 L 90 90""#).unwrap();
         assert!(red < black, "draw order should follow the array: {out}");
         assert!(out.contains(r##"<rect x="0" y="0" width="100" height="100" fill="#eee"/>"##));
+    }
+
+    #[test]
+    fn export_grows_viewbox_to_cover_overflowing_content() {
+        let mut doc =
+            parse_svg("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n</svg>")
+                .unwrap();
+        let mut p = drawn_on_layer("s1", "x");
+        p.layer = None;
+        p.subpaths = parse_path_d("M 120 120 L 180 120 L 180 180 Z");
+        doc.paths.push(p);
+        let out = serialize_svg(&doc);
+        assert!(out.contains(r#"viewBox="0 0 180 180""#), "{out}");
+        // content within the viewBox leaves it byte-for-byte
+        let within = parse_svg(SAMPLE).unwrap();
+        assert!(serialize_svg(&within).contains(r#"viewBox="0 0 100 100""#));
     }
 
     #[test]

@@ -9,6 +9,7 @@
   import { tools } from "$lib/stores/tool.svelte";
   import { viewport } from "$lib/stores/viewport.svelte";
   import { getTool, type Hit, hitTest } from "$lib/tools";
+  import { loadViewBox } from "$lib/view";
 
   import Overlay from "./Overlay.svelte";
 
@@ -76,7 +77,9 @@
       artworkGroup.appendChild(document.importNode(child, true));
     }
     livePaths = Array.from(artworkGroup.querySelectorAll("path"));
-    pendingFit = doc.viewBox;
+    // Frame the artboard *plus* any content drawn outside it, so a reload never lands on a
+    // view where shapes beyond the viewBox are off-screen.
+    pendingFit = loadViewBox();
   });
 
   // Keep the viewport's pixel size current, and fit a freshly-loaded document
