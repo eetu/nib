@@ -43,9 +43,21 @@ jobs:
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked
 
-      - name: Build the Rust core → WASM
+      # Optional size pass — a binaryen failure must not break the deploy (the build step
+      # skips wasm-opt if it's absent and ships the cargo-optimized .wasm).
+      - name: Install binaryen (wasm size pass)
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+        continue-on-error: true
+
+      - name: Build the Rust core → WASM (+ size-optimize)
         working-directory: ${{ github.workspace }}
-        run: wasm-pack build core --target web
+        run: |
+          wasm-pack build core --target web
+          if command -v wasm-opt >/dev/null 2>&1; then
+            wasm-opt -Oz --all-features core/pkg/nib_core_bg.wasm -o core/pkg/nib_core_bg.wasm
+          else
+            echo "wasm-opt (binaryen) not found — shipping the cargo-optimized .wasm"
+          fi
 
       - name: Install Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6

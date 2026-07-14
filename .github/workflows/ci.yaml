@@ -1,0 +1,57 @@
+name: CI
+
+# Guards every push to main + all PRs: the Rust core tests, the frontend typecheck/lint/
+# format, and the Playwright browser smoke test that drives the real app on the WASM core.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      # ubuntu-latest ships rustup + stable; add the wasm target + wasm-pack for the core.
+      - name: Add wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      - name: Core — test (native) + build (WASM)
+        run: |
+          cargo test -p nib-core
+          wasm-pack build core --target web
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version-file: frontend/.node-version
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: node .yarn/releases/yarn-*.cjs install --immutable
+
+      - name: Validate + unit tests
+        working-directory: frontend
+        run: |
+          node .yarn/releases/yarn-*.cjs validate
+          node .yarn/releases/yarn-*.cjs test
+
+      - name: Build
+        working-directory: frontend
+        run: node .yarn/releases/yarn-*.cjs build
+
+      - name: Install Playwright browser
+        working-directory: frontend
+        run: node_modules/.bin/playwright install --with-deps chromium
+
+      - name: E2E (Playwright)
+        working-directory: frontend
+        run: node .yarn/releases/yarn-*.cjs test:e2e

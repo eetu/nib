@@ -129,12 +129,17 @@ Per-area detail in `frontend/CLAUDE.md`.
 ## Working on this repo
 
 - **Toolchain:** Rust + `wasm-pack` (`cargo install wasm-pack`) + the
-  `wasm32-unknown-unknown` target, alongside Node/yarn. The core builds to WASM via
-  `just build-core` (wasm-pack → `core/pkg`), which `dev`/`build`/`install` run
-  first so the frontend's `link:` dep resolves.
+  `wasm32-unknown-unknown` target, alongside Node/yarn; optionally **binaryen**
+  (`brew install binaryen`) for the `.wasm` size pass. `just build-core`
+  (wasm-pack → `core/pkg`) runs first from `dev`/`build`/`install` so the
+  frontend's `link:` dep resolves; `build` also runs `opt-core` (`wasm-opt -Oz`,
+  skipped if binaryen is absent).
 - Dev: `just dev` (or `cd frontend && yarn dev`) → http://localhost:5173.
 - Validate: `just validate` (typecheck + lint + format). Tests: `just test`
-  (`cargo test` + vitest); `just test-e2e` (Playwright browser smoke).
+  (`cargo test` + vitest); `just test-e2e` (Playwright browser smoke on a built app).
+- **CI:** `ci.yaml` runs the core tests + validate + unit + e2e on every push/PR;
+  `pages.yaml` builds + deploys the demo (size-optimizing the `.wasm` when binaryen
+  installs). Both build the Rust core before the frontend.
 - Yarn is the repo-vendored release (no corepack); recipes invoke it via node.
 - **Pages deploy:** a project page lives under `/nib/`, so the Pages build sets
   `BASE_PATH=/nib` (→ `paths.base` in `svelte.config.js`); dev + any future

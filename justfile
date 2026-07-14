@@ -12,8 +12,16 @@ default:
     @just --list
 
 # Build the Rust core → WASM (core/pkg), consumed by the frontend link: dep.
+# (dev/install use this directly — unoptimized + fast; `build` adds opt-core.)
 build-core:
     wasm-pack build core --target web
+
+# Size-optimize the core .wasm with binaryen. Skipped if wasm-opt is absent (it's a
+# size nicety, not required). Modern rustc emits post-MVP wasm features, so
+# --all-features tells wasm-opt to accept them; wasm-pack's bundled wasm-opt is too
+# old, hence a standalone binaryen (`brew install binaryen`, or apt in CI).
+opt-core: build-core
+    if command -v wasm-opt >/dev/null 2>&1; then wasm-opt -Oz --all-features core/pkg/nib_core_bg.wasm -o core/pkg/nib_core_bg.wasm; else echo "wasm-opt (binaryen) not found — shipping the unoptimized core .wasm"; fi
 
 # Native core tests (the correctness oracle as the model is ported into Rust).
 test-core:
@@ -27,8 +35,8 @@ install: build-core
 dev: build-core
     cd frontend && node .yarn/releases/yarn-*.cjs dev
 
-# Production build → frontend/dist.
-build: build-core
+# Production build → frontend/dist (size-optimized core .wasm).
+build: opt-core
     cd frontend && node .yarn/releases/yarn-*.cjs build
 
 # Typecheck + lint + format check.
