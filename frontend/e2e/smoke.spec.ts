@@ -101,6 +101,16 @@ test("clicking a filled shape's interior selects it (fill hit-test)", async ({ p
   // The whole path is now object-selected → the transform box is drawn in the overlay.
   await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
 
+  // Rotate via the knob above the box → the path geometry (its `d`) changes.
+  const beforeD = await page.locator("svg.canvas g.artwork path").getAttribute("d");
+  const knob = await page.locator("svg.canvas g.overlay .rotate-knob").boundingBox();
+  if (!knob) throw new Error("no rotate knob");
+  await page.mouse.move(knob.x + knob.width / 2, knob.y + knob.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(knob.x + 45, knob.y + 30);
+  await page.mouse.up();
+  await expect(page.locator("svg.canvas g.artwork path")).not.toHaveAttribute("d", beforeD ?? "");
+
   // Styling round-trips through the core: set the stroke cap and see it on the element.
   await page
     .locator(".segrow")

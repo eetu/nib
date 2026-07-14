@@ -5,7 +5,7 @@
   import { editor } from "$lib/stores/document.svelte";
   import { interaction } from "$lib/stores/interaction.svelte";
   import { viewport } from "$lib/stores/viewport.svelte";
-  import { handlePoints, padBounds, SELECT_PAD_PX } from "$lib/tools/transform";
+  import { handlePoints, padBounds, ROTATE_KNOB_PX, SELECT_PAD_PX } from "$lib/tools/transform";
 
   const doc = $derived(editor.doc);
   const sel = $derived(editor.selection);
@@ -51,6 +51,9 @@
         {@const tl = viewport.toScreen({ x: bb.minX, y: bb.minY })}
         {@const br = viewport.toScreen({ x: bb.maxX, y: bb.maxY })}
         <rect class="sel-box" x={tl.x} y={tl.y} width={br.x - tl.x} height={br.y - tl.y} />
+        {@const top = viewport.toScreen({ x: (bb.minX + bb.maxX) / 2, y: bb.minY })}
+        <line class="rotate-stem" x1={top.x} y1={top.y} x2={top.x} y2={top.y - ROTATE_KNOB_PX} />
+        <circle class="rotate-knob" cx={top.x} cy={top.y - ROTATE_KNOB_PX} r="4.5" />
         {#each handlePoints(bb) as h (h.handle)}
           {@const hp = viewport.toScreen(h.point)}
           <rect class="xf-handle" x={hp.x - 4} y={hp.y - 4} width="8" height="8" />
@@ -162,6 +165,19 @@
 
   /* resize handles on the bounding box */
   .xf-handle {
+    fill: var(--halo-bg-main);
+    stroke: var(--halo-accent);
+    stroke-width: 1.5;
+  }
+
+  /* rotate knob above the box top-centre */
+  .rotate-stem {
+    stroke: var(--halo-accent);
+    stroke-width: 1;
+    opacity: 0.7;
+  }
+
+  .rotate-knob {
     fill: var(--halo-bg-main);
     stroke: var(--halo-accent);
     stroke-width: 1.5;

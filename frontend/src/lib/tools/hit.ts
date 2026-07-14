@@ -4,7 +4,7 @@ import type { NodeRef, Point, Subpath } from "$lib/model/types";
 import { editor } from "$lib/stores/document.svelte";
 import { viewport } from "$lib/stores/viewport.svelte";
 
-import { handlePoints, padBounds, SELECT_PAD_PX } from "./transform";
+import { handlePoints, padBounds, ROTATE_KNOB_PX, SELECT_PAD_PX } from "./transform";
 import type { Hit } from "./types";
 
 const ANCHOR_HIT_PX = 11;
@@ -99,6 +99,11 @@ export function hitTest(screen: Point): Hit {
       const raw = subpathsBounds(p.subpaths);
       if (raw) {
         const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX));
+        // Rotate knob, above the box's top-centre.
+        const top = viewport.toScreen({ x: (bb.minX + bb.maxX) / 2, y: bb.minY });
+        if (distance({ x: top.x, y: top.y - ROTATE_KNOB_PX }, screen) <= HANDLE_HIT_PX) {
+          return { kind: "rotate" };
+        }
         for (const { handle, point } of handlePoints(bb)) {
           if (screenDist(point, screen) <= HANDLE_HIT_PX) return { kind: "transform", handle };
         }

@@ -69,3 +69,32 @@ export function transformCursor(handle: TransformHandle): string {
   if (handle === "n" || handle === "s") return "ns-resize";
   return "ew-resize";
 }
+
+/** How far (screen px) the rotate knob sits above the box's top-centre. */
+export const ROTATE_KNOB_PX = 22;
+
+/** The box centre — the rotation pivot. */
+export function boxCenter(bb: Bounds): Point {
+  return { x: (bb.minX + bb.maxX) / 2, y: (bb.minY + bb.maxY) / 2 };
+}
+
+/** Rotate a reference geometry about `pivot` by `angle` radians, returning fresh subpaths
+ *  (does not mutate the reference). */
+export function rotateSubpaths(ref: Subpath[], pivot: Point, angle: number): Subpath[] {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const at = (p: Point): Point => {
+    const dx = p.x - pivot.x;
+    const dy = p.y - pivot.y;
+    return { x: pivot.x + dx * cos - dy * sin, y: pivot.y + dx * sin + dy * cos };
+  };
+  return ref.map((sp) => ({
+    closed: sp.closed,
+    nodes: sp.nodes.map((n): PathNode => ({
+      type: n.type,
+      point: at(n.point),
+      handleIn: n.handleIn ? at(n.handleIn) : undefined,
+      handleOut: n.handleOut ? at(n.handleOut) : undefined,
+    })),
+  }));
+}

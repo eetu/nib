@@ -7,6 +7,7 @@ import type { TransformHandle } from "./transform";
 export type Hit =
   | { kind: "handle"; ref: NodeRef; which: "in" | "out" }
   | { kind: "transform"; handle: TransformHandle }
+  | { kind: "rotate" }
   | { kind: "anchor"; ref: NodeRef }
   | {
       kind: "segment";

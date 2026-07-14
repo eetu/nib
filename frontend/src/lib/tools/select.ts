@@ -6,7 +6,14 @@ import { interaction } from "$lib/stores/interaction.svelte";
 import { tools } from "$lib/stores/tool.svelte";
 import { viewport } from "$lib/stores/viewport.svelte";
 
-import { handleAnchor, scaleSubpaths, transformCursor, type TransformHandle } from "./transform";
+import {
+  boxCenter,
+  handleAnchor,
+  rotateSubpaths,
+  scaleSubpaths,
+  transformCursor,
+  type TransformHandle,
+} from "./transform";
 import type { DragSession, Tool } from "./types";
 
 /** Constrain `current` to a horizontal or vertical line from `start` (the
@@ -121,6 +128,35 @@ function pathDrag(pathIndex: number, start: Point): DragSession {
   };
 }
 
+/** Rotate the selected path by dragging the knob above the box. Rotation is about the box
+ *  centre, relative to the geometry at drag start; shift snaps to 15° steps. */
+function rotateDrag(pathIndex: number, start: Point): DragSession {
+  const path = editor.doc?.paths[pathIndex];
+  const ref = path ? (JSON.parse(JSON.stringify(path.subpaths)) as Subpath[]) : [];
+  const bb = subpathsBounds(ref);
+  const center = bb ? boxCenter(bb) : { x: 0, y: 0 };
+  const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
+  let moved = false;
+  return {
+    move(cursor, event) {
+      if (!bb) return;
+      let delta = Math.atan2(cursor.y - center.y, cursor.x - center.x) - startAngle;
+      if (event.shiftKey) {
+        const step = Math.PI / 12; // 15°
+        delta = Math.round(delta / step) * step;
+      }
+      editor.setSubpaths(pathIndex, rotateSubpaths(ref, center, delta));
+      moved = true;
+    },
+    up() {
+      if (moved) editor.commit();
+    },
+    cancel() {
+      if (moved) editor.revert();
+    },
+  };
+}
+
 /** Scale the selected path by dragging a bounding-box handle. Scaling is
  *  relative to the geometry at drag start; shift keeps the aspect ratio. */
 function scaleDrag(pathIndex: number, handle: TransformHandle): DragSession {
@@ -163,6 +199,7 @@ export const selectTool: Tool = {
   id: "select",
   cursor(hit) {
     if (hit.kind === "transform") return transformCursor(hit.handle);
+    if (hit.kind === "rotate") return "grab";
     if (hit.kind === "handle" || hit.kind === "anchor") return "grab";
     if (hit.kind === "segment" || hit.kind === "fill") return "move";
     return "default";
@@ -172,6 +209,10 @@ export const selectTool: Tool = {
     if (hit.kind === "transform") {
       const pi = editor.selectedPathIndex;
       return pi !== null ? scaleDrag(pi, hit.handle) : null;
+    }
+    if (hit.kind === "rotate") {
+      const pi = editor.selectedPathIndex;
+      return pi !== null ? rotateDrag(pi, ctx.docPoint) : null;
     }
     if (hit.kind === "handle") {
       editor.select(hit.ref);
