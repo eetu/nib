@@ -201,6 +201,14 @@
     canvas.send({ type: "UP", docPoint: viewport.toDoc(screenOf(e)) });
   }
 
+  // Double-click a shape (select tool) to enter node-editing mode — Figma-style. Object
+  // mode moves the whole shape on drag; nodes only become editable after entering here.
+  function onDblClick(e: MouseEvent) {
+    if (!editor.doc || tools.active !== "select") return;
+    const hit = hitTest(screenOf(e));
+    if (hit.kind === "fill" || hit.kind === "segment") editor.enterNodeEdit(hit.pathIndex);
+  }
+
   // Zoom responsiveness knobs (bump for snappier zoom). WHEEL_ZOOM_SENS scales
   // the ctrl/⌘+wheel step; PINCH_GAIN (>1) makes a Safari trackpad pinch zoom
   // faster than the raw finger spread.
@@ -263,6 +271,7 @@
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
     onpointercancel={onPointerUp}
+    ondblclick={onDblClick}
     onwheel={onWheel}
     {...gestureHandlers}
   >

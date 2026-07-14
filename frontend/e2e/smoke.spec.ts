@@ -93,6 +93,45 @@ test("the command palette opens and runs an action", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("double-click enters node editing — anchors appear only then", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M20 20 H80 V80 H20 Z" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await expect(page.locator("svg.canvas g.artwork path")).toBeAttached();
+
+  await page.keyboard.press("v");
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+
+  // Object mode: selecting shows the transform box but NO editable anchors.
+  await page.mouse.click(cx, cy);
+  await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
+  await expect(page.locator("svg.canvas g.overlay .anchor")).toHaveCount(0);
+
+  // Double-click enters node editing → the square's four anchors appear.
+  await page.mouse.dblclick(cx, cy);
+  await expect(page.locator("svg.canvas g.overlay .anchor")).toHaveCount(4);
+  await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toHaveCount(0);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("clicking a filled shape's interior selects it (fill hit-test)", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

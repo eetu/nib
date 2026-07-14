@@ -70,17 +70,24 @@ Per-area detail in `frontend/CLAUDE.md`.
   an explicit path selection (PATHS row / path-body click). `selectedPathIndex`
   is the effective selected path: the selected node's path if any, else
   `selectedPath`. The STYLE panel targets it.
-- **Object vs node mode (one tool, like Figma).** `objectSelected` = a whole
-  path selected with *no* node (you clicked its body or a PATHS row). Only then
-  does the Overlay draw the **transform box** — a dashed box (padded to clear
-  the shape, `SELECT_PAD_PX`) + **8 resize handles** + an accent **centerline**
-  (light casing + accent core so it reads on any stroke colour). Drag a corner
-  (both axes) / edge (one axis) to scale about the opposite anchor; shift keeps
-  aspect (`lib/tools/transform.ts` + the `transform` Hit kind + `select`'s
-  scaleDrag). Clicking a **node** instead gives clean node editing (anchors +
-  handles, no box). Hit-testing checks anchors *before* transform handles, and
-  transform handles only when `objectSelected`, so a path's own nodes are never
-  shadowed. Deleting the last node soft-deletes the now-empty path.
+- **Object vs node mode (one tool, like Figma), switched by double-click.** The
+  select tool defaults to **object mode**: clicking a path selects it
+  (`objectSelected` = a path selected with *no* node *and* not node-editing) and
+  the Overlay draws the **transform box** — a dashed box (padded, `SELECT_PAD_PX`)
+  + **8 resize handles** + a **rotate knob** above the top-centre + an accent
+  **centerline** (light casing + accent core so it reads on any stroke). Drag a
+  corner (both axes) / edge (one axis) to scale about the opposite anchor (shift
+  keeps aspect), drag the knob to rotate about the box centre (shift → 15° steps),
+  drag the body to move the whole shape. **Anchors are hidden and not hit-tested
+  in object mode**, so a drag unambiguously moves the shape — crucial when zoomed
+  out and nodes cluster. **Double-clicking a shape enters node mode**
+  (`document.nodeEditIndex`): its anchors + handles appear and become editable and
+  the transform box hides; Esc, a tool switch, or clicking empty returns to object
+  mode. Non-select tools (pen/add-node/delete-node) always show + hit anchors.
+  Hit-testing (`lib/tools/{hit,transform}.ts` + the `transform`/`rotate` Hit kinds
+  + `select`'s scale/rotate/pathDrag) gates anchors/handles on this mode, so a
+  path's own nodes are never shadowed by transform handles. Deleting the last node
+  soft-deletes the now-empty path.
 - **Styling.** Drawn/shape paths (`added`) carry an `attributes` map the STYLE
   panel edits directly (fill/stroke/width/opacity). New paths are stamped with
   `tools.newStyle` at creation, editable up front: with a create tool active and

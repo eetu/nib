@@ -64,6 +64,10 @@ class DocumentStore {
   doc = $state<SvgDocument | null>(null);
   selection = $state<NodeRef | null>(null);
   selectedPath = $state<number | null>(null);
+  /** Path currently in node-editing mode (Figma-style: entered by double-click). While null
+   *  the select tool moves whole shapes; when set, that path's anchors/handles are editable.
+   *  Client-only editing mode — not persisted (reload starts in object mode). */
+  nodeEditIndex = $state<number | null>(null);
   #canUndo = $state(false);
   #canRedo = $state(false);
   /** Unsaved changes since the last load/save — owned here (not mirrored) so a rehydrated
@@ -91,8 +95,10 @@ class DocumentStore {
     if (s?.doc) {
       try {
         this.#wasm.setDocument(s.doc);
-        if (s.selection) this.#wasm.select(s.selection);
-        else if (s.selectedPath != null) this.#wasm.selectPath(s.selectedPath);
+        // Node-edit mode isn't persisted, so restore any selection as an object selection
+        // (transform box) rather than a dangling node with nowhere to edit.
+        const restorePath = s.selection?.pathIndex ?? s.selectedPath;
+        if (restorePath != null) this.#wasm.selectPath(restorePath);
         this.fileName = s.fileName;
         this.#sync();
         this.dirty = s.dirty; // after #sync (which doesn't touch dirty)
@@ -132,7 +138,7 @@ class DocumentStore {
   }
 
   get objectSelected(): boolean {
-    return this.selection === null && this.selectedPath !== null;
+    return this.selection === null && this.selectedPath !== null && this.nodeEditIndex === null;
   }
 
   get selectedNode(): PathNode | null {
@@ -198,19 +204,41 @@ class DocumentStore {
   // --- selection ---------------------------------------------------------
 
   select(ref: NodeRef | null): void {
+    // Selecting a node implies node-editing that path.
+    this.nodeEditIndex = ref ? ref.pathIndex : null;
     this.#wasm?.select(ref);
     this.#sync();
     this.#persist();
   }
 
   selectPath(pathIndex: number | null): void {
+    this.nodeEditIndex = null; // object mode
     this.#wasm?.selectPath(pathIndex ?? undefined);
     this.#sync();
     this.#persist();
   }
 
   deselect(): void {
+    this.nodeEditIndex = null;
     this.#wasm?.deselect();
+    this.#sync();
+    this.#persist();
+  }
+
+  /** Enter node-editing mode for a path (double-click): select it as the object, then flag
+   *  its nodes as editable so the overlay shows anchors and the select tool edits them. */
+  enterNodeEdit(pathIndex: number): void {
+    this.#wasm?.selectPath(pathIndex);
+    this.nodeEditIndex = pathIndex;
+    this.#sync();
+    this.#persist();
+  }
+
+  /** Leave node-editing mode — clears the active node but keeps the path object-selected. */
+  exitNodeEdit(): void {
+    if (this.nodeEditIndex === null && this.selection === null) return;
+    this.nodeEditIndex = null;
+    this.#wasm?.select(null); // drop the node; selectPath is preserved
     this.#sync();
     this.#persist();
   }
@@ -431,7 +459,8 @@ class DocumentStore {
       subpaths,
       attributes: { ...this.#clipboard.attributes },
     });
-    this.#wasm.select({ pathIndex, subpathIndex: 0, nodeIndex: 0 });
+    this.#wasm.selectPath(pathIndex); // object-select the paste (transform box, not nodes)
+    this.nodeEditIndex = null;
     this.commit();
   }
 

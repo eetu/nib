@@ -4,10 +4,15 @@
   import { nodeRefEquals, type Subpath } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
   import { interaction } from "$lib/stores/interaction.svelte";
+  import { tools } from "$lib/stores/tool.svelte";
   import { viewport } from "$lib/stores/viewport.svelte";
   import { handlePoints, padBounds, ROTATE_KNOB_PX, SELECT_PAD_PX } from "$lib/tools/transform";
 
   const doc = $derived(editor.doc);
+  // Anchors show only while node-editing — any non-select tool, or the select tool in
+  // node-edit mode (double-click). Object-mode select shows the transform box instead, so
+  // the canvas stays uncluttered and a drag unambiguously moves the whole shape.
+  const nodeEditing = $derived(tools.active !== "select" || editor.nodeEditIndex !== null);
   const sel = $derived(editor.selection);
   const selNode = $derived(editor.selectedNode);
   const selPath = $derived(editor.selectedPathIndex);
@@ -78,40 +83,42 @@
         {/each}
       {/if}
     {/if}
-    {#each doc.paths as path, pi (pi)}
-      {#if !path.deleted}
-        {#each path.subpaths as sp, si (si)}
-          {#each sp.nodes as node, ni (ni)}
-            {@const s = viewport.toScreen(node.point)}
-            {@const selected = nodeRefEquals(sel, {
-              pathIndex: pi,
-              subpathIndex: si,
-              nodeIndex: ni,
-            })}
-            {#if node.type === "smooth"}
-              <circle
-                class="anchor"
-                class:inpath={pi === selPath && !editor.objectSelected}
-                class:selected
-                cx={s.x}
-                cy={s.y}
-                r="4.5"
-              />
-            {:else}
-              <rect
-                class="anchor"
-                class:inpath={pi === selPath && !editor.objectSelected}
-                class:selected
-                x={s.x - 4}
-                y={s.y - 4}
-                width="8"
-                height="8"
-              />
-            {/if}
+    {#if nodeEditing}
+      {#each doc.paths as path, pi (pi)}
+        {#if !path.deleted}
+          {#each path.subpaths as sp, si (si)}
+            {#each sp.nodes as node, ni (ni)}
+              {@const s = viewport.toScreen(node.point)}
+              {@const selected = nodeRefEquals(sel, {
+                pathIndex: pi,
+                subpathIndex: si,
+                nodeIndex: ni,
+              })}
+              {#if node.type === "smooth"}
+                <circle
+                  class="anchor"
+                  class:inpath={pi === selPath && !editor.objectSelected}
+                  class:selected
+                  cx={s.x}
+                  cy={s.y}
+                  r="4.5"
+                />
+              {:else}
+                <rect
+                  class="anchor"
+                  class:inpath={pi === selPath && !editor.objectSelected}
+                  class:selected
+                  x={s.x - 4}
+                  y={s.y - 4}
+                  width="8"
+                  height="8"
+                />
+              {/if}
+            {/each}
           {/each}
-        {/each}
-      {/if}
-    {/each}
+        {/if}
+      {/each}
+    {/if}
 
     {#if sel && selNode}
       {@const p = viewport.toScreen(selNode.point)}

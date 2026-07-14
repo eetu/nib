@@ -34,6 +34,7 @@
     if (active !== prevTool) {
       getTool(prevTool).onDeactivate?.();
       interaction.clearDrag();
+      editor.exitNodeEdit(); // a tool switch drops back to object mode
       prevTool = active;
     }
   });
@@ -76,8 +77,9 @@
       return;
     }
 
-    // Escape → back to the select tool (and finish any pen path in progress).
+    // Escape → leave node-edit mode, back to the select tool (finishing any pen path).
     if (e.key === "Escape") {
+      editor.exitNodeEdit(); // exit node editing even when already on the select tool
       tools.set("select"); // switching away finishes the pen via its onDeactivate
       return;
     }

@@ -256,8 +256,10 @@ export const selectTool: Tool = {
       return anchorDrag(hit.ref, start);
     }
     if (hit.kind === "segment" || hit.kind === "fill") {
-      // Grab a path's body (its outline or its filled interior) to select + move it.
-      editor.selectPath(hit.pathIndex);
+      // Grab a path's body (its outline or filled interior) to move it. Grabbing the body of
+      // the path you're node-editing keeps you in node mode; grabbing any other path
+      // object-selects it (dropping node mode).
+      if (editor.nodeEditIndex !== hit.pathIndex) editor.selectPath(hit.pathIndex);
       return pathDrag(hit.pathIndex, ctx.docPoint);
     }
     editor.deselect();
