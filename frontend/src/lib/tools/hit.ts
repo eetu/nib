@@ -1,10 +1,11 @@
-import { cubicAt, distance, subpathsBounds } from "$lib/model/geometry";
+import { cubicAt, distance, tightBounds } from "$lib/model/geometry";
 import { nearestOnSubpath, segmentControlPoints } from "$lib/model/path";
 import type { NodeRef, Point, Subpath } from "$lib/model/types";
 import { editor } from "$lib/stores/document.svelte";
+import { tools } from "$lib/stores/tool.svelte";
 import { viewport } from "$lib/stores/viewport.svelte";
 
-import { handlePoints, padBounds, SELECT_PAD_PX } from "./transform";
+import { handlePoints, padBounds, ROTATE_KNOB_PX, SELECT_PAD_PX } from "./transform";
 import type { Hit } from "./types";
 
 const ANCHOR_HIT_PX = 11;
@@ -60,45 +61,57 @@ export function hitTest(screen: Point): Hit {
   const doc = editor.doc;
   if (!doc) return { kind: "empty" };
 
-  // 1. Handles — only the selected node exposes its control handles.
-  const sel = editor.selection;
-  if (sel) {
-    const node = doc.paths[sel.pathIndex]?.subpaths[sel.subpathIndex]?.nodes[sel.nodeIndex];
-    if (node) {
-      if (node.handleOut && screenDist(node.handleOut, screen) <= HANDLE_HIT_PX) {
-        return { kind: "handle", ref: sel, which: "out" };
-      }
-      if (node.handleIn && screenDist(node.handleIn, screen) <= HANDLE_HIT_PX) {
-        return { kind: "handle", ref: sel, which: "in" };
+  // 1+2. Handles + anchors are hit-testable only while node-editing: any non-select tool
+  //       (add/delete-node, pen), or the select tool after a double-click enters node mode.
+  //       Otherwise the select tool's drag always moves the whole shape — no ambiguity over
+  //       whether a node or the shape moves, which matters most when zoomed out and anchors
+  //       cluster. Transform handles (step 3) cover object-mode resize/rotate instead.
+  const nodeEditable = tools.active !== "select" || editor.nodeEditIndex !== null;
+  if (nodeEditable) {
+    // Handles — only the selected node exposes its control handles.
+    const sel = editor.selection;
+    if (sel) {
+      const node = doc.paths[sel.pathIndex]?.subpaths[sel.subpathIndex]?.nodes[sel.nodeIndex];
+      if (node) {
+        if (node.handleOut && screenDist(node.handleOut, screen) <= HANDLE_HIT_PX) {
+          return { kind: "handle", ref: sel, which: "out" };
+        }
+        if (node.handleIn && screenDist(node.handleIn, screen) <= HANDLE_HIT_PX) {
+          return { kind: "handle", ref: sel, which: "in" };
+        }
       }
     }
-  }
 
-  // 2. Anchors — nearest within the hit radius. Checked before transform
-  //    handles so a path's own nodes are never shadowed (e.g. a circle's nodes
-  //    sit on the bbox edge-midpoints).
-  let bestAnchor: { ref: NodeRef; d: number } | null = null;
-  doc.paths.forEach((path, pathIndex) => {
-    if (path.deleted) return;
-    path.subpaths.forEach((sp, subpathIndex) => {
-      sp.nodes.forEach((n, nodeIndex) => {
-        const d = screenDist(n.point, screen);
-        if (d <= ANCHOR_HIT_PX && (!bestAnchor || d < bestAnchor.d)) {
-          bestAnchor = { ref: { pathIndex, subpathIndex, nodeIndex }, d };
-        }
+    // Anchors — nearest within the hit radius. Checked before transform handles so a path's
+    // own nodes are never shadowed (e.g. a circle's nodes sit on the bbox edge-midpoints).
+    let bestAnchor: { ref: NodeRef; d: number } | null = null;
+    doc.paths.forEach((path, pathIndex) => {
+      if (path.deleted) return;
+      path.subpaths.forEach((sp, subpathIndex) => {
+        sp.nodes.forEach((n, nodeIndex) => {
+          const d = screenDist(n.point, screen);
+          if (d <= ANCHOR_HIT_PX && (!bestAnchor || d < bestAnchor.d)) {
+            bestAnchor = { ref: { pathIndex, subpathIndex, nodeIndex }, d };
+          }
+        });
       });
     });
-  });
-  if (bestAnchor) return { kind: "anchor", ref: (bestAnchor as { ref: NodeRef }).ref };
+    if (bestAnchor) return { kind: "anchor", ref: (bestAnchor as { ref: NodeRef }).ref };
+  }
 
   // 3. Transform handles — only for an object (whole-path) selection, at
   //    corners/edges not occupied by a node.
-  if (editor.objectSelected && editor.selectedPath !== null) {
-    const p = doc.paths[editor.selectedPath];
+  if (editor.objectSelected && editor.selectedPathIndex !== null) {
+    const p = doc.paths[editor.selectedPathIndex];
     if (p && !p.deleted) {
-      const raw = subpathsBounds(p.subpaths);
+      const raw = tightBounds(p.subpaths);
       if (raw) {
         const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX));
+        // Rotate knob, above the box's top-centre.
+        const top = viewport.toScreen({ x: (bb.minX + bb.maxX) / 2, y: bb.minY });
+        if (distance({ x: top.x, y: top.y - ROTATE_KNOB_PX }, screen) <= HANDLE_HIT_PX) {
+          return { kind: "rotate" };
+        }
         for (const { handle, point } of handlePoints(bb)) {
           if (screenDist(point, screen) <= HANDLE_HIT_PX) return { kind: "transform", handle };
         }

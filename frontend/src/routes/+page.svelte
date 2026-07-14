@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CommandPalette from "$lib/components/CommandPalette.svelte";
   import EditorCanvas from "$lib/components/EditorCanvas.svelte";
   import FileList from "$lib/components/FileList.svelte";
   import ImportDialog from "$lib/components/ImportDialog.svelte";
@@ -7,16 +8,16 @@
   import SourceView from "$lib/components/SourceView.svelte";
   import ToolRail from "$lib/components/ToolRail.svelte";
   import TopBar from "$lib/components/TopBar.svelte";
-  import { subpathsBounds } from "$lib/model/geometry";
   import { editor } from "$lib/stores/document.svelte";
   import { interaction } from "$lib/stores/interaction.svelte";
   import { type ToolId, tools } from "$lib/stores/tool.svelte";
-  import { viewport } from "$lib/stores/viewport.svelte";
   import { workspace } from "$lib/stores/workspace.svelte";
-  import { finishPen } from "$lib/tools";
+  import { finishPen, getTool, toolShortcuts } from "$lib/tools";
+  import { fitToView } from "$lib/view";
 
   let pasteOpen = $state(false);
   let settingsOpen = $state(false);
+  let paletteOpen = $state(false);
   let dragging = $state(false);
   let fileInput = $state<HTMLInputElement | null>(null);
 
@@ -24,19 +25,18 @@
   <path d="M40 120 C 60 40, 120 40, 140 100 S 210 140, 205 70" fill="none" stroke="#f78f08" stroke-width="4" stroke-linecap="round"/>
 </svg>`;
 
-  const SHORTCUTS: Record<string, ToolId> = {
-    v: "select",
-    p: "pen",
-    c: "circle",
-    a: "add-node",
-    d: "delete-node",
-  };
-
-  // Leaving the pen tool (switching tools) ends the current path, and any live
-  // snap aid is cleared so it doesn't linger under the next tool.
+  // A tool switch runs the outgoing tool's cleanup (e.g. the pen finishing its path) and
+  // clears any live snap aid — the one place for tool-change lifecycle. `tools.active` stays
+  // the single source of truth for which tool is selected.
+  let prevTool: ToolId = tools.active;
   $effect(() => {
-    if (tools.active !== "pen") finishPen();
-    interaction.clearDrag();
+    const active = tools.active;
+    if (active !== prevTool) {
+      getTool(prevTool).onDeactivate?.();
+      interaction.clearDrag();
+      editor.exitNodeEdit(); // a tool switch drops back to object mode
+      prevTool = active;
+    }
   });
 
   function typing(target: EventTarget | null): boolean {
@@ -44,42 +44,17 @@
     return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA");
   }
 
-  // Fit-to-view frames the actual drawing (union of all path bounds), not the static
-  // viewBox — so a drawing placed outside the declared viewport still centers. Falls back
-  // to the viewBox when there's no geometry yet.
-  function fitToView() {
-    const doc = editor.doc;
-    if (!doc) return;
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    let any = false;
-    for (const p of doc.paths) {
-      if (p.deleted) continue;
-      const b = subpathsBounds(p.subpaths);
-      if (!b) continue;
-      any = true;
-      minX = Math.min(minX, b.minX);
-      minY = Math.min(minY, b.minY);
-      maxX = Math.max(maxX, b.maxX);
-      maxY = Math.max(maxY, b.maxY);
-    }
-    const vb =
-      any && maxX > minX && maxY > minY
-        ? { minX, minY, width: maxX - minX, height: maxY - minY }
-        : doc.viewBox;
-    viewport.fitDocument(vb);
-  }
-
   function onKeydown(e: KeyboardEvent) {
-    if (pasteOpen || settingsOpen || typing(e.target)) return;
+    if (pasteOpen || settingsOpen || paletteOpen || typing(e.target)) return;
 
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.toLowerCase();
 
     if (mod) {
-      if (k === "z") {
+      if (k === "k") {
+        e.preventDefault();
+        paletteOpen = true;
+      } else if (k === "z") {
         e.preventDefault();
         if (e.shiftKey) editor.redo();
         else editor.undo();
@@ -102,10 +77,10 @@
       return;
     }
 
-    // Escape → back to the select tool (and finish any pen path in progress).
+    // Escape → leave node-edit mode, back to the select tool (finishing any pen path).
     if (e.key === "Escape") {
-      finishPen();
-      tools.set("select");
+      editor.exitNodeEdit(); // exit node editing even when already on the select tool
+      tools.set("select"); // switching away finishes the pen via its onDeactivate
       return;
     }
     if (e.key === "Enter" && tools.active === "pen") {
@@ -117,15 +92,15 @@
       if (editor.selection) {
         e.preventDefault();
         editor.deleteNode(editor.selection);
-      } else if (editor.selectedPathIndex !== null) {
+      } else if (editor.selectedPaths.length > 0) {
         e.preventDefault();
-        editor.deletePath(editor.selectedPathIndex);
+        editor.deleteSelectedPaths();
       }
       return;
     }
 
     // Arrow keys nudge the selection (10 units with shift).
-    const hasSel = editor.selection !== null || editor.selectedPathIndex !== null;
+    const hasSel = editor.selection !== null || editor.selectedPaths.length > 0;
     if (hasSel && e.key.startsWith("Arrow")) {
       e.preventDefault();
       const step = e.shiftKey ? 10 : 1;
@@ -136,7 +111,7 @@
       return;
     }
 
-    const tool = SHORTCUTS[k];
+    const tool = toolShortcuts[k];
     if (tool) tools.set(tool);
     if (e.key === "0") fitToView();
   }
@@ -238,6 +213,7 @@
 
 <ImportDialog open={pasteOpen} onClose={() => (pasteOpen = false)} />
 <SettingsDialog open={settingsOpen} onClose={() => (settingsOpen = false)} />
+<CommandPalette bind:open={paletteOpen} />
 
 <input
   class="hidden-file"

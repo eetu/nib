@@ -5,12 +5,85 @@
 //! (already absolute; arcs → cubics, H/V → lines, S/T reflected) and elevate its `QuadTo`
 //! elements to cubics here — the one normalization kurbo leaves to us.
 
-use kurbo::{BezPath, PathEl};
+use kurbo::{BezPath, PathEl, Stroke, StrokeOpts};
 
 use super::geometry::{cubic_at, distance, handles_collinear, lerp, split_cubic};
 use super::types::{NodeType, PathNode, Point, Subpath};
 
 const EPS: f64 = 1e-4;
+
+/// Perpendicular distance from `p` to the line through `a`,`b` (falls back to |p-a| if a==b).
+fn perp_distance(p: Point, a: Point, b: Point) -> f64 {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 1e-12 {
+        return distance(p, a);
+    }
+    ((p.x - a.x) * dy - (p.y - a.y) * dx).abs() / len
+}
+
+/// Ramer–Douglas–Peucker: indices of `pts` to keep so the polyline stays within `eps`.
+fn rdp_keep(pts: &[Point], eps: f64) -> Vec<usize> {
+    let n = pts.len();
+    if n <= 2 {
+        return (0..n).collect();
+    }
+    let mut keep = vec![false; n];
+    keep[0] = true;
+    keep[n - 1] = true;
+    let mut stack = vec![(0usize, n - 1)];
+    while let Some((first, last)) = stack.pop() {
+        let mut max_d = 0.0;
+        let mut idx = first;
+        for i in (first + 1)..last {
+            let d = perp_distance(pts[i], pts[first], pts[last]);
+            if d > max_d {
+                max_d = d;
+                idx = i;
+            }
+        }
+        if max_d > eps {
+            keep[idx] = true;
+            stack.push((first, idx));
+            stack.push((idx, last));
+        }
+    }
+    let mut kept: Vec<usize> = (0..n).filter(|&i| keep[i]).collect();
+    kept.sort_unstable();
+    kept
+}
+
+/// Expand a stroke of the given `width` into a filled outline shape (kurbo's stroke → fill).
+/// Returns the outline as anchor subpaths (empty if the geometry doesn't parse).
+pub fn outline_stroke(subpaths: &[Subpath], width: f64, tolerance: f64) -> Vec<Subpath> {
+    let Ok(bez) = BezPath::from_svg(&path_to_d_prec(subpaths, 6)) else {
+        return Vec::new();
+    };
+    let style = Stroke::new(width);
+    let out = kurbo::stroke(bez.iter(), &style, &StrokeOpts::default(), tolerance);
+    parse_path_d(&out.to_svg())
+}
+
+/// Reduce each subpath's node count with RDP over its anchor points (survivors keep their
+/// handles), within `eps` document units. Great for thinning the dense polylines boolean ops
+/// produce; subpaths of ≤ 2 nodes are left untouched.
+pub fn simplify_subpaths(subpaths: &[Subpath], eps: f64) -> Vec<Subpath> {
+    subpaths
+        .iter()
+        .map(|sp| {
+            if sp.nodes.len() <= 2 {
+                return sp.clone();
+            }
+            let pts: Vec<Point> = sp.nodes.iter().map(|n| n.point).collect();
+            let keep = rdp_keep(&pts, eps);
+            Subpath {
+                nodes: keep.iter().map(|&i| sp.nodes[i]).collect(),
+                closed: sp.closed,
+            }
+        })
+        .collect()
+}
 
 /// Parse a path `d` string into editable subpaths of cubic anchor nodes.
 pub fn parse_path_d(d: &str) -> Vec<Subpath> {
@@ -330,6 +403,52 @@ mod tests {
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-6
+    }
+
+    #[test]
+    fn simplify_drops_collinear_nodes_but_keeps_corners() {
+        let line = Subpath {
+            nodes: [0.0, 1.0, 2.0, 3.0]
+                .iter()
+                .map(|&x| PathNode::corner(Point::new(x, 0.0)))
+                .collect(),
+            closed: false,
+        };
+        assert_eq!(simplify_subpaths(&[line], 0.1)[0].nodes.len(), 2);
+
+        let bent = Subpath {
+            nodes: vec![
+                PathNode::corner(Point::new(0.0, 0.0)),
+                PathNode::corner(Point::new(1.0, 0.0)),
+                PathNode::corner(Point::new(1.0, 1.0)), // a real corner
+                PathNode::corner(Point::new(2.0, 1.0)),
+            ],
+            closed: false,
+        };
+        assert!(simplify_subpaths(&[bent], 0.1)[0].nodes.len() >= 3);
+    }
+
+    #[test]
+    fn outline_stroke_expands_a_line_into_a_band() {
+        let line = Subpath {
+            nodes: vec![
+                PathNode::corner(Point::new(0.0, 0.0)),
+                PathNode::corner(Point::new(10.0, 0.0)),
+            ],
+            closed: false,
+        };
+        let out = outline_stroke(&[line], 2.0, 0.25);
+        assert!(!out.is_empty());
+        let mut min_y = f64::INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for sp in &out {
+            for n in &sp.nodes {
+                min_y = min_y.min(n.point.y);
+                max_y = max_y.max(n.point.y);
+            }
+        }
+        // width 2 → the band spans roughly y ∈ [-1, 1].
+        assert!(min_y <= -0.9 && max_y >= 0.9, "{min_y}..{max_y}");
     }
 
     #[test]

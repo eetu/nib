@@ -21,7 +21,7 @@ pub mod snap;
 
 use history::History;
 use model::document::{parse_svg, serialize_svg};
-use model::types::{NodeRef, PathElement, SvgDocument};
+use model::types::{Gradient, Layer, NodeRef, PathElement, SvgDocument};
 use ops::Op;
 
 const BLANK_SVG: &str =
@@ -32,6 +32,9 @@ const BLANK_SVG: &str =
 #[derive(Clone)]
 struct Snapshot {
     paths: Vec<PathElement>,
+    layers: Vec<Layer>,
+    active_layer: Option<String>,
+    gradients: Vec<Gradient>,
     selection: Option<NodeRef>,
     selected_path: Option<usize>,
 }
@@ -49,12 +52,12 @@ pub struct Editor {
 // --- native core: used by the WASM surface below and directly by `cargo test` ---
 impl Editor {
     fn snapshot(&self) -> Snapshot {
+        let doc = self.doc.as_ref();
         Snapshot {
-            paths: self
-                .doc
-                .as_ref()
-                .map(|d| d.paths.clone())
-                .unwrap_or_default(),
+            paths: doc.map(|d| d.paths.clone()).unwrap_or_default(),
+            layers: doc.map(|d| d.layers.clone()).unwrap_or_default(),
+            active_layer: doc.and_then(|d| d.active_layer.clone()),
+            gradients: doc.map(|d| d.gradients.clone()).unwrap_or_default(),
             selection: self.selection,
             selected_path: self.selected_path,
         }
@@ -63,6 +66,9 @@ impl Editor {
     fn restore(&mut self, snap: &Snapshot) {
         if let Some(doc) = self.doc.as_mut() {
             doc.paths = snap.paths.clone();
+            doc.layers = snap.layers.clone();
+            doc.active_layer = snap.active_layer.clone();
+            doc.gradients = snap.gradients.clone();
         }
         self.selection = snap.selection;
         self.selected_path = snap.selected_path;
@@ -157,6 +163,9 @@ impl Editor {
         self.dirty = false;
         self.history.reset(Snapshot {
             paths: Vec::new(),
+            layers: Vec::new(),
+            active_layer: None,
+            gradients: Vec::new(),
             selection: None,
             selected_path: None,
         });

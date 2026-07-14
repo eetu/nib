@@ -2,16 +2,19 @@ import {
   downloadSvg,
   listSvgFiles,
   pickDirectory,
+  pickSaveFile,
   pickSvgFile,
   readFile,
   supportsFilePicker,
   supportsFolders,
+  supportsSaveFilePicker,
   type WorkspaceFile,
   writeFile,
 } from "$lib/workspace/fs";
 import { ensurePermission, loadHandle, removeHandle, saveHandle } from "$lib/workspace/handles";
 
 import { editor } from "./document.svelte";
+import { tools } from "./tool.svelte";
 
 const ACTIVE_FILE = "activeFile";
 const ACTIVE_DIR = "dir";
@@ -104,6 +107,47 @@ class Workspace {
       this.#clearHandle();
     } catch (e) {
       this.error = errMessage(e);
+    }
+  }
+
+  /** Start a fresh blank document (New) + ready the pen to draw. Confirms first if there are
+   *  unsaved changes. */
+  newDocument(): void {
+    if (editor.dirty && !confirm("Discard unsaved changes and start a new drawing?")) return;
+    this.error = null;
+    editor.newDocument();
+    this.#clearHandle();
+    tools.set("pen");
+  }
+
+  /** Save the current document to a new file (Save As): a save picker (Chromium, adopts the
+   *  handle so later Saves write back), else a named download. */
+  async saveAs(): Promise<void> {
+    if (!editor.hasDocument) return;
+    const svg = editor.toSvg();
+    const name = editor.fileName ?? "untitled.svg";
+    this.error = null;
+    if (supportsSaveFilePicker()) {
+      this.busy = true;
+      try {
+        const handle = await pickSaveFile(name);
+        if (!handle) return;
+        await writeFile(handle, svg);
+        this.#activeHandle = handle;
+        this.savesInPlace = true;
+        editor.fileName = handle.name;
+        void saveHandle(ACTIVE_FILE, handle);
+        editor.markSaved();
+      } catch (e) {
+        this.error = errMessage(e);
+      } finally {
+        this.busy = false;
+      }
+    } else {
+      const input = prompt("Save as (filename):", name);
+      if (input == null) return;
+      downloadSvg(input, svg);
+      editor.markSaved();
     }
   }
 

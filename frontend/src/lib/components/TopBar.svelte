@@ -2,16 +2,21 @@
   import ClipboardPaste from "@lucide/svelte/icons/clipboard-paste";
   import Copy from "@lucide/svelte/icons/copy";
   import Download from "@lucide/svelte/icons/download";
+  import File from "@lucide/svelte/icons/file";
   import FilePlus from "@lucide/svelte/icons/file-plus";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
+  import Magnet from "@lucide/svelte/icons/magnet";
   import Redo2 from "@lucide/svelte/icons/redo-2";
   import Save from "@lucide/svelte/icons/save";
+  import SaveAll from "@lucide/svelte/icons/save-all";
   import Settings from "@lucide/svelte/icons/settings";
   import Undo2 from "@lucide/svelte/icons/undo-2";
 
   import { editor } from "$lib/stores/document.svelte";
+  import { tools } from "$lib/stores/tool.svelte";
   import { workspace } from "$lib/stores/workspace.svelte";
 
+  import Popover from "./Popover.svelte";
   import Wordmark from "./Wordmark.svelte";
 
   let {
@@ -33,6 +38,14 @@
   <Wordmark />
 
   <div class="group">
+    <button
+      class="icon-btn"
+      title="New drawing"
+      aria-label="New"
+      onclick={() => workspace.newDocument()}
+    >
+      <File size={18} />
+    </button>
     {#if workspace.foldersSupported}
       <button
         class="icon-btn"
@@ -80,6 +93,23 @@
   </div>
 
   <div class="group right">
+    <Popover icon={Magnet} title="Snap & grid" align="right">
+      <label class="snaprow">
+        <input type="checkbox" bind:checked={tools.snapEnabled} /> snap to points
+      </label>
+      <label class="snaprow sub">
+        radius <input type="number" min="2" max="40" bind:value={tools.snapThresholdPx} /> px
+      </label>
+      <label class="snaprow">
+        <input type="checkbox" bind:checked={tools.gridEnabled} /> snap to grid
+      </label>
+      <label class="snaprow sub">
+        size <input type="number" min="1" max="200" bind:value={tools.gridSize} />
+      </label>
+      <label class="snaprow">
+        <input type="checkbox" bind:checked={tools.guidesEnabled} /> smart guides
+      </label>
+    </Popover>
     <button class="icon-btn" title="Settings" aria-label="Settings" onclick={onSettings}>
       <Settings size={18} />
     </button>
@@ -92,6 +122,15 @@
       class:ok={copied}
     >
       <Copy size={18} />
+    </button>
+    <button
+      class="icon-btn"
+      title="Save as…"
+      aria-label="Save as"
+      onclick={() => workspace.saveAs()}
+      disabled={!editor.hasDocument || workspace.busy}
+    >
+      <SaveAll size={18} />
     </button>
     <button
       class="save"
@@ -159,5 +198,26 @@
 
   .save:hover:not(:disabled) {
     filter: brightness(1.05);
+  }
+
+  /* Snap/grid popover rows. */
+  .snaprow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .snaprow:last-child {
+    margin-bottom: 0;
+  }
+
+  .snaprow.sub {
+    padding-left: 20px;
+    color: var(--halo-text-muted);
+  }
+
+  .snaprow input[type="number"] {
+    width: 56px;
   }
 </style>

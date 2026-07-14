@@ -28,7 +28,7 @@
 </script>
 
 <div class="field">
-  <span class="lbl">{label}</span>
+  {#if label}<span class="lbl">{label}</span>{/if}
   <span
     class="swatch"
     class:none={isNone}

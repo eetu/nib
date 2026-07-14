@@ -72,6 +72,65 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+fn default_true() -> bool {
+    true
+}
+
+/// A named layer — a flat, ordered organizational grouping over paths. New shapes land on the
+/// active layer; layers give z-order + show/hide, and export as top-level `<g>` wrappers. An
+/// LLM organizes generated shapes onto layers far more cleanly than into a flat path list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Layer {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub visible: bool,
+}
+
+fn zero() -> f64 {
+    0.0
+}
+fn one() -> f64 {
+    1.0
+}
+fn half() -> f64 {
+    0.5
+}
+
+/// One colour stop of a gradient (offset in 0..1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GradientStop {
+    pub offset: f64,
+    pub color: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub opacity: Option<f64>,
+}
+
+/// A gradient paint, referenced by `fill`/`stroke` as `url(#id)` and injected into a `<defs>`
+/// on export. Coordinates are objectBoundingBox fractions (0..1). `kind` is "linear" or
+/// "radial"; linear uses the x1/y1→x2/y2 vector, radial uses cx/cy + r. A flat struct (rather
+/// than a tagged enum) keeps the WASM/JSON boundary simple.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Gradient {
+    pub id: String,
+    pub kind: String,
+    pub stops: Vec<GradientStop>,
+    #[serde(default = "zero")]
+    pub x1: f64,
+    #[serde(default = "zero")]
+    pub y1: f64,
+    #[serde(default = "one")]
+    pub x2: f64,
+    #[serde(default = "zero")]
+    pub y2: f64,
+    #[serde(default = "half")]
+    pub cx: f64,
+    #[serde(default = "half")]
+    pub cy: f64,
+    #[serde(default = "half")]
+    pub r: f64,
+}
+
 /// A single `<path>` element: its editable model plus what we need to write the edit back
 /// into the original SVG source without disturbing anything else.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -118,6 +177,12 @@ pub struct PathElement {
     /// The user renamed this path — write its `id` into the exported markup.
     #[serde(skip_serializing_if = "is_false", default)]
     pub renamed: bool,
+    /// Id of the group this path belongs to (`None` = top level / ungrouped).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub layer: Option<String>,
+    /// Per-path visibility toggle (hidden = omitted from render + `display="none"` on export).
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -127,6 +192,16 @@ pub struct SvgDocument {
     #[serde(rename = "viewBox")]
     pub view_box: ViewBox,
     pub paths: Vec<PathElement>,
+    /// Named layers, in z-order (bottom → top). Empty = no explicit layers → the document
+    /// exports via the byte-preserving splice; once populated, drawn paths group into `<g>`s.
+    #[serde(default)]
+    pub layers: Vec<Layer>,
+    /// The layer new shapes are added to (`None` = unassigned).
+    #[serde(rename = "activeLayer", skip_serializing_if = "Option::is_none", default)]
+    pub active_layer: Option<String>,
+    /// Gradient paints, injected into a `<defs>` on export (empty = none).
+    #[serde(default)]
+    pub gradients: Vec<Gradient>,
 }
 
 /// Addresses one anchor node inside the document — the unit of selection and the identity a

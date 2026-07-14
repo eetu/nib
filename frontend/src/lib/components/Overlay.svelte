@@ -1,20 +1,25 @@
 <script lang="ts">
-  import { subpathsBounds } from "$lib/model/geometry";
+  import { tightBounds } from "$lib/model/geometry";
   import { pathToD } from "$lib/model/path";
   import { nodeRefEquals, type Subpath } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
   import { interaction } from "$lib/stores/interaction.svelte";
+  import { tools } from "$lib/stores/tool.svelte";
   import { viewport } from "$lib/stores/viewport.svelte";
-  import { handlePoints, padBounds, SELECT_PAD_PX } from "$lib/tools/transform";
+  import { handlePoints, padBounds, ROTATE_KNOB_PX, SELECT_PAD_PX } from "$lib/tools/transform";
 
   const doc = $derived(editor.doc);
+  // Anchors show only while node-editing — any non-select tool, or the select tool in
+  // node-edit mode (double-click). Object-mode select shows the transform box instead, so
+  // the canvas stays uncluttered and a drag unambiguously moves the whole shape.
+  const nodeEditing = $derived(tools.active !== "select" || editor.nodeEditIndex !== null);
   const sel = $derived(editor.selection);
   const selNode = $derived(editor.selectedNode);
   const selPath = $derived(editor.selectedPathIndex);
   // The transform box + centerline show only for an object (whole-path)
   // selection — node editing stays clean (just anchors + handles).
   const boxPath = $derived(
-    editor.objectSelected ? (doc?.paths[editor.selectedPath ?? -1] ?? null) : null,
+    editor.objectSelected ? (doc?.paths[editor.selectedPathIndex ?? -1] ?? null) : null,
   );
 
   // Project a path's geometry into screen space so its outline can be traced as
@@ -38,6 +43,35 @@
 
 {#if doc}
   <g class="overlay">
+    {#each interaction.guidesX as gx (gx)}
+      <line
+        class="guide"
+        x1={viewport.toScreen({ x: gx, y: 0 }).x}
+        y1={0}
+        x2={viewport.toScreen({ x: gx, y: 0 }).x}
+        y2={viewport.pxHeight}
+      />
+    {/each}
+    {#each interaction.guidesY as gy (gy)}
+      <line
+        class="guide"
+        x1={0}
+        y1={viewport.toScreen({ x: 0, y: gy }).y}
+        x2={viewport.pxWidth}
+        y2={viewport.toScreen({ x: 0, y: gy }).y}
+      />
+    {/each}
+    {#if interaction.marquee}
+      {@const a = viewport.toScreen({ x: interaction.marquee.x0, y: interaction.marquee.y0 })}
+      {@const b = viewport.toScreen({ x: interaction.marquee.x1, y: interaction.marquee.y1 })}
+      <rect
+        class="marquee"
+        x={Math.min(a.x, b.x)}
+        y={Math.min(a.y, b.y)}
+        width={Math.abs(b.x - a.x)}
+        height={Math.abs(b.y - a.y)}
+      />
+    {/if}
     {#if outlineD}
       <!-- selection centerline: light casing + accent core so it reads on any
            stroke colour (Pixelmator-style) -->
@@ -45,52 +79,66 @@
       <path class="sel-outline" d={outlineD} />
     {/if}
     {#if boxPath && !boxPath.deleted}
-      {@const raw = subpathsBounds(boxPath.subpaths)}
+      {@const raw = tightBounds(boxPath.subpaths)}
       {#if raw}
         {@const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX))}
         {@const tl = viewport.toScreen({ x: bb.minX, y: bb.minY })}
         {@const br = viewport.toScreen({ x: bb.maxX, y: bb.maxY })}
         <rect class="sel-box" x={tl.x} y={tl.y} width={br.x - tl.x} height={br.y - tl.y} />
+        {@const top = viewport.toScreen({ x: (bb.minX + bb.maxX) / 2, y: bb.minY })}
+        <line class="rotate-stem" x1={top.x} y1={top.y} x2={top.x} y2={top.y - ROTATE_KNOB_PX} />
+        <circle class="rotate-knob" cx={top.x} cy={top.y - ROTATE_KNOB_PX} r="4.5" />
         {#each handlePoints(bb) as h (h.handle)}
           {@const hp = viewport.toScreen(h.point)}
           <rect class="xf-handle" x={hp.x - 4} y={hp.y - 4} width="8" height="8" />
         {/each}
       {/if}
     {/if}
-    {#each doc.paths as path, pi (pi)}
-      {#if !path.deleted}
-        {#each path.subpaths as sp, si (si)}
-          {#each sp.nodes as node, ni (ni)}
-            {@const s = viewport.toScreen(node.point)}
-            {@const selected = nodeRefEquals(sel, {
-              pathIndex: pi,
-              subpathIndex: si,
-              nodeIndex: ni,
-            })}
-            {#if node.type === "smooth"}
-              <circle
-                class="anchor"
-                class:inpath={pi === selPath && !editor.objectSelected}
-                class:selected
-                cx={s.x}
-                cy={s.y}
-                r="4.5"
-              />
-            {:else}
-              <rect
-                class="anchor"
-                class:inpath={pi === selPath && !editor.objectSelected}
-                class:selected
-                x={s.x - 4}
-                y={s.y - 4}
-                width="8"
-                height="8"
-              />
-            {/if}
-          {/each}
-        {/each}
+    {#if editor.multiSelected}
+      {@const raw = editor.selectionBounds}
+      {#if raw}
+        {@const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX))}
+        {@const tl = viewport.toScreen({ x: bb.minX, y: bb.minY })}
+        {@const br = viewport.toScreen({ x: bb.maxX, y: bb.maxY })}
+        <rect class="sel-box" x={tl.x} y={tl.y} width={br.x - tl.x} height={br.y - tl.y} />
       {/if}
-    {/each}
+    {/if}
+    {#if nodeEditing}
+      {#each doc.paths as path, pi (pi)}
+        {#if !path.deleted}
+          {#each path.subpaths as sp, si (si)}
+            {#each sp.nodes as node, ni (ni)}
+              {@const s = viewport.toScreen(node.point)}
+              {@const selected = nodeRefEquals(sel, {
+                pathIndex: pi,
+                subpathIndex: si,
+                nodeIndex: ni,
+              })}
+              {#if node.type === "smooth"}
+                <circle
+                  class="anchor"
+                  class:inpath={pi === selPath && !editor.objectSelected}
+                  class:selected
+                  cx={s.x}
+                  cy={s.y}
+                  r="4.5"
+                />
+              {:else}
+                <rect
+                  class="anchor"
+                  class:inpath={pi === selPath && !editor.objectSelected}
+                  class:selected
+                  x={s.x - 4}
+                  y={s.y - 4}
+                  width="8"
+                  height="8"
+                />
+              {/if}
+            {/each}
+          {/each}
+        {/if}
+      {/each}
+    {/if}
 
     {#if sel && selNode}
       {@const p = viewport.toScreen(selNode.point)}
@@ -162,6 +210,35 @@
 
   /* resize handles on the bounding box */
   .xf-handle {
+    fill: var(--halo-bg-main);
+    stroke: var(--halo-accent);
+    stroke-width: 1.5;
+  }
+
+  /* rubber-band marquee (drag over empty canvas to select) */
+  .marquee {
+    fill: var(--halo-accent-soft);
+    stroke: var(--halo-accent);
+    stroke-width: 1;
+    opacity: 0.5;
+  }
+
+  /* smart alignment guides while dragging */
+  .guide {
+    stroke: var(--halo-accent);
+    stroke-width: 1;
+    opacity: 0.9;
+    pointer-events: none;
+  }
+
+  /* rotate knob above the box top-centre */
+  .rotate-stem {
+    stroke: var(--halo-accent);
+    stroke-width: 1;
+    opacity: 0.7;
+  }
+
+  .rotate-knob {
     fill: var(--halo-bg-main);
     stroke: var(--halo-accent);
     stroke-width: 1.5;

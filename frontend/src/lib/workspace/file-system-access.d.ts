@@ -18,5 +18,9 @@ declare global {
       multiple?: boolean;
       types?: FilePickerAcceptType[];
     }): Promise<FileSystemFileHandle[]>;
+    showSaveFilePicker(options?: {
+      suggestedName?: string;
+      types?: FilePickerAcceptType[];
+    }): Promise<FileSystemFileHandle>;
   }
 }

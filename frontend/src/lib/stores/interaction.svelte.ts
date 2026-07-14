@@ -22,10 +22,21 @@ class Interaction {
   /** Open endpoint the pen would resume from if clicked (hover affordance). */
   resumePoint = $state<Point | null>(null);
 
+  /** Active smart-guide lines while dragging (document coords): vertical guides at these x,
+   *  horizontal guides at these y. Drawn full-canvas by the overlay. */
+  guidesX = $state<number[]>([]);
+  guidesY = $state<number[]>([]);
+
+  /** Rubber-band marquee rectangle (document coords) while selecting over empty canvas. */
+  marquee = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+
   clearDrag(): void {
     this.snapPoint = null;
     this.closing = false;
     this.resumePoint = null;
+    this.guidesX = [];
+    this.guidesY = [];
+    this.marquee = null;
   }
 }
 

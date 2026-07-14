@@ -9,6 +9,7 @@
   import { tools } from "$lib/stores/tool.svelte";
   import { viewport } from "$lib/stores/viewport.svelte";
   import { getTool, type Hit, hitTest } from "$lib/tools";
+  import { loadViewBox } from "$lib/view";
 
   import Overlay from "./Overlay.svelte";
 
@@ -27,7 +28,16 @@
   const cursor = $derived(
     canvas.panning || canvas.dragging || interaction.spaceHeld ? "grabbing" : hoverCursor,
   );
-  const newPaths = $derived(editor.doc?.paths.filter((p) => p.added && !p.deleted) ?? []);
+  // Ids of hidden layers — their paths drop from render (+ export stamps display:none).
+  const hiddenLayers = $derived(
+    new Set((editor.doc?.layers ?? []).filter((l) => !l.visible).map((l) => l.id)),
+  );
+  // Drawn paths to render, in draw (array) order = z-order; skip hidden paths + hidden groups.
+  const newPaths = $derived(
+    editor.doc?.paths.filter(
+      (p) => p.added && !p.deleted && !p.hidden && !(p.layer && hiddenLayers.has(p.layer)),
+    ) ?? [],
+  );
 
   // WebKit-only trackpad gesture event (Safari); not in the standard DOM lib.
   type GestureLike = Event & { scale: number; clientX: number; clientY: number };
@@ -67,7 +77,9 @@
       artworkGroup.appendChild(document.importNode(child, true));
     }
     livePaths = Array.from(artworkGroup.querySelectorAll("path"));
-    pendingFit = doc.viewBox;
+    // Frame the artboard *plus* any content drawn outside it, so a reload never lands on a
+    // view where shapes beyond the viewBox are off-screen.
+    pendingFit = loadViewBox();
   });
 
   // Keep the viewport's pixel size current, and fit a freshly-loaded document
@@ -91,7 +103,7 @@
     for (const p of doc.paths) {
       const el = livePaths[p.index];
       if (!el) continue;
-      if (p.deleted) {
+      if (p.deleted || p.hidden || (p.layer && hiddenLayers.has(p.layer))) {
         el.setAttribute("display", "none");
         continue;
       }
@@ -103,6 +115,27 @@
         if (v == null) el.removeAttribute(key);
         else el.setAttribute(key, v);
       }
+    }
+  });
+
+  // Draw imported paths in the model's order so the PATHS list (drag-drop reorder) controls
+  // their z-order. appendChild moves each imported <path> to the end in array order; non-path
+  // siblings (e.g. a background <rect>) keep their place, so reordered paths render above them.
+  // Gated on the order signature so it only touches the DOM when the draw order actually
+  // changes (reordering the DOM on every selection would reset the browser's dblclick count).
+  let lastOrder = "";
+  $effect(() => {
+    const doc = editor.doc;
+    if (!doc || !artworkGroup) return;
+    const imported = doc.paths.filter((p) => !p.added);
+    const order = imported.map((p) => p.index).join(",");
+    if (order === lastOrder) return;
+    lastOrder = order;
+    for (const p of imported) {
+      if (p.deleted) continue;
+      const el = livePaths[p.index];
+      // eslint-disable-next-line svelte/no-dom-manipulating
+      if (el && el.parentNode === artworkGroup) artworkGroup.appendChild(el);
     }
   });
 
@@ -201,6 +234,14 @@
     canvas.send({ type: "UP", docPoint: viewport.toDoc(screenOf(e)) });
   }
 
+  // Double-click a shape (select tool) to enter node-editing mode — Figma-style. Object
+  // mode moves the whole shape on drag; nodes only become editable after entering here.
+  function onDblClick(e: MouseEvent) {
+    if (!editor.doc || tools.active !== "select") return;
+    const hit = hitTest(screenOf(e));
+    if (hit.kind === "fill" || hit.kind === "segment") editor.enterNodeEdit(hit.pathIndex);
+  }
+
   // Zoom responsiveness knobs (bump for snappier zoom). WHEEL_ZOOM_SENS scales
   // the ctrl/⌘+wheel step; PINCH_GAIN (>1) makes a Safari trackpad pinch zoom
   // faster than the raw finger spread.
@@ -263,6 +304,7 @@
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
     onpointercancel={onPointerUp}
+    ondblclick={onDblClick}
     onwheel={onWheel}
     {...gestureHandlers}
   >
@@ -281,6 +323,25 @@
         </pattern>
       </defs>
       <rect class="grid" width="100%" height="100%" fill="url(#nib-grid)" />
+    {/if}
+    {#if editor.doc?.gradients?.length}
+      <defs>
+        {#each editor.doc.gradients as g (g.id)}
+          {#if g.kind === "radial"}
+            <radialGradient id={g.id} cx={g.cx} cy={g.cy} r={g.r}>
+              {#each g.stops as s, i (i)}
+                <stop offset={s.offset} stop-color={s.color} stop-opacity={s.opacity ?? 1} />
+              {/each}
+            </radialGradient>
+          {:else}
+            <linearGradient id={g.id} x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2}>
+              {#each g.stops as s, i (i)}
+                <stop offset={s.offset} stop-color={s.color} stop-opacity={s.opacity ?? 1} />
+              {/each}
+            </linearGradient>
+          {/if}
+        {/each}
+      </defs>
     {/if}
     <g
       class="scene"

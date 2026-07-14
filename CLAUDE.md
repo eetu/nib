@@ -54,6 +54,26 @@ Per-area detail in `frontend/CLAUDE.md`.
   "drawn">`, not the imperatively-imported artwork) and are *appended* before
   `</svg>` on export. Everything else treats them like any path (editable,
   snappable, undoable, persisted).
+- **Layers = objects + groups (Figma/Pixelmator model, one level).** The single
+  Inspector **LAYERS** panel *is* the object list: every path/shape is a row,
+  **z-order = the `paths` array order** (drag a row to reorder → `ReorderPath`),
+  and a contiguous run of paths sharing a `layer` id renders as a collapsible
+  **group**. **Group** (`GroupPaths` op) wraps the selection into a named group —
+  a `<g id="name">` on export — pulling its members contiguous; **Ungroup**
+  (`deleteLayer`) dissolves it (geometry untouched). Per-path (`PathElement.hidden`
+  + `SetPathHidden`) and per-group (`Layer.visible`) **show/hide** export as
+  `display="none"`. New shapes land on `activeLayer`. **The panel's z-order matches
+  the canvas *and* the export**: drawn paths append in array order (wrapping
+  contiguous group runs in `<g>`), imported paths fill their source `<path>` slots
+  in draw order. **Export is byte-for-byte until something is reordered/grouped/
+  edited/hidden** — grouping + reordering is the first *active re-serialization of
+  structure*. Core: `Layer`/`SvgDocument.layers`/`activeLayer` + `PathElement.layer`
+  +`hidden`; ops `groupPaths`/`setPathHidden`/`reorderPath`/`setLayerVisible`/
+  `renameLayer`/`deleteLayer`. **Caveats (Phase D):** groups are one level (no
+  groups-in-groups yet); imported paths group for membership/visibility/order but
+  aren't `<g>`-wrapped on export (they stay in their source slots), and drawn
+  shapes render in a group above all imported paths — full interleaving + nesting
+  needs the Phase-D object tree + stable ids.
 - **Two coordinate systems in the canvas.** Artwork is drawn in a scaled `<g>`
   (document units); the editing overlay is drawn in screen space so handles stay
   a constant pixel size at any zoom. `viewport.toScreen/toDoc` bridge them.
@@ -70,17 +90,24 @@ Per-area detail in `frontend/CLAUDE.md`.
   an explicit path selection (PATHS row / path-body click). `selectedPathIndex`
   is the effective selected path: the selected node's path if any, else
   `selectedPath`. The STYLE panel targets it.
-- **Object vs node mode (one tool, like Figma).** `objectSelected` = a whole
-  path selected with *no* node (you clicked its body or a PATHS row). Only then
-  does the Overlay draw the **transform box** — a dashed box (padded to clear
-  the shape, `SELECT_PAD_PX`) + **8 resize handles** + an accent **centerline**
-  (light casing + accent core so it reads on any stroke colour). Drag a corner
-  (both axes) / edge (one axis) to scale about the opposite anchor; shift keeps
-  aspect (`lib/tools/transform.ts` + the `transform` Hit kind + `select`'s
-  scaleDrag). Clicking a **node** instead gives clean node editing (anchors +
-  handles, no box). Hit-testing checks anchors *before* transform handles, and
-  transform handles only when `objectSelected`, so a path's own nodes are never
-  shadowed. Deleting the last node soft-deletes the now-empty path.
+- **Object vs node mode (one tool, like Figma), switched by double-click.** The
+  select tool defaults to **object mode**: clicking a path selects it
+  (`objectSelected` = a path selected with *no* node *and* not node-editing) and
+  the Overlay draws the **transform box** — a dashed box (padded, `SELECT_PAD_PX`)
+  + **8 resize handles** + a **rotate knob** above the top-centre + an accent
+  **centerline** (light casing + accent core so it reads on any stroke). Drag a
+  corner (both axes) / edge (one axis) to scale about the opposite anchor (shift
+  keeps aspect), drag the knob to rotate about the box centre (shift → 15° steps),
+  drag the body to move the whole shape. **Anchors are hidden and not hit-tested
+  in object mode**, so a drag unambiguously moves the shape — crucial when zoomed
+  out and nodes cluster. **Double-clicking a shape enters node mode**
+  (`document.nodeEditIndex`): its anchors + handles appear and become editable and
+  the transform box hides; Esc, a tool switch, or clicking empty returns to object
+  mode. Non-select tools (pen/add-node/delete-node) always show + hit anchors.
+  Hit-testing (`lib/tools/{hit,transform}.ts` + the `transform`/`rotate` Hit kinds
+  + `select`'s scale/rotate/pathDrag) gates anchors/handles on this mode, so a
+  path's own nodes are never shadowed by transform handles. Deleting the last node
+  soft-deletes the now-empty path.
 - **Styling.** Drawn/shape paths (`added`) carry an `attributes` map the STYLE
   panel edits directly (fill/stroke/width/opacity). New paths are stamped with
   `tools.newStyle` at creation, editable up front: with a create tool active and
@@ -154,19 +181,29 @@ Per-area detail in `frontend/CLAUDE.md`.
 ## Roadmap (post-Phase-0)
 
 There is an approved roadmap to grow nib to a pro-tier vector editor on the
-Rust/WASM core. **Phase A (this: the core-first rewrite) has landed** — model,
-ops, geometry, parse/serialize, snap, and undo are in `nib-core`, and the live app
-runs on it. Still ahead, building on that foundation:
+Rust/WASM core. **Phases A + B have landed.** Phase A (the core-first rewrite):
+model, ops, geometry, parse/serialize, snap, undo in `nib-core`. Phase B (the
+client-side pro pillars, all running on the core):
 
-- **Phase B (client-side pro pillars):** stroke cap/join/dash + fill-rule UI,
-  rect/line/polygon/star primitives + a shapes flyout, numeric-precision inspector,
-  multi-select + marquee + align/distribute, rotate/skew about a movable pivot,
-  boolean ops + offset/outline/simplify (Rust geometry kernel), smart guides,
-  gradients, command palette.
-- **Phase C (additive, flag-gated):** rust-axum backend running the same core —
-  op-log-over-WebSocket sync + an MCP tool surface (the op vocabulary *is* the
-  surface). Browser-only build stays fully functional.
-- **Phase D (gated):** layers/groups tree.
+- **Landed:** stroke cap/join/dash + fill-rule, rect/line/polygon/star primitives,
+  numeric-precision inspector; **unified layers = objects + groups** (Figma/
+  Pixelmator model, one level — z-order/drag-reorder, show/hide, thumbnails, group/
+  ungroup via `<g>`, active layer, right-click context menus); multi-select +
+  marquee + align/distribute; rotate (about the box centre); **boolean ops**
+  (union/subtract/intersect/exclude via the `i_overlay` kernel), **simplify** (RDP),
+  **outline-stroke** (kurbo); smart guides; **gradients** (linear/radial, draggable
+  stops, radial cx/cy/r); command palette (⌘K); plus workflow polish (New/Save-As,
+  copy-style, source prettify + reveal, double-click node editing, friendly path
+  names, content-aware fit + export viewBox, tight selection bounds).
+- **B tails still open (nice-to-have):** offset-path (proper joins), rotate/skew
+  about a *movable* pivot.
+- **Phase C (next — additive, flag-gated):** rust-axum backend running the same core —
+  op-log-over-WebSocket sync + an MCP tool surface. **The op vocabulary the editor
+  already runs on IS the surface** (`moveNode` … `booleanOp` … `groupPaths`).
+  Browser-only build stays fully functional.
+- **Phase D (gated):** arbitrary *nested* groups — a full object tree on top of B's
+  one-level named groups (needs stable-id addressing; imported paths currently group
+  for membership/visibility/order but aren't `<g>`-wrapped on export).
 
 The `added`/`attributes` model + op vocabulary + pluggable tools + grouped rail are
 shaped to absorb these. If a feature crosses into an unbuilt area, check the

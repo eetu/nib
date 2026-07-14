@@ -4,6 +4,7 @@
 //!
 //! The TS unit tests are ported alongside each module as the parity oracle (`cargo test`).
 
+pub mod booleans;
 pub mod document;
 pub mod geometry;
 pub mod path;

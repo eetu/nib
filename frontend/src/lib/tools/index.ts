@@ -1,32 +1,105 @@
+import Circle from "@lucide/svelte/icons/circle";
+import Eraser from "@lucide/svelte/icons/eraser";
+import Hexagon from "@lucide/svelte/icons/hexagon";
+import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
+import PenTool from "@lucide/svelte/icons/pen-tool";
+import Plus from "@lucide/svelte/icons/plus";
+import Slash from "@lucide/svelte/icons/slash";
+import Square from "@lucide/svelte/icons/square";
+import Star from "@lucide/svelte/icons/star";
+import type { Component } from "svelte";
+
 import type { ToolId } from "$lib/stores/tool.svelte";
 
 import { addNodeTool } from "./add-node";
 import { circleTool } from "./circle";
 import { deleteNodeTool } from "./delete-node";
+import { lineTool } from "./line";
 import { penTool } from "./pen";
+import { polygonTool } from "./polygon";
+import { rectTool } from "./rect";
 import { selectTool } from "./select";
+import { starTool } from "./star";
 import type { Tool } from "./types";
 
-const REGISTRY: Record<ToolId, Tool> = {
-  select: selectTool,
-  pen: penTool,
-  circle: circleTool,
-  "add-node": addNodeTool,
-  "delete-node": deleteNodeTool,
+/** One tool's full definition — behavior + everything the rail/shortcuts need. This is the
+ *  single place a tool is registered: add an entry here (and its `id` to `ToolId`) and it is
+ *  wired everywhere (getTool, the rail button, its group/flyout, and its shortcut). */
+export type ToolDef = {
+  id: ToolId;
+  tool: Tool;
+  label: string;
+  /** Single-key shortcut (lowercased), if any. */
+  shortcut?: string;
+  icon: Component;
 };
+
+/** A rail section. `flyout` groups collapse into one rail slot with a popup once they hold
+ *  more than one tool (so the rail stays scannable as shape primitives grow). */
+export type ToolGroup = {
+  name: string;
+  flyout?: boolean;
+  tools: ToolDef[];
+};
+
+export const TOOL_GROUPS: ToolGroup[] = [
+  {
+    name: "select",
+    tools: [
+      {
+        id: "select",
+        tool: selectTool,
+        label: "Select & move",
+        shortcut: "v",
+        icon: MousePointer2,
+      },
+    ],
+  },
+  {
+    name: "draw",
+    tools: [{ id: "pen", tool: penTool, label: "Draw path / pen", shortcut: "p", icon: PenTool }],
+  },
+  {
+    // Shape primitives — rect / line / polygon / star slot in here and the group becomes a
+    // flyout automatically once there's more than one.
+    name: "shapes",
+    flyout: true,
+    tools: [
+      { id: "circle", tool: circleTool, label: "Circle", shortcut: "c", icon: Circle },
+      { id: "rect", tool: rectTool, label: "Rectangle", shortcut: "r", icon: Square },
+      { id: "line", tool: lineTool, label: "Line", shortcut: "l", icon: Slash },
+      { id: "polygon", tool: polygonTool, label: "Polygon", shortcut: "g", icon: Hexagon },
+      { id: "star", tool: starTool, label: "Star", shortcut: "s", icon: Star },
+    ],
+  },
+  {
+    name: "nodes",
+    tools: [
+      { id: "add-node", tool: addNodeTool, label: "Add node", shortcut: "a", icon: Plus },
+      {
+        id: "delete-node",
+        tool: deleteNodeTool,
+        label: "Delete node",
+        shortcut: "d",
+        icon: Eraser,
+      },
+    ],
+  },
+];
+
+const ALL: ToolDef[] = TOOL_GROUPS.flatMap((g) => g.tools);
+
+const REGISTRY = Object.fromEntries(ALL.map((d) => [d.id, d.tool])) as Record<ToolId, Tool>;
 
 export function getTool(id: ToolId): Tool {
   return REGISTRY[id];
 }
 
-/** Order + labels for the tool rail (icons are chosen in the component). */
-export const TOOL_LIST: { id: ToolId; label: string }[] = [
-  { id: "select", label: "Select & move" },
-  { id: "pen", label: "Draw path (pen)" },
-  { id: "circle", label: "Circle" },
-  { id: "add-node", label: "Add node" },
-  { id: "delete-node", label: "Delete node" },
-];
+/** Keyboard shortcut → tool id, derived from the definitions above. */
+export const toolShortcuts: Record<string, ToolId> = {};
+for (const d of ALL) {
+  if (d.shortcut) toolShortcuts[d.shortcut] = d.id;
+}
 
 export { hitTest } from "./hit";
 export { finishPen } from "./pen";

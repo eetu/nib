@@ -15,8 +15,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::geometry::{distance, normalize};
 use crate::model::path::{close_subpath, insert_node_at, reversed_subpath};
-use crate::model::shapes::ellipse_nodes;
-use crate::model::types::{NodeRef, NodeType, PathElement, PathNode, Point, Subpath, SvgDocument};
+use crate::model::shapes::{ellipse_nodes, line_nodes, polygon_nodes, rect_nodes, star_nodes};
+use crate::model::types::{
+    Gradient, Layer, NodeRef, NodeType, PathElement, PathNode, Point, Subpath, SvgDocument,
+};
 
 /// Which control handle of a node an op targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +26,36 @@ use crate::model::types::{NodeRef, NodeType, PathElement, PathNode, Point, Subpa
 pub enum Handle {
     In,
     Out,
+}
+
+/// A parametric primitive. One vocabulary for every shape tool + the MCP surface ("make a
+/// rect / star here"); the reducer builds the anchor nodes from it, so shapes stay ordinary
+/// editable paths.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "shape", rename_all = "camelCase")]
+pub enum ShapeSpec {
+    Ellipse { cx: f64, cy: f64, rx: f64, ry: f64 },
+    Rect { x0: f64, y0: f64, x1: f64, y1: f64 },
+    Line { x0: f64, y0: f64, x1: f64, y1: f64 },
+    Polygon { cx: f64, cy: f64, r: f64, sides: u32, rotation: f64 },
+    Star { cx: f64, cy: f64, outer: f64, inner: f64, points: u32, rotation: f64 },
+}
+
+impl ShapeSpec {
+    /// Build the shape's anchor nodes + whether the subpath is closed (lines are open).
+    fn build(&self) -> (Vec<PathNode>, bool) {
+        match *self {
+            ShapeSpec::Ellipse { cx, cy, rx, ry } => (ellipse_nodes(cx, cy, rx, ry), true),
+            ShapeSpec::Rect { x0, y0, x1, y1 } => (rect_nodes(x0, y0, x1, y1), true),
+            ShapeSpec::Line { x0, y0, x1, y1 } => (line_nodes(x0, y0, x1, y1), false),
+            ShapeSpec::Polygon { cx, cy, r, sides, rotation } => {
+                (polygon_nodes(cx, cy, r, sides, rotation), true)
+            }
+            ShapeSpec::Star { cx, cy, outer, inner, points, rotation } => {
+                (star_nodes(cx, cy, outer, inner, points, rotation), true)
+            }
+        }
+    }
 }
 
 /// A single document mutation. `apply` is total: an op whose target is missing is a no-op.
@@ -75,26 +107,41 @@ pub enum Op {
     CloseLoop { path: usize, subpath: usize },
     /// Close a subpath (connect last→first) without moving any node (pen "click the start").
     ClosePath { path: usize, subpath: usize },
-    /// Resize the ellipse in a subpath to new centre + radii.
-    ResizeEllipse {
+    /// Rebuild a subpath from a parametric shape spec (shape tools resize live through this).
+    SetShape {
         path: usize,
         subpath: usize,
-        center: Point,
-        rx: f64,
-        ry: f64,
+        spec: ShapeSpec,
     },
 
-    /// Append a new drawn path (pen start, circle start, paste). The caller supplies the id
-    /// (so all clients agree) and the resolved style.
+    /// Append a new drawn path (pen start, paste). The caller supplies the id (so all clients
+    /// agree) and the resolved style.
     AddPath {
         id: String,
         subpaths: Vec<Subpath>,
+        attributes: IndexMap<String, String>,
+    },
+    /// Append a new drawn path built from a shape spec (shape tools + MCP).
+    AddShape {
+        id: String,
+        spec: ShapeSpec,
         attributes: IndexMap<String, String>,
     },
     /// Rename a path (updates its display id and, on export, its `id` attr).
     RenamePath { path: usize, name: String },
     /// Soft-delete a whole path.
     DeletePath { path: usize },
+    /// Move a path within the ordered paths list — changes draw order (later = drawn on top).
+    ReorderPath { from: usize, to: usize },
+    /// Show/hide a single path.
+    SetPathHidden { path: usize, hidden: bool },
+    /// Group paths into a new named group (a `<g>`): create the group (active), assign the
+    /// given paths to it, and pull them into a contiguous block at the lowest member's slot.
+    GroupPaths {
+        paths: Vec<usize>,
+        id: String,
+        name: String,
+    },
 
     /// Set (`value: Some`) or clear (`value: None`) one presentation attribute. Added paths
     /// edit their own `attributes`; imported paths accumulate a `style_override`.
@@ -102,6 +149,51 @@ pub enum Op {
         path: usize,
         key: String,
         value: Option<String>,
+    },
+
+    /// Create a new layer (client supplies the id) and make it the active layer.
+    AddLayer { id: String, name: String },
+    /// Rename a layer.
+    RenameLayer { id: String, name: String },
+    /// Remove a layer; its paths become unassigned (the layer's contents are not deleted).
+    DeleteLayer { id: String },
+    /// Show or hide a layer (hidden layers omit their paths from render + export).
+    SetLayerVisible { id: String, visible: bool },
+    /// Move a layer to a new z-index in the ordered layers list.
+    ReorderLayer { id: String, to: usize },
+    /// Set (or clear, with `None`) the active layer new shapes are added to.
+    SetActiveLayer {
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        id: Option<String>,
+    },
+    /// Assign a path to a layer (`None` = unassign).
+    SetPathLayer {
+        path: usize,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        layer: Option<String>,
+    },
+
+    /// Upsert a gradient paint (matched by id) into the document's defs.
+    SetGradient { gradient: Gradient },
+    /// Remove a gradient by id.
+    RemoveGradient { id: String },
+
+    /// Combine paths with a boolean op ("union"|"intersect"|"subtract"|"exclude"): the inputs
+    /// are soft-deleted and replaced by one new path (`id`) built from the result. Curves are
+    /// flattened to lines. For "subtract", the lowest-index path is the subject.
+    BooleanOp {
+        op: String,
+        paths: Vec<usize>,
+        id: String,
+    },
+    /// Reduce a path's node count (Ramer–Douglas–Peucker) within `tolerance` document units.
+    SimplifyPath { path: usize, tolerance: f64 },
+    /// Expand a path's stroke (`width`) into a filled outline: the source is soft-deleted and a
+    /// new fill path (`id`) is added, its fill taken from the source's stroke colour.
+    OutlineStroke {
+        path: usize,
+        width: f64,
+        id: String,
     },
 }
 
@@ -257,18 +349,17 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             mark_edited(doc, *path);
             true
         }
-        Op::ResizeEllipse {
+        Op::SetShape {
             path,
             subpath,
-            center,
-            rx,
-            ry,
+            spec,
         } => {
             let Some(sp) = subpath_mut(doc, *path, *subpath) else {
                 return false;
             };
-            sp.nodes = ellipse_nodes(center.x, center.y, *rx, *ry);
-            sp.closed = true;
+            let (nodes, closed) = spec.build();
+            sp.nodes = nodes;
+            sp.closed = closed;
             mark_edited(doc, *path);
             true
         }
@@ -278,6 +369,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             attributes,
         } => {
             let index = doc.paths.len();
+            let layer = doc.active_layer.clone();
             doc.paths.push(PathElement {
                 id: id.clone(),
                 index,
@@ -290,6 +382,33 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 original_tag: None,
                 deleted: false,
                 renamed: false,
+                layer,
+                hidden: false,
+            });
+            true
+        }
+        Op::AddShape {
+            id,
+            spec,
+            attributes,
+        } => {
+            let (nodes, closed) = spec.build();
+            let index = doc.paths.len();
+            let layer = doc.active_layer.clone();
+            doc.paths.push(PathElement {
+                id: id.clone(),
+                index,
+                original_d: String::new(),
+                subpaths: vec![Subpath { nodes, closed }],
+                edited: true,
+                added: true,
+                attributes: Some(attributes.clone()),
+                style_override: None,
+                original_tag: None,
+                deleted: false,
+                renamed: false,
+                layer,
+                hidden: false,
             });
             true
         }
@@ -312,6 +431,56 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             p.deleted = true;
             true
         }
+        Op::ReorderPath { from, to } => {
+            if *from >= doc.paths.len() {
+                return false;
+            }
+            let to = (*to).min(doc.paths.len() - 1);
+            if *from == to {
+                return false;
+            }
+            let p = doc.paths.remove(*from);
+            doc.paths.insert(to, p);
+            true
+        }
+        Op::SetPathHidden { path, hidden } => {
+            let Some(p) = doc.paths.get_mut(*path) else {
+                return false;
+            };
+            if p.hidden == *hidden {
+                return false;
+            }
+            p.hidden = *hidden;
+            true
+        }
+        Op::GroupPaths { paths, id, name } => {
+            let mut idxs: Vec<usize> =
+                paths.iter().copied().filter(|&i| i < doc.paths.len()).collect();
+            idxs.sort_unstable();
+            idxs.dedup();
+            if idxs.is_empty() || doc.layers.iter().any(|l| &l.id == id) {
+                return false;
+            }
+            doc.layers.push(Layer {
+                id: id.clone(),
+                name: name.clone(),
+                visible: true,
+            });
+            doc.active_layer = Some(id.clone());
+            for &i in &idxs {
+                if let Some(p) = doc.paths.get_mut(i) {
+                    p.layer = Some(id.clone());
+                }
+            }
+            // Pull the members into a contiguous block at the lowest member's position.
+            let at = idxs[0];
+            let mut block: Vec<PathElement> = idxs.iter().rev().map(|&i| doc.paths.remove(i)).collect();
+            block.reverse();
+            for (k, p) in block.into_iter().enumerate() {
+                doc.paths.insert(at + k, p);
+            }
+            true
+        }
         Op::SetStyle { path, key, value } => {
             let Some(p) = doc.paths.get_mut(*path) else {
                 return false;
@@ -329,6 +498,217 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                     map.shift_remove(key);
                 }
             }
+            true
+        }
+
+        Op::AddLayer { id, name } => {
+            if doc.layers.iter().any(|l| &l.id == id) {
+                return false;
+            }
+            doc.layers.push(Layer {
+                id: id.clone(),
+                name: name.clone(),
+                visible: true,
+            });
+            doc.active_layer = Some(id.clone());
+            true
+        }
+        Op::RenameLayer { id, name } => {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                return false;
+            }
+            let Some(l) = doc.layers.iter_mut().find(|l| &l.id == id) else {
+                return false;
+            };
+            l.name = trimmed.to_string();
+            true
+        }
+        Op::DeleteLayer { id } => {
+            let before = doc.layers.len();
+            doc.layers.retain(|l| &l.id != id);
+            if doc.layers.len() == before {
+                return false;
+            }
+            for p in doc.paths.iter_mut() {
+                if p.layer.as_deref() == Some(id.as_str()) {
+                    p.layer = None;
+                }
+            }
+            if doc.active_layer.as_deref() == Some(id.as_str()) {
+                doc.active_layer = None;
+            }
+            true
+        }
+        Op::SetLayerVisible { id, visible } => {
+            let Some(l) = doc.layers.iter_mut().find(|l| &l.id == id) else {
+                return false;
+            };
+            if l.visible == *visible {
+                return false;
+            }
+            l.visible = *visible;
+            true
+        }
+        Op::ReorderLayer { id, to } => {
+            let Some(from) = doc.layers.iter().position(|l| &l.id == id) else {
+                return false;
+            };
+            let to = (*to).min(doc.layers.len().saturating_sub(1));
+            if from == to {
+                return false;
+            }
+            let l = doc.layers.remove(from);
+            doc.layers.insert(to, l);
+            true
+        }
+        Op::SetActiveLayer { id } => {
+            if let Some(id) = id
+                && !doc.layers.iter().any(|l| &l.id == id)
+            {
+                return false;
+            }
+            if doc.active_layer == *id {
+                return false;
+            }
+            doc.active_layer = id.clone();
+            true
+        }
+        Op::SetPathLayer { path, layer } => {
+            if let Some(id) = layer
+                && !doc.layers.iter().any(|l| &l.id == id)
+            {
+                return false;
+            }
+            let Some(p) = doc.paths.get_mut(*path) else {
+                return false;
+            };
+            if p.layer == *layer {
+                return false;
+            }
+            p.layer = layer.clone();
+            true
+        }
+
+        Op::SetGradient { gradient } => {
+            if let Some(g) = doc.gradients.iter_mut().find(|g| g.id == gradient.id) {
+                if g == gradient {
+                    return false;
+                }
+                *g = gradient.clone();
+            } else {
+                doc.gradients.push(gradient.clone());
+            }
+            true
+        }
+        Op::RemoveGradient { id } => {
+            let before = doc.gradients.len();
+            doc.gradients.retain(|g| &g.id != id);
+            doc.gradients.len() != before
+        }
+        Op::BooleanOp { op, paths, id } => {
+            let mut idxs: Vec<usize> = paths
+                .iter()
+                .copied()
+                .filter(|&i| doc.paths.get(i).is_some_and(|p| !p.deleted))
+                .collect();
+            idxs.sort_unstable();
+            idxs.dedup();
+            if idxs.len() < 2 {
+                return false;
+            }
+            let subpaths = {
+                let refs: Vec<&PathElement> = idxs.iter().map(|&i| &doc.paths[i]).collect();
+                match crate::model::booleans::boolean(op, &refs) {
+                    Some(s) => s,
+                    None => return false,
+                }
+            };
+            // The result inherits the subject's (lowest-index) effective style + group.
+            let first = &doc.paths[idxs[0]];
+            let mut attributes = first.attributes.clone().unwrap_or_default();
+            if let Some(so) = &first.style_override {
+                for (k, v) in so {
+                    attributes.insert(k.clone(), v.clone());
+                }
+            }
+            let layer = first.layer.clone();
+            for &i in &idxs {
+                doc.paths[i].deleted = true;
+            }
+            let index = doc.paths.len();
+            doc.paths.push(PathElement {
+                id: id.clone(),
+                index,
+                original_d: String::new(),
+                subpaths,
+                edited: true,
+                added: true,
+                attributes: Some(attributes),
+                style_override: None,
+                original_tag: None,
+                deleted: false,
+                renamed: false,
+                layer,
+                hidden: false,
+            });
+            true
+        }
+        Op::SimplifyPath { path, tolerance } => {
+            let Some(p) = doc.paths.get_mut(*path) else {
+                return false;
+            };
+            let before: usize = p.subpaths.iter().map(|sp| sp.nodes.len()).sum();
+            let simplified = crate::model::path::simplify_subpaths(&p.subpaths, *tolerance);
+            let after: usize = simplified.iter().map(|sp| sp.nodes.len()).sum();
+            if after >= before {
+                return false;
+            }
+            p.subpaths = simplified;
+            p.edited = true;
+            true
+        }
+        Op::OutlineStroke { path, width, id } => {
+            let (subpaths, attributes, layer) = {
+                let Some(p) = doc.paths.get(*path) else {
+                    return false;
+                };
+                if p.deleted {
+                    return false;
+                }
+                let subpaths = crate::model::path::outline_stroke(&p.subpaths, *width, 0.25);
+                if subpaths.is_empty() {
+                    return false;
+                }
+                let mut m = p.attributes.clone().unwrap_or_default();
+                if let Some(so) = &p.style_override {
+                    for (k, v) in so {
+                        m.insert(k.clone(), v.clone());
+                    }
+                }
+                let stroke_color = m.get("stroke").cloned().unwrap_or_else(|| "#000000".to_string());
+                m.insert("fill".to_string(), stroke_color);
+                m.insert("stroke".to_string(), "none".to_string());
+                m.shift_remove("stroke-width");
+                (subpaths, m, p.layer.clone())
+            };
+            doc.paths[*path].deleted = true;
+            let index = doc.paths.len();
+            doc.paths.push(PathElement {
+                id: id.clone(),
+                index,
+                original_d: String::new(),
+                subpaths,
+                edited: true,
+                added: true,
+                attributes: Some(attributes),
+                style_override: None,
+                original_tag: None,
+                deleted: false,
+                renamed: false,
+                layer,
+                hidden: false,
+            });
             true
         }
     }
@@ -427,7 +807,12 @@ mod tests {
                 original_tag: None,
                 deleted: false,
                 renamed: false,
+                layer: None,
+                hidden: false,
             }],
+            layers: Vec::new(),
+            active_layer: None,
+            gradients: Vec::new(),
         }
     }
 
@@ -606,6 +991,152 @@ mod tests {
         assert_eq!(p.id, "drawn-1");
         assert_eq!(p.index, 1);
         assert!(p.added && p.edited);
+        assert_eq!(p.layer, None); // no active layer → unassigned
+    }
+
+    #[test]
+    fn layer_lifecycle_and_active_assignment() {
+        let mut doc = doc_from("M 0 0 L 10 0", false);
+        // Add a layer → it becomes active.
+        assert!(apply(
+            &mut doc,
+            &Op::AddLayer {
+                id: "L1".into(),
+                name: "shapes".into()
+            }
+        ));
+        assert_eq!(doc.layers.len(), 1);
+        assert_eq!(doc.active_layer.as_deref(), Some("L1"));
+        // A duplicate id is a no-op.
+        assert!(!apply(
+            &mut doc,
+            &Op::AddLayer {
+                id: "L1".into(),
+                name: "dupe".into()
+            }
+        ));
+        // A new drawn shape lands on the active layer.
+        assert!(apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "s1".into(),
+                subpaths: parse_path_d("M 1 1 L 2 2"),
+                attributes: IndexMap::new(),
+            }
+        ));
+        assert_eq!(doc.paths[1].layer.as_deref(), Some("L1"));
+        // Hide + rename.
+        assert!(apply(
+            &mut doc,
+            &Op::SetLayerVisible {
+                id: "L1".into(),
+                visible: false
+            }
+        ));
+        assert!(!doc.layers[0].visible);
+        assert!(apply(
+            &mut doc,
+            &Op::RenameLayer {
+                id: "L1".into(),
+                name: "outline".into()
+            }
+        ));
+        assert_eq!(doc.layers[0].name, "outline");
+        // Deleting the layer unassigns its paths + clears active.
+        assert!(apply(&mut doc, &Op::DeleteLayer { id: "L1".into() }));
+        assert!(doc.layers.is_empty());
+        assert_eq!(doc.paths[1].layer, None);
+        assert_eq!(doc.active_layer, None);
+    }
+
+    #[test]
+    fn reorder_path_moves_within_the_draw_order() {
+        let mut doc = doc_from("M 0 0 L 1 1", true);
+        apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "b".into(),
+                subpaths: parse_path_d("M 0 0 L 2 2"),
+                attributes: IndexMap::new(),
+            },
+        );
+        apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "c".into(),
+                subpaths: parse_path_d("M 0 0 L 3 3"),
+                attributes: IndexMap::new(),
+            },
+        );
+        // p0, b, c → move c (index 2) to the front
+        assert!(apply(&mut doc, &Op::ReorderPath { from: 2, to: 0 }));
+        let ids: Vec<&str> = doc.paths.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["c", "p0", "b"]);
+        // a no-op move returns false
+        assert!(!apply(&mut doc, &Op::ReorderPath { from: 1, to: 1 }));
+    }
+
+    #[test]
+    fn group_paths_creates_a_contiguous_active_group() {
+        let mut doc = doc_from("M 0 0 L 1 1", true); // p0
+        for id in ["b", "c", "d"] {
+            apply(
+                &mut doc,
+                &Op::AddPath {
+                    id: id.into(),
+                    subpaths: parse_path_d("M 0 0 L 2 2"),
+                    attributes: IndexMap::new(),
+                },
+            );
+        }
+        // paths p0,b,c,d → group the non-adjacent b (1) + d (3)
+        assert!(apply(
+            &mut doc,
+            &Op::GroupPaths {
+                paths: vec![1, 3],
+                id: "g1".into(),
+                name: "grp".into(),
+            }
+        ));
+        assert_eq!(doc.active_layer.as_deref(), Some("g1"));
+        // members pulled contiguous at the lowest slot, in ascending order
+        let ids: Vec<&str> = doc.paths.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["p0", "b", "d", "c"]);
+        assert_eq!(doc.paths[1].layer.as_deref(), Some("g1"));
+        assert_eq!(doc.paths[2].layer.as_deref(), Some("g1"));
+        assert_eq!(doc.paths[3].layer, None);
+    }
+
+    #[test]
+    fn set_path_hidden_toggles() {
+        let mut doc = doc_from("M 0 0 L 1 1", true);
+        assert!(apply(&mut doc, &Op::SetPathHidden { path: 0, hidden: true }));
+        assert!(doc.paths[0].hidden);
+        assert!(!apply(&mut doc, &Op::SetPathHidden { path: 0, hidden: true }));
+    }
+
+    #[test]
+    fn reorder_layer_moves_within_the_z_order() {
+        let mut doc = doc_from("M 0 0 L 10 0", false);
+        for id in ["a", "b", "c"] {
+            apply(
+                &mut doc,
+                &Op::AddLayer {
+                    id: id.into(),
+                    name: id.into(),
+                },
+            );
+        }
+        // a,b,c → move c to front (index 0)
+        assert!(apply(
+            &mut doc,
+            &Op::ReorderLayer {
+                id: "c".into(),
+                to: 0
+            }
+        ));
+        let order: Vec<&str> = doc.layers.iter().map(|l| l.id.as_str()).collect();
+        assert_eq!(order, ["c", "a", "b"]);
     }
 
     #[test]
@@ -654,22 +1185,73 @@ mod tests {
     }
 
     #[test]
-    fn resize_ellipse_rebuilds_four_smooth_nodes() {
+    fn set_shape_rebuilds_an_ellipse() {
         let mut doc = doc_from("M 0 0 L 10 0", true);
         assert!(apply(
             &mut doc,
-            &Op::ResizeEllipse {
+            &Op::SetShape {
                 path: 0,
                 subpath: 0,
-                center: Point::new(50.0, 50.0),
-                rx: 10.0,
-                ry: 20.0,
+                spec: ShapeSpec::Ellipse {
+                    cx: 50.0,
+                    cy: 50.0,
+                    rx: 10.0,
+                    ry: 20.0,
+                },
             }
         ));
         let sp = &doc.paths[0].subpaths[0];
         assert_eq!(sp.nodes.len(), 4);
         assert!(sp.closed);
         assert_eq!(sp.nodes[0].point, Point::new(60.0, 50.0));
+    }
+
+    #[test]
+    fn set_shape_builds_a_rect_and_a_line() {
+        let mut doc = doc_from("M 0 0 L 10 0", true);
+        apply(
+            &mut doc,
+            &Op::SetShape {
+                path: 0,
+                subpath: 0,
+                spec: ShapeSpec::Rect { x0: 10.0, y0: 20.0, x1: 30.0, y1: 40.0 },
+            },
+        );
+        assert_eq!(doc.paths[0].subpaths[0].nodes.len(), 4);
+        assert!(doc.paths[0].subpaths[0].closed);
+
+        apply(
+            &mut doc,
+            &Op::SetShape {
+                path: 0,
+                subpath: 0,
+                spec: ShapeSpec::Line { x0: 0.0, y0: 0.0, x1: 5.0, y1: 5.0 },
+            },
+        );
+        assert_eq!(doc.paths[0].subpaths[0].nodes.len(), 2);
+        assert!(!doc.paths[0].subpaths[0].closed); // lines are open
+    }
+
+    #[test]
+    fn add_shape_appends_a_polygon_path() {
+        let mut doc = doc_from("M 0 0 L 10 0", false);
+        assert!(apply(
+            &mut doc,
+            &Op::AddShape {
+                id: "poly".into(),
+                spec: ShapeSpec::Polygon {
+                    cx: 0.0,
+                    cy: 0.0,
+                    r: 10.0,
+                    sides: 6,
+                    rotation: 0.0,
+                },
+                attributes: IndexMap::new(),
+            }
+        ));
+        assert_eq!(doc.paths.len(), 2);
+        assert_eq!(doc.paths[1].subpaths[0].nodes.len(), 6);
+        assert!(doc.paths[1].added);
     }
 
     #[test]

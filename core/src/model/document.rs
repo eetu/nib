@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use kurbo::{BezPath, Shape};
 
 use super::path::{parse_path_d, path_to_d_prec};
-use super::types::{PathElement, SvgDocument, ViewBox};
+use super::types::{Gradient, PathElement, SvgDocument, ViewBox};
 
 const DEFAULT_VIEWBOX: ViewBox = ViewBox {
     min_x: 0.0,
@@ -20,8 +20,9 @@ const DEFAULT_VIEWBOX: ViewBox = ViewBox {
 
 /// Presentation attributes the STYLE panel can read/edit on any path. Parsed from imported
 /// paths so they can be styled + reset.
-pub const STYLE_KEYS: [&str; 9] = [
+pub const STYLE_KEYS: [&str; 10] = [
     "fill",
+    "fill-rule",
     "stroke",
     "stroke-width",
     "opacity",
@@ -193,6 +194,8 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
                 style_override: None,
                 deleted: false,
                 renamed: false,
+                layer: None,
+                hidden: false,
             }
         })
         .collect();
@@ -202,11 +205,31 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
         source: source.to_string(),
         view_box,
         paths,
+        layers: Vec::new(),
+        active_layer: None,
+        gradients: Vec::new(),
     })
 }
 
-fn style_overridden(p: &PathElement) -> bool {
-    p.style_override.as_ref().is_some_and(|m| !m.is_empty())
+/// An imported path's opening tag with its edits applied (d / id / style-override / hidden).
+/// With no edits it returns the original tag verbatim, so unchanged paths stay byte-for-byte.
+fn edited_tag(p: &PathElement, precision: usize, hidden: bool) -> String {
+    let mut t = p.original_tag.clone().unwrap_or_default();
+    if p.edited {
+        t = with_attr(&t, "d", &path_to_d_prec(&p.subpaths, precision));
+    }
+    if p.renamed {
+        t = with_attr(&t, "id", &p.id);
+    }
+    if let Some(so) = &p.style_override {
+        for (k, v) in so {
+            t = with_attr(&t, k, v);
+        }
+    }
+    if hidden {
+        t = with_attr(&t, "display", "none");
+    }
+    t
 }
 
 /// Set (or insert) one attribute in a `<path …>` tag string, preserving the rest of the tag
@@ -292,34 +315,218 @@ fn attrs_to_string(attrs: Option<&IndexMap<String, String>>) -> String {
     }
 }
 
-/// Insert in-app-drawn paths (no source location) just before the closing `</svg>`.
+/// A drawn path is exportable if it has real geometry.
+fn is_exportable_drawn(p: &PathElement) -> bool {
+    p.added && !p.deleted && p.subpaths.iter().any(|sp| sp.nodes.len() >= 2)
+}
+
+/// Serialize one drawn `<path …>` (indented). `indent` is the leading whitespace.
+fn drawn_path_tag(p: &PathElement, precision: usize, indent: &str) -> String {
+    let id = if p.renamed {
+        format!(" id=\"{}\"", p.id)
+    } else {
+        String::new()
+    };
+    let hidden = if p.hidden { " display=\"none\"" } else { "" };
+    format!(
+        "{}<path{}{} d=\"{}\"{} />",
+        indent,
+        id,
+        hidden,
+        path_to_d_prec(&p.subpaths, precision),
+        attrs_to_string(p.attributes.as_ref())
+    )
+}
+
+/// Escape a string for use inside a double-quoted XML attribute value.
+fn escape_attr(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;")
+}
+
+/// Insert in-app-drawn paths (no source location) just before the closing `</svg>`, in draw
+/// (array) order — so the PATHS/layers panel z-order matches the export. A contiguous run of
+/// paths sharing a group id is wrapped in `<g id="name">` (a hidden group's `<g>` carries
+/// `display="none"`); loose paths emit bare. Members are kept contiguous by GroupPaths.
 fn append_drawn_paths(out: &str, doc: &SvgDocument, precision: usize) -> String {
-    let drawn: Vec<String> = doc
-        .paths
-        .iter()
-        .filter(|p| p.added && !p.deleted && p.subpaths.iter().any(|sp| sp.nodes.len() >= 2))
-        .map(|p| {
-            let id = if p.renamed {
-                format!(" id=\"{}\"", p.id)
-            } else {
-                String::new()
-            };
-            format!(
-                "  <path{} d=\"{}\"{} />",
-                id,
-                path_to_d_prec(&p.subpaths, precision),
-                attrs_to_string(p.attributes.as_ref())
-            )
-        })
-        .collect();
-    let drawn = drawn.join("\n");
-    if drawn.is_empty() {
+    let drawn: Vec<&PathElement> = doc.paths.iter().filter(|p| is_exportable_drawn(p)).collect();
+    let mut parts: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < drawn.len() {
+        let group = drawn[i]
+            .layer
+            .as_deref()
+            .and_then(|id| doc.layers.iter().find(|l| l.id == id));
+        if let Some(layer) = group {
+            let mut inner = Vec::new();
+            while i < drawn.len() && drawn[i].layer.as_deref() == Some(layer.id.as_str()) {
+                inner.push(drawn_path_tag(drawn[i], precision, "    "));
+                i += 1;
+            }
+            let hidden = if layer.visible { "" } else { " display=\"none\"" };
+            parts.push(format!(
+                "  <g id=\"{}\"{}>\n{}\n  </g>",
+                escape_attr(&layer.name),
+                hidden,
+                inner.join("\n")
+            ));
+        } else {
+            parts.push(drawn_path_tag(drawn[i], precision, "  "));
+            i += 1;
+        }
+    }
+    let block = parts.join("\n");
+    if block.is_empty() {
         return out.to_string();
     }
     match out.rfind("</svg>") {
-        Some(close) => format!("{}{}\n{}", &out[..close], drawn, &out[close..]),
-        None => format!("{out}\n{drawn}"),
+        Some(close) => format!("{}{}\n{}", &out[..close], block, &out[close..]),
+        None => format!("{out}\n{block}"),
     }
+}
+
+/// Whether an imported path sits on a hidden layer (so it exports with `display="none"`).
+fn on_hidden_layer(doc: &SvgDocument, p: &PathElement) -> bool {
+    p.layer
+        .as_deref()
+        .and_then(|id| doc.layers.iter().find(|l| l.id == id))
+        .is_some_and(|l| !l.visible)
+}
+
+/// A path is hidden if toggled off directly or its group is hidden.
+fn path_hidden(doc: &SvgDocument, p: &PathElement) -> bool {
+    p.hidden || on_hidden_layer(doc, p)
+}
+
+/// One gradient as a `<linearGradient>` / `<radialGradient>` element.
+fn gradient_to_svg(g: &Gradient) -> String {
+    let stops: String = g
+        .stops
+        .iter()
+        .map(|s| {
+            let op = s
+                .opacity
+                .map(|o| format!(" stop-opacity=\"{o}\""))
+                .unwrap_or_default();
+            format!(
+                "      <stop offset=\"{}\" stop-color=\"{}\"{} />",
+                s.offset,
+                escape_attr(&s.color),
+                op
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if g.kind == "radial" {
+        format!(
+            "    <radialGradient id=\"{}\" cx=\"{}\" cy=\"{}\" r=\"{}\">\n{}\n    </radialGradient>",
+            escape_attr(&g.id),
+            g.cx,
+            g.cy,
+            g.r,
+            stops
+        )
+    } else {
+        format!(
+            "    <linearGradient id=\"{}\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\">\n{}\n    </linearGradient>",
+            escape_attr(&g.id),
+            g.x1,
+            g.y1,
+            g.x2,
+            g.y2,
+            stops
+        )
+    }
+}
+
+/// Inject nib's gradient paints as a `<defs>` right after the `<svg …>` open tag (a
+/// head-injection step, parallel to appending drawn paths — the source is otherwise
+/// untouched). No-op when there are no gradients.
+fn inject_defs(out: &str, doc: &SvgDocument) -> String {
+    if doc.gradients.is_empty() {
+        return out.to_string();
+    }
+    let body = doc
+        .gradients
+        .iter()
+        .map(gradient_to_svg)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let defs = format!("  <defs>\n{body}\n  </defs>");
+    let lower = out.to_ascii_lowercase();
+    match lower.find("<svg").and_then(|s| out[s..].find('>').map(|g| s + g + 1)) {
+        Some(pos) => format!("{}\n{}{}", &out[..pos], defs, &out[pos..]),
+        None => out.to_string(),
+    }
+}
+
+/// Union bounds (nodes + handles) of every non-deleted path, or None if empty.
+fn union_content_bounds(doc: &SvgDocument) -> Option<(f64, f64, f64, f64)> {
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    let mut any = false;
+    for p in &doc.paths {
+        if p.deleted {
+            continue;
+        }
+        for sp in &p.subpaths {
+            for n in &sp.nodes {
+                for pt in [Some(n.point), n.handle_in, n.handle_out].into_iter().flatten() {
+                    any = true;
+                    min_x = min_x.min(pt.x);
+                    min_y = min_y.min(pt.y);
+                    max_x = max_x.max(pt.x);
+                    max_y = max_y.max(pt.y);
+                }
+            }
+        }
+    }
+    (any && max_x > min_x && max_y > min_y).then_some((min_x, min_y, max_x, max_y))
+}
+
+/// The viewBox to export: the declared artboard, grown to include any content drawn outside
+/// it — so a shape placed beyond the source viewBox isn't clipped when the file is reopened
+/// elsewhere. Equals the source viewBox when all content fits (→ no rewrite).
+fn export_view_box(doc: &SvgDocument) -> ViewBox {
+    let vb = doc.view_box;
+    match union_content_bounds(doc) {
+        Some((x0, y0, x1, y1)) => {
+            let min_x = vb.min_x.min(x0);
+            let min_y = vb.min_y.min(y0);
+            ViewBox {
+                min_x,
+                min_y,
+                width: (vb.min_x + vb.width).max(x1) - min_x,
+                height: (vb.min_y + vb.height).max(y1) - min_y,
+            }
+        }
+        None => vb,
+    }
+}
+
+fn round3(n: f64) -> f64 {
+    (n * 1000.0).round() / 1000.0
+}
+
+/// Rewrite the `<svg …>` opening tag's `viewBox` attribute (used only when content overflows).
+fn rewrite_svg_viewbox(out: &str, vb: ViewBox) -> String {
+    let lower = out.to_ascii_lowercase();
+    let Some(start) = lower.find("<svg") else {
+        return out.to_string();
+    };
+    let Some(gt) = out[start..].find('>').map(|g| start + g + 1) else {
+        return out.to_string();
+    };
+    let value = format!(
+        "{} {} {} {}",
+        round3(vb.min_x),
+        round3(vb.min_y),
+        round3(vb.width),
+        round3(vb.height)
+    );
+    let new_tag = with_attr(&out[start..gt], "viewBox", &value);
+    format!("{}{}{}", &out[..start], new_tag, &out[gt..])
 }
 
 /// Serialize the document to SVG at the TS default precision (3).
@@ -334,11 +541,17 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
     let src = &doc.source;
     let mut out = String::new();
     let mut cursor = 0;
-    for p in &doc.paths {
-        if p.added {
-            continue;
-        }
-        let Some(tag) = &p.original_tag else {
+    // The `<path>` slots in the source, in source order, locate the byte spans (found via a
+    // moving cursor, so duplicate tags still map right). We *fill* each non-deleted slot with
+    // the next imported path in **draw order** (array order) — so reordering paths reorders
+    // the exported z-order while non-path content + slot positions stay byte-for-byte. With no
+    // reordering, each slot gets its own path back → byte-for-byte.
+    let ordered: Vec<&PathElement> = doc.paths.iter().filter(|p| !p.added && !p.deleted).collect();
+    let mut slots: Vec<&PathElement> = doc.paths.iter().filter(|p| !p.added).collect();
+    slots.sort_by_key(|p| p.index);
+    let mut oi = 0;
+    for slot in slots {
+        let Some(tag) = &slot.original_tag else {
             continue;
         };
         let Some(rel) = src[cursor..].find(tag.as_str()) else {
@@ -346,36 +559,49 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
         };
         let idx = cursor + rel;
         let end = idx + tag.len();
-        if p.deleted {
-            out.push_str(&src[cursor..idx]); // drop the tag
-        } else if p.edited || p.renamed || style_overridden(p) {
-            let mut t = tag.clone();
-            if p.edited {
-                t = with_attr(&t, "d", &path_to_d_prec(&p.subpaths, precision));
-            }
-            if p.renamed {
-                t = with_attr(&t, "id", &p.id);
-            }
-            if let Some(so) = &p.style_override {
-                for (k, v) in so {
-                    t = with_attr(&t, k, v);
-                }
-            }
-            out.push_str(&src[cursor..idx]);
-            out.push_str(&t);
-        } else {
-            out.push_str(&src[cursor..end]); // verbatim
+        out.push_str(&src[cursor..idx]);
+        if !slot.deleted && oi < ordered.len() {
+            let p = ordered[oi];
+            oi += 1;
+            out.push_str(&edited_tag(p, precision, path_hidden(doc, p)));
         }
+        // a deleted slot drops its tag (emits only the preceding span)
         cursor = end;
     }
     out.push_str(&src[cursor..]);
-    append_drawn_paths(&out, doc, precision)
+    let with_drawn = append_drawn_paths(&out, doc, precision);
+    let with_defs = inject_defs(&with_drawn, doc);
+    let evb = export_view_box(doc);
+    if evb != doc.view_box {
+        rewrite_svg_viewbox(&with_defs, evb)
+    } else {
+        with_defs
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::types::Point;
+    use crate::model::path::parse_path_d;
+    use crate::model::types::{Layer, Point};
+
+    fn drawn_on_layer(id: &str, layer: &str) -> PathElement {
+        PathElement {
+            id: id.to_string(),
+            index: 0,
+            original_d: String::new(),
+            subpaths: parse_path_d("M 0 0 L 10 10"),
+            edited: true,
+            added: true,
+            attributes: None,
+            style_override: None,
+            original_tag: None,
+            deleted: false,
+            renamed: false,
+            layer: Some(layer.to_string()),
+            hidden: false,
+        }
+    }
 
     const SAMPLE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <rect x="0" y="0" width="100" height="100" fill="#eee"/>
@@ -464,6 +690,122 @@ mod tests {
         assert!(out.contains(r#"d="M 10 10 L 90 10 L 90 90""#));
         assert!(out.contains(r#"d="M 20 20 L 70 70""#));
         assert!(!out.contains(r#"d="M 20 20 L 80 80""#));
+    }
+
+    #[test]
+    fn drawn_paths_group_into_layer_g_elements_and_honor_visibility() {
+        let mut doc =
+            parse_svg("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n</svg>")
+                .unwrap();
+        doc.layers.push(Layer {
+            id: "L1".into(),
+            name: "outline".into(),
+            visible: true,
+        });
+        doc.paths.push(drawn_on_layer("s1", "L1"));
+        let out = serialize_svg(&doc);
+        assert!(out.contains(r#"<g id="outline">"#), "grouped: {out}");
+        assert!(out.contains("<path"));
+        assert!(out.contains("</g>"));
+
+        // Hiding the layer stamps display:none on its group.
+        doc.layers[0].visible = false;
+        let out2 = serialize_svg(&doc);
+        assert!(
+            out2.contains(r#"<g id="outline" display="none">"#),
+            "hidden: {out2}"
+        );
+    }
+
+    #[test]
+    fn imported_path_on_a_hidden_layer_gets_display_none() {
+        let mut doc = parse_svg(SAMPLE).unwrap();
+        doc.layers.push(Layer {
+            id: "L1".into(),
+            name: "hidden".into(),
+            visible: false,
+        });
+        doc.paths[0].layer = Some("L1".into());
+        let out = serialize_svg(&doc);
+        assert!(out.contains("display=\"none\""), "{out}");
+        // The other path (no layer) is untouched.
+        assert!(out.contains(r#"<path d="M 20 20 L 80 80" stroke="red"/>"#));
+    }
+
+    #[test]
+    fn reordering_imported_paths_swaps_their_export_positions() {
+        let mut doc = parse_svg(SAMPLE).unwrap();
+        // No reorder → byte-for-byte.
+        assert_eq!(serialize_svg(&doc), SAMPLE);
+        // Swap draw order → the two <path> tags swap document positions (z-order follows the
+        // array); non-path content (the rect) stays byte-for-byte in place.
+        doc.paths.swap(0, 1);
+        let out = serialize_svg(&doc);
+        let red = out.find(r#"<path d="M 20 20 L 80 80" stroke="red"/>"#).unwrap();
+        let black = out.find(r#"d="M 10 10 L 90 10 L 90 90""#).unwrap();
+        assert!(red < black, "draw order should follow the array: {out}");
+        assert!(out.contains(r##"<rect x="0" y="0" width="100" height="100" fill="#eee"/>"##));
+    }
+
+    #[test]
+    fn export_grows_viewbox_to_cover_overflowing_content() {
+        let mut doc =
+            parse_svg("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n</svg>")
+                .unwrap();
+        let mut p = drawn_on_layer("s1", "x");
+        p.layer = None;
+        p.subpaths = parse_path_d("M 120 120 L 180 120 L 180 180 Z");
+        doc.paths.push(p);
+        let out = serialize_svg(&doc);
+        assert!(out.contains(r#"viewBox="0 0 180 180""#), "{out}");
+        // content within the viewBox leaves it byte-for-byte
+        let within = parse_svg(SAMPLE).unwrap();
+        assert!(serialize_svg(&within).contains(r#"viewBox="0 0 100 100""#));
+    }
+
+    #[test]
+    fn empty_layers_keep_byte_for_byte_preservation() {
+        let doc = parse_svg(SAMPLE).unwrap();
+        assert!(doc.layers.is_empty());
+        assert_eq!(serialize_svg(&doc), SAMPLE);
+    }
+
+    #[test]
+    fn gradients_inject_a_defs_after_the_svg_open_tag() {
+        use crate::model::types::{Gradient, GradientStop};
+        let mut doc = parse_svg(SAMPLE).unwrap();
+        // No gradients → byte-for-byte still.
+        assert_eq!(serialize_svg(&doc), SAMPLE);
+        doc.gradients.push(Gradient {
+            id: "g1".into(),
+            kind: "linear".into(),
+            stops: vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: "#f00".into(),
+                    opacity: None,
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: "#00f".into(),
+                    opacity: Some(0.5),
+                },
+            ],
+            x1: 0.0,
+            y1: 0.0,
+            x2: 1.0,
+            y2: 0.0,
+            cx: 0.5,
+            cy: 0.5,
+            r: 0.5,
+        });
+        let out = serialize_svg(&doc);
+        assert!(out.contains("<defs>"), "{out}");
+        assert!(out.contains(r#"<linearGradient id="g1""#), "{out}");
+        assert!(out.contains(r##"stop-color="#f00""##));
+        assert!(out.contains(r#"stop-opacity="0.5""#));
+        // The original content is still present (defs is additive).
+        assert!(out.contains(r##"<rect x="0" y="0" width="100" height="100" fill="#eee"/>"##));
     }
 
     #[test]
