@@ -37,7 +37,7 @@ type CoreState = {
   canRedo: boolean;
 };
 
-type Clipboard = { subpaths: Subpath[]; attributes: Record<string, string> };
+type Clipboard = { subpaths: Subpath[]; attributes: Record<string, string>; name: string };
 
 const SESSION_KEY = "session";
 
@@ -150,6 +150,16 @@ class DocumentStore {
   /** Apply one op to the core (live edit, no commit). Returns whether it mutated. */
   #apply(op: unknown): boolean {
     return this.#wasm ? this.#wasm.applyOp(op) : false;
+  }
+
+  /** A friendly, unique path id/name — `base`, else `base 2`, `base 3`, … (drawn paths get a
+   *  readable label in the layers list instead of a uuid; only written to export if renamed). */
+  #freshId(base: string): string {
+    const ids = new Set(this.doc?.paths.map((p) => p.id) ?? []);
+    if (!ids.has(base)) return base;
+    let n = 2;
+    while (ids.has(`${base} ${n}`)) n++;
+    return `${base} ${n}`;
   }
 
   // --- derived selection state -------------------------------------------
@@ -405,7 +415,7 @@ class DocumentStore {
     if (i === null || !p) return;
     const eff = { ...(p.attributes ?? {}), ...(p.styleOverride ?? {}) };
     const width = Number(eff["stroke-width"] ?? "1") || 1;
-    const id = crypto.randomUUID();
+    const id = this.#freshId("outline");
     if (this.#apply({ type: "outlineStroke", path: i, width, id })) {
       this.commit();
       this.selectPath((this.doc?.paths.length ?? 1) - 1);
@@ -415,7 +425,7 @@ class DocumentStore {
   /** Combine the selected paths with a boolean op — replaces them with one result path. */
   booleanOp(op: "union" | "intersect" | "subtract" | "exclude"): void {
     if (this.selectedPaths.length < 2) return;
-    const id = crypto.randomUUID();
+    const id = this.#freshId(op);
     if (this.#apply({ type: "booleanOp", op, paths: [...this.selectedPaths], id })) {
       this.commit();
       this.selectPath((this.doc?.paths.length ?? 1) - 1); // the appended result
@@ -717,7 +727,7 @@ class DocumentStore {
     ];
     this.#apply({
       type: "addPath",
-      id: crypto.randomUUID(),
+      id: this.#freshId("path"),
       subpaths,
       attributes: { ...tools.newStyle },
     });
@@ -749,7 +759,7 @@ class DocumentStore {
     const pathIndex = this.doc.paths.length;
     this.#apply({
       type: "addShape",
-      id: crypto.randomUUID(),
+      id: this.#freshId(spec.shape === "rect" ? "rectangle" : spec.shape),
       spec,
       attributes: { ...tools.newStyle },
     });
@@ -767,7 +777,7 @@ class DocumentStore {
     const attributes = p.added
       ? { ...(p.attributes ?? {}) }
       : { ...(p.attributes ?? {}), ...(p.styleOverride ?? {}) };
-    this.#clipboard = { subpaths: clone(p.subpaths), attributes };
+    this.#clipboard = { subpaths: clone(p.subpaths), attributes, name: p.id };
   }
 
   paste(): void {
@@ -777,7 +787,7 @@ class DocumentStore {
     const pathIndex = this.doc.paths.length;
     this.#apply({
       type: "addPath",
-      id: crypto.randomUUID(),
+      id: this.#freshId(`${this.#clipboard.name} copy`),
       subpaths,
       attributes: { ...this.#clipboard.attributes },
     });
