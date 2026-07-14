@@ -70,6 +70,29 @@ test("draws a rectangle with the rect shape tool", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("the command palette opens and runs an action", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "new drawing" }).click();
+
+  await page.keyboard.press("Meta+k");
+  const dialog = page.getByRole("dialog", { name: "Command palette" });
+  await expect(dialog).toBeVisible();
+  await page.locator(".palette .q").fill("fit");
+  await page.keyboard.press("Enter");
+  await expect(dialog).toBeHidden();
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("clicking a filled shape's interior selects it (fill hit-test)", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

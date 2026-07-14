@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CommandPalette from "$lib/components/CommandPalette.svelte";
   import EditorCanvas from "$lib/components/EditorCanvas.svelte";
   import FileList from "$lib/components/FileList.svelte";
   import ImportDialog from "$lib/components/ImportDialog.svelte";
@@ -16,6 +17,7 @@
 
   let pasteOpen = $state(false);
   let settingsOpen = $state(false);
+  let paletteOpen = $state(false);
   let dragging = $state(false);
   let fileInput = $state<HTMLInputElement | null>(null);
 
@@ -42,13 +44,16 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (pasteOpen || settingsOpen || typing(e.target)) return;
+    if (pasteOpen || settingsOpen || paletteOpen || typing(e.target)) return;
 
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.toLowerCase();
 
     if (mod) {
-      if (k === "z") {
+      if (k === "k") {
+        e.preventDefault();
+        paletteOpen = true;
+      } else if (k === "z") {
         e.preventDefault();
         if (e.shiftKey) editor.redo();
         else editor.undo();
@@ -206,6 +211,7 @@
 
 <ImportDialog open={pasteOpen} onClose={() => (pasteOpen = false)} />
 <SettingsDialog open={settingsOpen} onClose={() => (settingsOpen = false)} />
+<CommandPalette bind:open={paletteOpen} />
 
 <input
   class="hidden-file"
