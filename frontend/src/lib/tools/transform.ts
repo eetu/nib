@@ -78,6 +78,24 @@ export function boxCenter(bb: Bounds): Point {
   return { x: (bb.minX + bb.maxX) / 2, y: (bb.minY + bb.maxY) / 2 };
 }
 
+/** Shear a reference geometry about `pivot` by factors (kx, ky) — kx = tan(skewX),
+ *  ky = tan(skewY). Returns fresh subpaths (does not mutate the reference). */
+export function shearSubpaths(ref: Subpath[], pivot: Point, kx: number, ky: number): Subpath[] {
+  const at = (p: Point): Point => ({
+    x: p.x + kx * (p.y - pivot.y),
+    y: p.y + ky * (p.x - pivot.x),
+  });
+  return ref.map((sp) => ({
+    closed: sp.closed,
+    nodes: sp.nodes.map((n): PathNode => ({
+      type: n.type,
+      point: at(n.point),
+      handleIn: n.handleIn ? at(n.handleIn) : undefined,
+      handleOut: n.handleOut ? at(n.handleOut) : undefined,
+    })),
+  }));
+}
+
 /** Rotate a reference geometry about `pivot` by `angle` radians, returning fresh subpaths
  *  (does not mutate the reference). */
 export function rotateSubpaths(ref: Subpath[], pivot: Point, angle: number): Subpath[] {
