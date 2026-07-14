@@ -121,6 +121,12 @@
     const s = Math.sin(t) / 2;
     editor.setGradient({ ...grad, x1: 0.5 - c, y1: 0.5 - s, x2: 0.5 + c, y2: 0.5 + s });
   }
+
+  // Radial gradient centre / radius (objectBoundingBox fractions).
+  function setRadial(key: "cx" | "cy" | "r", v: number) {
+    if (!grad || !Number.isFinite(v)) return;
+    editor.setGradient({ ...grad, [key]: v });
+  }
 </script>
 
 <div class="paint">
@@ -187,6 +193,40 @@
         </label>
       {/if}
     </div>
+    {#if grad.kind === "radial"}
+      <div class="radial">
+        <label
+          >cx <input
+            type="number"
+            min="0"
+            max="1"
+            step="0.05"
+            value={grad.cx}
+            onchange={(e) => setRadial("cx", Number(e.currentTarget.value))}
+          /></label
+        >
+        <label
+          >cy <input
+            type="number"
+            min="0"
+            max="1"
+            step="0.05"
+            value={grad.cy}
+            onchange={(e) => setRadial("cy", Number(e.currentTarget.value))}
+          /></label
+        >
+        <label
+          >r <input
+            type="number"
+            min="0"
+            max="2"
+            step="0.05"
+            value={grad.r}
+            onchange={(e) => setRadial("r", Number(e.currentTarget.value))}
+          /></label
+        >
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -310,5 +350,26 @@
 
   .angle input {
     width: 52px;
+  }
+
+  .radial {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+  }
+
+  .radial label {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: 4px;
+    color: var(--halo-text-muted);
+    font-size: 12px;
+  }
+
+  .radial input {
+    width: 100%;
+    min-width: 0;
   }
 </style>
