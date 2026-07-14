@@ -9,13 +9,17 @@ blocks. See the `nib-design` skill for the brand delta.
 ## Structure
 
 ```
-src/lib/model/      pure-TS document model: types, geometry, path <-> d walker,
-                    document parse/serialize (svg-pathdata + DOMParser), shapes (ellipse)
-src/lib/snap/       snap engine (nearest anchor, close-loop detection, grid)
+src/lib/core/       thin wrapper around the nib-core WASM engine (one-time init +
+                    the Editor handle); the authoritative model/ops/geometry/undo
+                    live in the Rust core (../core), not here
+src/lib/model/      TRANSITIONAL: a parallel TS copy (types, geometry, path <-> d,
+                    parse/serialize, shapes) kept as pure render/geometry helpers
+                    for the tools + canvas until the A5b cleanup migrates them
+src/lib/snap/       TRANSITIONAL: TS snap helpers the tools use (mirrored in core)
 src/lib/canvas/     gesture statechart (XState) — idle / panning / dragging
 src/lib/tools/      pluggable editing tools + hit-testing (select / pen / circle / add / delete)
 src/lib/workspace/  File System Access API wrappers + fallbacks
-src/lib/stores/     rune stores: document (+history), viewport, tool, workspace, interaction, settings (theme + canvas bg)
+src/lib/stores/     rune stores: document (a facade over the WASM Editor), viewport, tool, workspace, interaction, settings (theme + canvas bg)
 src/lib/components/ EditorCanvas, Overlay, ToolRail, Inspector, ColorInput, TopBar, SourceView, FileList, ImportDialog, SettingsDialog, Wordmark
 src/routes/         +layout (tokens + global control base), +page (composition root)
 ```

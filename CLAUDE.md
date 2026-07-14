@@ -6,32 +6,43 @@ save back. The LLM roughs out the shape; nib does the last-5% by-hand tuning
 that prose can't. Sibling in eetu's homebrew family ([halo](../halo),
 [ocular](../ocular), [scribe](../scribe)) — shares the halo-design system.
 
-**Frontend-only, and staying that way.** A fully client-side SvelteKit SPA:
-nothing needs a server but serving the built files, and the app reads/writes the
-user's own files via the File System Access API. The **live demo** is a static
-build on **GitHub Pages** (`.github/workflows/pages.yaml` → https://eetu.github.io/nib/).
-Even if a rust-axum serve-shell + raspi deploy is added later, nib stays
-**SPA-only** — the backend would just be another way to serve the same `dist/`
-(the SPA already builds there with `fallback: index.html`, the family backend
-contract), not a place logic migrates to. Any future server bits (e.g. a folder
-API) are additive, never a rewrite of the client.
+**A Rust/WASM core + a SvelteKit SPA.** The editing engine — document model,
+operation vocabulary + reducer, geometry, parse/serialize, snapping, undo history
+— lives in a Rust crate (`core/`, `nib-core`) compiled to **WASM**. The SPA is the
+view + interaction layer over it: the `document` store is a thin facade that drives
+the WASM `Editor` with **ops** and mirrors its `state()` back into Svelte runes.
+One engine, so the *same* core runs native on a later backend. Today nib is still
+fully client-side: it reads/writes the user's own files via the File System Access
+API, and the **live demo** is a static build on **GitHub Pages**
+(`.github/workflows/pages.yaml` → https://eetu.github.io/nib/) with
+`fallback: index.html` (the family backend contract). A backend — persistence +
+realtime sync + an MCP tool surface, all running the same core — is a planned,
+*additive* track (see the roadmap); the SPA stays the editor, never a place logic
+migrates out of.
 
 ## Layout
 
 ```
-frontend/         SvelteKit (Svelte 5 runes) + Vite SPA, adapter-static → dist/
+core/             Rust nib-core engine → WASM (browser) + native (later backend):
+                  model, ops + reducer, geometry, parse/serialize, snap, undo
+frontend/         SvelteKit (Svelte 5 runes) + Vite SPA, adapter-static → dist/;
+                  consumes core/pkg (wasm-pack output) via a link: dep
 .claude/skills/   nib-design skill (glyph, wordmark, layout, voice)
-justfile          task runner (just dev / build / validate / test)
+justfile          task runner (just dev / build / validate / test / test-e2e)
 ```
 
 Per-area detail in `frontend/CLAUDE.md`.
 
 ## Conventions (the load-bearing invariants)
 
-- **Model is pure TS, framework-free** (`frontend/src/lib/model`). Paths
-  normalize to absolute cubic-bezier anchor nodes (M/L/H/V/C/S/Q/T/A all fold in
-  via `svg-pathdata`); this is what makes the core testable and the editor
-  growable.
+- **Model + ops + geometry live in the Rust core** (`core/src`, `nib-core`),
+  compiled to WASM. Paths normalize to absolute cubic-bezier anchor nodes
+  (M/L/H/V/C/S/Q/T/A fold in via `kurbo::BezPath::from_svg`, quads elevated to
+  cubics); every edit is an `Op` applied by a pure reducer, and the Svelte
+  `document` store is a thin facade over the WASM `Editor`. The TS unit tests were
+  ported to `cargo test` as the parity oracle. (A parallel TS copy under
+  `frontend/src/lib/model` + `snap` lingers as pure render/geometry helpers pending
+  the A5b cleanup — the authoritative engine is the Rust core.)
 - **Byte-for-byte preservation.** The original SVG source is kept; on export
   only *edited* paths get their `d` re-serialized (spliced in place). Everything
   else — other elements, attributes, unedited paths — is preserved verbatim.
@@ -115,8 +126,13 @@ Per-area detail in `frontend/CLAUDE.md`.
 
 ## Working on this repo
 
+- **Toolchain:** Rust + `wasm-pack` (`cargo install wasm-pack`) + the
+  `wasm32-unknown-unknown` target, alongside Node/yarn. The core builds to WASM via
+  `just build-core` (wasm-pack → `core/pkg`), which `dev`/`build`/`install` run
+  first so the frontend's `link:` dep resolves.
 - Dev: `just dev` (or `cd frontend && yarn dev`) → http://localhost:5173.
-- Validate: `just validate` (typecheck + lint + format). Tests: `just test`.
+- Validate: `just validate` (typecheck + lint + format). Tests: `just test`
+  (`cargo test` + vitest); `just test-e2e` (Playwright browser smoke).
 - Yarn is the repo-vendored release (no corepack); recipes invoke it via node.
 - **Pages deploy:** a project page lives under `/nib/`, so the Pages build sets
   `BASE_PATH=/nib` (→ `paths.base` in `svelte.config.js`); dev + any future
@@ -128,11 +144,23 @@ Per-area detail in `frontend/CLAUDE.md`.
   Access API). Fallbacks work everywhere: paste text / open single file / download.
 - Hooks: `./install-hooks.sh` once (frontend lint+format pre-commit).
 
-## Out of scope (Phase 0 — deliberately not built)
+## Roadmap (post-Phase-0)
 
-Stroke cap/join/dash controls, a shapes flyout in the rail (when shape count
-grows), other shape primitives (rect, polygon, line), boolean ops, rotate/skew
-transforms (scale is built), multi-select, layers/groups, gradients, and a
-server backend (hosting is done — the static Pages demo). The
-`added`/`attributes` model + pluggable tools + grouped rail are shaped to absorb
-these. If a feature crosses into those areas, raise it before building.
+There is an approved roadmap to grow nib to a pro-tier vector editor on the
+Rust/WASM core. **Phase A (this: the core-first rewrite) has landed** — model,
+ops, geometry, parse/serialize, snap, and undo are in `nib-core`, and the live app
+runs on it. Still ahead, building on that foundation:
+
+- **Phase B (client-side pro pillars):** stroke cap/join/dash + fill-rule UI,
+  rect/line/polygon/star primitives + a shapes flyout, numeric-precision inspector,
+  multi-select + marquee + align/distribute, rotate/skew about a movable pivot,
+  boolean ops + offset/outline/simplify (Rust geometry kernel), smart guides,
+  gradients, command palette.
+- **Phase C (additive, flag-gated):** rust-axum backend running the same core —
+  op-log-over-WebSocket sync + an MCP tool surface (the op vocabulary *is* the
+  surface). Browser-only build stays fully functional.
+- **Phase D (gated):** layers/groups tree.
+
+The `added`/`attributes` model + op vocabulary + pluggable tools + grouped rail are
+shaped to absorb these. If a feature crosses into an unbuilt area, check the
+roadmap and raise scope before building.
