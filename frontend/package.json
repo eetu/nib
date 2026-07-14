@@ -13,11 +13,13 @@
     "format:fix": "prettier --write src",
     "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "validate": "yarn typecheck && yarn lint && yarn format",
     "prepare": "svelte-kit sync || echo ''"
   },
   "devDependencies": {
     "@anarkisti/eslint-config": "^1.1.0",
+    "@playwright/test": "^1.61.1",
     "@sveltejs/adapter-static": "^3.0.10",
     "@sveltejs/kit": "^2.63.0",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",

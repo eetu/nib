@@ -40,7 +40,11 @@ pub enum Op {
         to: Point,
     },
     /// Set a node's corner/smooth type.
-    SetNodeType { node: NodeRef, node_type: NodeType },
+    SetNodeType {
+        node: NodeRef,
+        #[serde(rename = "nodeType")]
+        node_type: NodeType,
+    },
     /// Pen drag: shape the anchor into a smooth node with mirrored handles about `out`.
     SetPenHandles { node: NodeRef, out: Point },
 

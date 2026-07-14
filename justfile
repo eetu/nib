@@ -39,6 +39,10 @@ validate:
 test: test-core
     cd frontend && node .yarn/releases/yarn-*.cjs test
 
+# Browser smoke tests (Playwright) — drives the real app against a production build.
+test-e2e: build
+    cd frontend && node .yarn/releases/yarn-*.cjs test:e2e
+
 # Autofix lint + format.
 fix:
     cd frontend && node .yarn/releases/yarn-*.cjs lint:fix && node .yarn/releases/yarn-*.cjs format:fix

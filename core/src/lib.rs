@@ -162,6 +162,19 @@ impl Editor {
         });
     }
 
+    /// Replace the whole document from a serialized `SvgDocument` — used to rehydrate a
+    /// persisted session, which stores the *edited* model, not just the source string.
+    #[wasm_bindgen(js_name = setDocument)]
+    pub fn set_document(&mut self, doc: JsValue) -> Result<(), JsValue> {
+        let doc: SvgDocument = serde_wasm_bindgen::from_value(doc)?;
+        self.doc = Some(doc);
+        self.selection = None;
+        self.selected_path = None;
+        self.dirty = false;
+        self.history.reset(self.snapshot());
+        Ok(())
+    }
+
     /// Apply one serialized `Op` as a live edit (no commit). Returns whether it mutated.
     #[wasm_bindgen(js_name = applyOp)]
     pub fn apply_op(&mut self, op: JsValue) -> Result<bool, JsValue> {

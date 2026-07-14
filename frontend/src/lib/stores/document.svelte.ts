@@ -1,7 +1,5 @@
-import { parseSvg, serializeSvg } from "$lib/model/document";
-import { distance, normalize } from "$lib/model/geometry";
-import { closeSubpath, insertNodeAt, reversedSubpath } from "$lib/model/path";
-import { ellipseNodes, ellipseSubpath } from "$lib/model/shapes";
+import { Editor as WasmEditor } from "$lib/core";
+import { ellipseSubpath } from "$lib/model/shapes";
 import type {
   NodeRef,
   NodeType,
@@ -13,13 +11,8 @@ import type {
 } from "$lib/model/types";
 import { debounce, loadState, saveState } from "$lib/persistence";
 
-import { History } from "./history.svelte";
 import { tools } from "./tool.svelte";
 
-type Snapshot = { paths: PathElement[]; selection: NodeRef | null; selectedPath: number | null };
-
-/** The persisted editing session — survives HMR / reload via the persistence
- *  layer. The undo stack is intentionally not persisted (it resets on reload). */
 type Session = {
   doc: SvgDocument | null;
   selection: NodeRef | null;
@@ -28,19 +21,21 @@ type Session = {
   fileName: string | null;
 };
 
+/** The shape of `WasmEditor.state()` — a full render snapshot pulled after each mutation. */
+type CoreState = {
+  document: SvgDocument | null;
+  selection: NodeRef | null;
+  selectedPath: number | null;
+  canUndo: boolean;
+  canRedo: boolean;
+};
+
+type Clipboard = { subpaths: Subpath[]; attributes: Record<string, string> };
+
 const SESSION_KEY = "session";
 
-const BLANK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">\n</svg>`;
-
-// The model is pure JSON-safe data (numbers/strings/booleans, optional handles
-// simply absent), so a JSON round-trip is a reliable deep clone — and unlike
-// structuredClone it sees straight through Svelte's $state proxies.
-function clonePaths(paths: PathElement[]): PathElement[] {
-  return JSON.parse(JSON.stringify(paths)) as PathElement[];
-}
-
-function cloneSubpaths(subpaths: Subpath[]): Subpath[] {
-  return JSON.parse(JSON.stringify(subpaths)) as Subpath[];
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function offsetSubpaths(subpaths: Subpath[], dx: number, dy: number): void {
@@ -53,25 +48,30 @@ function offsetSubpaths(subpaths: Subpath[], dx: number, dy: number): void {
   }
 }
 
-type Clipboard = { subpaths: Subpath[]; attributes: Record<string, string> };
-
 /**
- * The central editor state: the parsed document, the current selection, and
- * the mutation surface the tools drive. Mutations change the model live (so a
- * drag updates the canvas continuously); the tool calls `commit()` once at the
- * end of a gesture to record a single undo step.
+ * The editor's Svelte-facing facade. The authoritative document, geometry, ops, and undo
+ * history all live in the Rust/WASM `nib-core` Editor; this store is a thin reactive mirror:
+ * every method translates a call into one or more core **ops**, applies them to the WASM
+ * engine, then pulls a fresh render snapshot into `$state` so the canvas + panels re-render.
+ *
+ * The public surface is unchanged from the old pure-TS store, so tools and components did
+ * not have to change — only the internals now delegate to the core.
  */
 class DocumentStore {
+  #wasm: WasmEditor | null = null;
+
+  // Reactive mirror of the WASM state, refreshed by #sync() after each mutation.
   doc = $state<SvgDocument | null>(null);
   selection = $state<NodeRef | null>(null);
-  /** The path the inspector styles/targets. A selected node implies its path. */
   selectedPath = $state<number | null>(null);
-  /** Unsaved changes since the last load/save — the workspace layer reads it. */
+  #canUndo = $state(false);
+  #canRedo = $state(false);
+  /** Unsaved changes since the last load/save — owned here (not mirrored) so a rehydrated
+   *  dirty session survives selection changes. */
   dirty = $state(false);
-  /** Display name of the loaded document (its file name, "pasted.svg", etc.). */
   fileName = $state<string | null>(null);
 
-  #history = new History<Snapshot>();
+  #clipboard: Clipboard | null = null;
   #persist = debounce(() => {
     saveState<Session>(SESSION_KEY, {
       doc: this.doc,
@@ -82,21 +82,46 @@ class DocumentStore {
     });
   }, 300);
 
-  constructor() {
-    // Rehydrate the last session so a code reload / refresh keeps your work.
+  /** Bring the WASM engine online and rehydrate the last session. Must run after the core
+   *  module is initialised (see +layout). Safe to call more than once. */
+  init(): void {
+    if (this.#wasm) return;
+    this.#wasm = new WasmEditor();
     const s = loadState<Session>(SESSION_KEY);
     if (s?.doc) {
-      this.doc = s.doc;
-      this.selection = s.selection;
-      this.selectedPath = s.selectedPath ?? null;
-      this.dirty = s.dirty;
-      this.fileName = s.fileName;
-      this.#history.reset(this.#snapshot());
+      try {
+        this.#wasm.setDocument(s.doc);
+        if (s.selection) this.#wasm.select(s.selection);
+        else if (s.selectedPath != null) this.#wasm.selectPath(s.selectedPath);
+        this.fileName = s.fileName;
+        this.#sync();
+        this.dirty = s.dirty; // after #sync (which doesn't touch dirty)
+      } catch {
+        // A corrupt / incompatible persisted session: start empty rather than crash.
+        this.#wasm.clear();
+        this.#sync();
+      }
     }
   }
 
-  /** The path the inspector targets: the selected node's path (always fresh),
-   *  else an explicit path selection (PATHS row / path-body click). */
+  /** Pull the render snapshot from the core into the reactive mirror (not `dirty`). */
+  #sync(): void {
+    if (!this.#wasm) return;
+    const st = this.#wasm.state() as CoreState;
+    this.doc = st.document ?? null;
+    this.selection = st.selection ?? null;
+    this.selectedPath = st.selectedPath ?? null;
+    this.#canUndo = st.canUndo;
+    this.#canRedo = st.canRedo;
+  }
+
+  /** Apply one op to the core (live edit, no commit). Returns whether it mutated. */
+  #apply(op: unknown): boolean {
+    return this.#wasm ? this.#wasm.applyOp(op) : false;
+  }
+
+  // --- derived selection state -------------------------------------------
+
   get selectedPathIndex(): number | null {
     return this.selection ? this.selection.pathIndex : this.selectedPath;
   }
@@ -106,57 +131,63 @@ class DocumentStore {
     return i !== null ? (this.doc?.paths[i] ?? null) : null;
   }
 
-  /** A whole-path (object) selection with no node picked — the state that shows
-   *  the transform box. A node selection is "node editing" (no box). */
   get objectSelected(): boolean {
     return this.selection === null && this.selectedPath !== null;
-  }
-
-  get canUndo(): boolean {
-    return this.#history.canUndo;
-  }
-  get canRedo(): boolean {
-    return this.#history.canRedo;
-  }
-
-  get hasDocument(): boolean {
-    return this.doc !== null;
   }
 
   get selectedNode(): PathNode | null {
     return this.selection ? this.#nodeAt(this.selection) : null;
   }
 
-  /** Replace the document from SVG source. Throws if the source won't parse. */
+  get canUndo(): boolean {
+    return this.#canUndo;
+  }
+  get canRedo(): boolean {
+    return this.#canRedo;
+  }
+  get hasDocument(): boolean {
+    return this.doc !== null;
+  }
+  get canPaste(): boolean {
+    return this.#clipboard !== null;
+  }
+
+  #nodeAt(ref: NodeRef): PathNode | null {
+    return this.doc?.paths[ref.pathIndex]?.subpaths[ref.subpathIndex]?.nodes[ref.nodeIndex] ?? null;
+  }
+
+  // --- lifecycle ---------------------------------------------------------
+
+  /** Replace the document from SVG source. Throws (leaving the doc untouched) if it won't
+   *  parse — the SOURCE drawer relies on this fail-safe. */
   load(source: string, name: string | null = null): void {
-    this.doc = parseSvg(source);
-    this.selection = null;
-    this.selectedPath = null;
-    this.dirty = false;
+    if (!this.#wasm) return;
+    this.#wasm.load(source); // throws on bad markup, before mutating
     this.fileName = name;
-    this.#history.reset(this.#snapshot());
+    this.dirty = false;
+    this.#sync();
     this.#persist();
   }
 
   clear(): void {
-    this.doc = null;
-    this.selection = null;
-    this.selectedPath = null;
-    this.dirty = false;
+    this.#wasm?.clear();
     this.fileName = null;
-    this.#history.reset({ paths: [], selection: null, selectedPath: null });
+    this.dirty = false;
+    this.#sync();
     this.#persist();
   }
 
   /** Create an empty document to draw on if none is loaded. No-op otherwise. */
   ensureBlank(): void {
     if (this.doc) return;
-    this.load(BLANK_SVG, "drawing.svg");
+    this.#wasm?.ensureBlank();
+    this.#sync();
+    this.#persist();
   }
 
-  /** Current document serialized back to SVG (unedited markup preserved). */
+  /** Current document serialized back to SVG (unedited markup preserved byte-for-byte). */
   toSvg(): string {
-    return this.doc ? serializeSvg(this.doc) : "";
+    return this.#wasm?.toSvg() ?? "";
   }
 
   markSaved(): void {
@@ -164,140 +195,240 @@ class DocumentStore {
     this.#persist();
   }
 
-  /** Select a node (implies selecting its path). */
+  // --- selection ---------------------------------------------------------
+
   select(ref: NodeRef | null): void {
-    this.selection = ref;
-    if (ref) this.selectedPath = ref.pathIndex;
+    this.#wasm?.select(ref);
+    this.#sync();
     this.#persist();
   }
 
-  /** Select a whole path with no node (e.g. clicking its body / a PATHS row). */
   selectPath(pathIndex: number | null): void {
-    this.selectedPath = pathIndex;
-    this.selection = null;
+    this.#wasm?.selectPath(pathIndex ?? undefined);
+    this.#sync();
     this.#persist();
   }
 
-  /** Clear both path and node selection. */
   deselect(): void {
-    this.selection = null;
-    this.selectedPath = null;
+    this.#wasm?.deselect();
+    this.#sync();
     this.#persist();
-  }
-
-  /** Set/clear one presentation attribute on any path. Drawn paths edit their
-   *  own attributes; imported paths accumulate a styleOverride merged into the
-   *  source tag on export. Commits. */
-  setPathStyle(pathIndex: number, key: string, value: string | null): void {
-    const p = this.doc?.paths[pathIndex];
-    if (!p) return;
-    if (p.added) {
-      const attrs = { ...(p.attributes ?? {}) };
-      if (value === null) delete attrs[key];
-      else attrs[key] = value;
-      p.attributes = attrs;
-    } else {
-      const over = { ...(p.styleOverride ?? {}) };
-      if (value === null) delete over[key];
-      else over[key] = value;
-      p.styleOverride = over;
-    }
-    this.commit();
   }
 
   // --- gesture lifecycle -------------------------------------------------
 
   /** Record the live-edited state as one undo step. */
   commit(): void {
-    if (!this.doc) return;
+    if (!this.#wasm || !this.doc) return;
+    this.#wasm.commit();
     this.dirty = true;
-    this.#history.commit(this.#snapshot());
+    this.#sync();
     this.#persist();
   }
 
   /** Abandon an in-flight gesture, restoring the last committed state. */
   revert(): void {
-    const prev = this.#history.current();
-    if (prev) this.#restore(prev);
+    this.#wasm?.revert();
+    this.#sync();
   }
 
   undo(): void {
-    const s = this.#history.undo();
-    if (s) {
-      this.#restore(s);
+    if (this.#wasm?.undo()) {
       this.dirty = true;
+      this.#sync();
       this.#persist();
     }
   }
 
   redo(): void {
-    const s = this.#history.redo();
-    if (s) {
-      this.#restore(s);
+    if (this.#wasm?.redo()) {
       this.dirty = true;
+      this.#sync();
       this.#persist();
     }
   }
 
+  // --- style -------------------------------------------------------------
+
+  setPathStyle(pathIndex: number, key: string, value: string | null): void {
+    if (this.#apply({ type: "setStyle", path: pathIndex, key, value })) this.commit();
+  }
+
   // --- live mutations (tool drives these; commit at gesture end) ---------
 
-  /** Replace a path's geometry (used by the scale transform). Live. */
   setSubpaths(pathIndex: number, subpaths: Subpath[]): void {
-    const p = this.doc?.paths[pathIndex];
-    if (!p) return;
-    p.subpaths = subpaths;
-    this.#markEdited(pathIndex);
+    this.#apply({ type: "setSubpaths", path: pathIndex, subpaths });
+    this.#sync();
   }
 
-  /** Translate an entire path (all subpaths' nodes + handles) by a delta —
-   *  moving the whole shape. Live (tool commits at gesture end). */
   movePathBy(pathIndex: number, dx: number, dy: number): void {
-    const path = this.doc?.paths[pathIndex];
-    if (!path) return;
-    for (const sp of path.subpaths) {
-      for (const node of sp.nodes) {
-        node.point = { x: node.point.x + dx, y: node.point.y + dy };
-        if (node.handleIn) node.handleIn = { x: node.handleIn.x + dx, y: node.handleIn.y + dy };
-        if (node.handleOut) node.handleOut = { x: node.handleOut.x + dx, y: node.handleOut.y + dy };
-      }
-    }
-    this.#markEdited(pathIndex);
+    this.#apply({ type: "movePathBy", path: pathIndex, dx, dy });
+    this.#sync();
   }
 
-  // --- clipboard + nudge ------------------------------------------------
-
-  #clipboard: Clipboard | null = null;
-
-  get canPaste(): boolean {
-    return this.#clipboard !== null;
+  moveNode(ref: NodeRef, to: Point): void {
+    this.#apply({ type: "moveNode", node: ref, to });
+    this.#sync();
   }
 
-  /** Copy the selected path (its geometry + effective style) to the clipboard. */
+  moveHandle(ref: NodeRef, which: "in" | "out", to: Point): void {
+    this.#apply({ type: "moveHandle", node: ref, which, to });
+    this.#sync();
+  }
+
+  setPenHandles(ref: NodeRef, out: Point): void {
+    this.#apply({ type: "setPenHandles", node: ref, out });
+    this.#sync();
+  }
+
+  reverseSubpath(pathIndex: number, subpathIndex: number): void {
+    this.#apply({ type: "reverseSubpath", path: pathIndex, subpath: subpathIndex });
+    this.#sync();
+  }
+
+  resizeEllipse(
+    pathIndex: number,
+    subpathIndex: number,
+    center: Point,
+    rx: number,
+    ry: number,
+  ): void {
+    this.#apply({ type: "resizeEllipse", path: pathIndex, subpath: subpathIndex, center, rx, ry });
+    this.#sync();
+  }
+
+  // --- committing single actions -----------------------------------------
+
+  setNodeType(ref: NodeRef, type: NodeType): void {
+    if (this.#apply({ type: "setNodeType", node: ref, nodeType: type })) this.commit();
+  }
+
+  setNodePoint(ref: NodeRef, to: Point): void {
+    if (this.#apply({ type: "moveNode", node: ref, to })) this.commit();
+  }
+
+  insertNode(pathIndex: number, subpathIndex: number, segmentIndex: number, t: number): void {
+    if (
+      !this.#apply({
+        type: "insertNode",
+        path: pathIndex,
+        subpath: subpathIndex,
+        segment: segmentIndex,
+        t,
+      })
+    )
+      return;
+    // insert_node_at inserts after the segment's start node → the new node is segment+1.
+    this.#wasm?.select({ pathIndex, subpathIndex, nodeIndex: segmentIndex + 1 });
+    this.commit();
+  }
+
+  deleteNode(ref: NodeRef): void {
+    if (!this.#apply({ type: "deleteNode", node: ref })) return;
+    this.#sync();
+    const path = this.doc?.paths[ref.pathIndex];
+    const emptied = !path || path.deleted;
+    if (emptied) this.#wasm?.deselect();
+    else this.#wasm?.selectPath(ref.pathIndex);
+    this.commit();
+  }
+
+  closeLoop(pathIndex: number, subpathIndex: number): void {
+    if (!this.#apply({ type: "closeLoop", path: pathIndex, subpath: subpathIndex })) return;
+    this.#wasm?.select({ pathIndex, subpathIndex, nodeIndex: 0 });
+    this.commit();
+  }
+
+  closePath(pathIndex: number, subpathIndex: number): void {
+    if (this.#apply({ type: "closePath", path: pathIndex, subpath: subpathIndex })) this.commit();
+  }
+
+  renamePath(pathIndex: number, name: string): void {
+    if (this.#apply({ type: "renamePath", path: pathIndex, name })) this.commit();
+  }
+
+  deletePath(pathIndex: number): void {
+    const wasSelected = this.selectedPathIndex === pathIndex;
+    if (!this.#apply({ type: "deletePath", path: pathIndex })) return;
+    if (wasSelected) this.#wasm?.deselect();
+    this.commit();
+  }
+
+  // --- drawing (pen / circle) --------------------------------------------
+
+  beginPath(point: Point): NodeRef {
+    this.ensureBlank();
+    if (!this.doc || !this.#wasm) return { pathIndex: 0, subpathIndex: 0, nodeIndex: 0 };
+    const pathIndex = this.doc.paths.length;
+    const subpaths: Subpath[] = [
+      { nodes: [{ point: { x: point.x, y: point.y }, type: "corner" }], closed: false },
+    ];
+    this.#apply({
+      type: "addPath",
+      id: crypto.randomUUID(),
+      subpaths,
+      attributes: { ...tools.newStyle },
+    });
+    const ref = { pathIndex, subpathIndex: 0, nodeIndex: 0 };
+    this.#wasm.select(ref);
+    this.#sync();
+    return ref;
+  }
+
+  appendNode(pathIndex: number, subpathIndex: number, point: Point): NodeRef {
+    const before = this.doc?.paths[pathIndex]?.subpaths[subpathIndex]?.nodes.length ?? 0;
+    this.#apply({
+      type: "appendNode",
+      path: pathIndex,
+      subpath: subpathIndex,
+      point: { x: point.x, y: point.y },
+    });
+    const ref = { pathIndex, subpathIndex, nodeIndex: before };
+    this.#wasm?.select(ref);
+    this.#sync();
+    return ref;
+  }
+
+  beginEllipse(center: Point): NodeRef {
+    this.ensureBlank();
+    if (!this.doc || !this.#wasm) return { pathIndex: 0, subpathIndex: 0, nodeIndex: 0 };
+    const pathIndex = this.doc.paths.length;
+    const subpaths: Subpath[] = [ellipseSubpath(center.x, center.y, 0, 0)];
+    this.#apply({
+      type: "addPath",
+      id: crypto.randomUUID(),
+      subpaths,
+      attributes: { ...tools.newStyle },
+    });
+    const ref = { pathIndex, subpathIndex: 0, nodeIndex: 0 };
+    this.#wasm.select(ref);
+    this.#sync();
+    return ref;
+  }
+
+  // --- clipboard + nudge -------------------------------------------------
+
   copySelected(): void {
     const p = this.selectedPathElement;
     if (!p) return;
     const attributes = p.added
       ? { ...(p.attributes ?? {}) }
       : { ...(p.attributes ?? {}), ...(p.styleOverride ?? {}) };
-    this.#clipboard = { subpaths: cloneSubpaths(p.subpaths), attributes };
+    this.#clipboard = { subpaths: clone(p.subpaths), attributes };
   }
 
-  /** Paste the clipboard as a new drawn path, offset so it's visible. Commits. */
   paste(): void {
-    if (!this.#clipboard || !this.doc) return;
-    const subpaths = cloneSubpaths(this.#clipboard.subpaths);
+    if (!this.#clipboard || !this.doc || !this.#wasm) return;
+    const subpaths = clone(this.#clipboard.subpaths);
     offsetSubpaths(subpaths, 10, 10);
     const pathIndex = this.doc.paths.length;
-    this.doc.paths.push({
+    this.#apply({
+      type: "addPath",
       id: crypto.randomUUID(),
-      index: pathIndex,
-      originalD: "",
       subpaths,
-      edited: true,
-      added: true,
       attributes: { ...this.#clipboard.attributes },
     });
-    this.select({ pathIndex, subpathIndex: 0, nodeIndex: 0 });
+    this.#wasm.select({ pathIndex, subpathIndex: 0, nodeIndex: 0 });
     this.commit();
   }
 
@@ -313,11 +444,9 @@ class DocumentStore {
     this.deletePath(i);
   }
 
-  /** Nudge the selected node, or the whole selected path if only a path is
-   *  selected. Commits. */
   nudge(dx: number, dy: number): void {
     if (this.selection) {
-      const node = this.#nodeAt(this.selection);
+      const node = this.selectedNode;
       if (node) {
         this.moveNode(this.selection, { x: node.point.x + dx, y: node.point.y + dy });
         this.commit();
@@ -326,259 +455,6 @@ class DocumentStore {
       this.movePathBy(this.selectedPath, dx, dy);
       this.commit();
     }
-  }
-
-  // --- node / handle mutations (tool drives these; commit at gesture end) --
-
-  /** Move an anchor, carrying its handles along by the same delta. */
-  moveNode(ref: NodeRef, to: Point): void {
-    const node = this.#nodeAt(ref);
-    if (!node) return;
-    const dx = to.x - node.point.x;
-    const dy = to.y - node.point.y;
-    node.point = { x: to.x, y: to.y };
-    if (node.handleIn) node.handleIn = { x: node.handleIn.x + dx, y: node.handleIn.y + dy };
-    if (node.handleOut) node.handleOut = { x: node.handleOut.x + dx, y: node.handleOut.y + dy };
-    this.#markEdited(ref.pathIndex);
-  }
-
-  /** Move one control handle. Smooth nodes keep the opposite handle collinear
-   *  (mirrored direction, its own length preserved). */
-  moveHandle(ref: NodeRef, which: "in" | "out", to: Point): void {
-    const node = this.#nodeAt(ref);
-    if (!node) return;
-    if (which === "out") node.handleOut = { x: to.x, y: to.y };
-    else node.handleIn = { x: to.x, y: to.y };
-
-    if (node.type === "smooth") {
-      const opposite = node[which === "out" ? "handleIn" : "handleOut"];
-      if (opposite) {
-        const len = distance(node.point, opposite);
-        const dir = normalize({
-          x: node.point.x - to.x,
-          y: node.point.y - to.y,
-        });
-        const mirrored = {
-          x: node.point.x + dir.x * len,
-          y: node.point.y + dir.y * len,
-        };
-        if (which === "out") node.handleIn = mirrored;
-        else node.handleOut = mirrored;
-      }
-    }
-    this.#markEdited(ref.pathIndex);
-  }
-
-  setNodeType(ref: NodeRef, type: NodeType): void {
-    const node = this.#nodeAt(ref);
-    if (!node) return;
-    node.type = type;
-    this.#markEdited(ref.pathIndex);
-    this.commit();
-  }
-
-  /** Directly set an anchor's position (inspector numeric input). Commits. */
-  setNodePoint(ref: NodeRef, to: Point): void {
-    this.moveNode(ref, to);
-    this.commit();
-  }
-
-  // --- structural mutations (single actions; each commits) ---------------
-
-  insertNode(pathIndex: number, subpathIndex: number, segmentIndex: number, t: number): void {
-    const sp = this.#subpathAt(pathIndex, subpathIndex);
-    if (!sp) return;
-    const newIndex = insertNodeAt(sp, segmentIndex, t);
-    this.#markEdited(pathIndex);
-    this.selection = { pathIndex, subpathIndex, nodeIndex: newIndex };
-    this.commit();
-  }
-
-  deleteNode(ref: NodeRef): void {
-    const sp = this.#subpathAt(ref.pathIndex, ref.subpathIndex);
-    if (!sp || ref.nodeIndex < 0 || ref.nodeIndex >= sp.nodes.length) return;
-    sp.nodes.splice(ref.nodeIndex, 1);
-    // A subpath needs >= 2 nodes to draw; drop it otherwise.
-    const path = this.doc?.paths[ref.pathIndex];
-    if (path && sp.nodes.length < 2) {
-      path.subpaths.splice(ref.subpathIndex, 1);
-    }
-    // A path with no subpaths left is empty — soft-delete it (drops from the
-    // list/render/export; undo restores it).
-    const emptied = !!path && path.subpaths.length === 0;
-    if (path && emptied) path.deleted = true;
-    this.selection = null;
-    this.selectedPath = emptied ? null : ref.pathIndex; // keep the path selected unless it's gone
-    this.#markEdited(ref.pathIndex);
-    this.commit();
-  }
-
-  /** Close a subpath's loop by merging its endpoint onto its start (the
-   *  close-by-snap gesture). Commits. */
-  closeLoop(pathIndex: number, subpathIndex: number): void {
-    const sp = this.#subpathAt(pathIndex, subpathIndex);
-    if (!sp || sp.closed || sp.nodes.length < 2) return;
-    // snap the last node exactly onto the first, then close (folds the seam)
-    const first = sp.nodes[0];
-    const last = sp.nodes[sp.nodes.length - 1];
-    last.point = { ...first.point };
-    if (last.handleOut) last.handleOut = { ...last.handleOut };
-    closeSubpath(sp);
-    this.#markEdited(pathIndex);
-    this.selection = { pathIndex, subpathIndex, nodeIndex: 0 };
-    this.commit();
-  }
-
-  // --- drawing (pen tool) ------------------------------------------------
-
-  /** Start a new drawn path with a first anchor at `point`. Returns its ref.
-   *  Not committed until the pen gesture releases. */
-  beginPath(point: Point): NodeRef {
-    this.ensureBlank();
-    const doc = this.doc;
-    if (!doc) return { pathIndex: 0, subpathIndex: 0, nodeIndex: 0 };
-    const pathIndex = doc.paths.length;
-    doc.paths.push({
-      id: crypto.randomUUID(),
-      index: pathIndex,
-      originalD: "",
-      subpaths: [{ nodes: [{ point: { x: point.x, y: point.y }, type: "corner" }], closed: false }],
-      edited: true,
-      added: true,
-      attributes: { ...tools.newStyle },
-    });
-    const ref = { pathIndex, subpathIndex: 0, nodeIndex: 0 };
-    this.selection = ref;
-    return ref;
-  }
-
-  /** Append an anchor to a subpath being drawn. Returns its ref. */
-  appendNode(pathIndex: number, subpathIndex: number, point: Point): NodeRef {
-    const sp = this.#subpathAt(pathIndex, subpathIndex);
-    if (!sp) return { pathIndex, subpathIndex, nodeIndex: 0 };
-    sp.nodes.push({ point: { x: point.x, y: point.y }, type: "corner" });
-    const ref = { pathIndex, subpathIndex, nodeIndex: sp.nodes.length - 1 };
-    this.selection = ref;
-    this.#markEdited(pathIndex);
-    return ref;
-  }
-
-  /** Reverse a subpath's direction so its former start becomes the tail — lets
-   *  the pen resume drawing (appends to the tail) from either open endpoint. */
-  reverseSubpath(pathIndex: number, subpathIndex: number): void {
-    const path = this.doc?.paths[pathIndex];
-    const sp = path?.subpaths[subpathIndex];
-    if (!path || !sp) return;
-    path.subpaths[subpathIndex] = reversedSubpath(sp);
-    this.#markEdited(pathIndex);
-  }
-
-  /** Pen drag: shape the anchor into a smooth node with mirrored handles. */
-  setPenHandles(ref: NodeRef, out: Point): void {
-    const node = this.#nodeAt(ref);
-    if (!node) return;
-    node.handleOut = { x: out.x, y: out.y };
-    node.handleIn = { x: 2 * node.point.x - out.x, y: 2 * node.point.y - out.y };
-    node.type = "smooth";
-    this.#markEdited(ref.pathIndex);
-  }
-
-  /** Start a circle/ellipse as a closed 4-node path centred at `center` (radius
-   *  0). Sized live via resizeEllipse; committed on release. */
-  beginEllipse(center: Point): NodeRef {
-    this.ensureBlank();
-    const doc = this.doc;
-    if (!doc) return { pathIndex: 0, subpathIndex: 0, nodeIndex: 0 };
-    const pathIndex = doc.paths.length;
-    doc.paths.push({
-      id: crypto.randomUUID(),
-      index: pathIndex,
-      originalD: "",
-      subpaths: [ellipseSubpath(center.x, center.y, 0, 0)],
-      edited: true,
-      added: true,
-      attributes: { ...tools.newStyle },
-    });
-    const ref = { pathIndex, subpathIndex: 0, nodeIndex: 0 };
-    this.selection = ref;
-    return ref;
-  }
-
-  /** Resize the ellipse being drawn (live during the drag). */
-  resizeEllipse(
-    pathIndex: number,
-    subpathIndex: number,
-    center: Point,
-    rx: number,
-    ry: number,
-  ): void {
-    const sp = this.#subpathAt(pathIndex, subpathIndex);
-    if (!sp) return;
-    sp.nodes = ellipseNodes(center.x, center.y, rx, ry);
-    sp.closed = true;
-    this.#markEdited(pathIndex);
-  }
-
-  /** Rename a path — updates its display id and (on export) its `id` attr. */
-  renamePath(pathIndex: number, name: string): void {
-    const p = this.doc?.paths[pathIndex];
-    const trimmed = name.trim();
-    if (!p || !trimmed) return;
-    p.id = trimmed;
-    p.renamed = true;
-    this.commit();
-  }
-
-  /** Remove a whole path (soft delete — undoable). Commits. */
-  deletePath(pathIndex: number): void {
-    const p = this.doc?.paths[pathIndex];
-    if (!p) return;
-    p.deleted = true;
-    if (this.selectedPathIndex === pathIndex) {
-      this.selection = null;
-      this.selectedPath = null;
-    }
-    this.commit();
-  }
-
-  /** Close a subpath (connect last→first) without moving any node — the pen's
-   *  "click the start point to finish" gesture. Commits. */
-  closePath(pathIndex: number, subpathIndex: number): void {
-    const sp = this.#subpathAt(pathIndex, subpathIndex);
-    if (!sp || sp.closed || sp.nodes.length < 2) return;
-    closeSubpath(sp);
-    this.#markEdited(pathIndex);
-    this.commit();
-  }
-
-  // --- internals ---------------------------------------------------------
-
-  #nodeAt(ref: NodeRef): PathNode | null {
-    return this.doc?.paths[ref.pathIndex]?.subpaths[ref.subpathIndex]?.nodes[ref.nodeIndex] ?? null;
-  }
-
-  #subpathAt(pathIndex: number, subpathIndex: number): Subpath | null {
-    return this.doc?.paths[pathIndex]?.subpaths[subpathIndex] ?? null;
-  }
-
-  #markEdited(pathIndex: number): void {
-    const p = this.doc?.paths[pathIndex];
-    if (p) p.edited = true;
-  }
-
-  #snapshot(): Snapshot {
-    return {
-      paths: this.doc ? clonePaths(this.doc.paths) : [],
-      selection: this.selection ? { ...this.selection } : null,
-      selectedPath: this.selectedPath,
-    };
-  }
-
-  #restore(s: Snapshot): void {
-    if (!this.doc) return;
-    this.doc.paths = clonePaths(s.paths);
-    this.selection = s.selection ? { ...s.selection } : null;
-    this.selectedPath = s.selectedPath;
   }
 }
 

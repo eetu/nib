@@ -5,15 +5,17 @@
   import { onMount } from "svelte";
 
   import { core_version, initCore } from "$lib/core";
+  import { editor } from "$lib/stores/document.svelte";
   import { settings } from "$lib/stores/settings.svelte";
 
   let { children }: { children: Snippet } = $props();
 
-  // Bring the Rust/WASM core online at boot (client-only; the app is ssr=false), and record
-  // its version as data-core-version on <html> so it's observable in the DOM. The rune
-  // stores take over the Editor handle when they're rewired onto the core (Phase A5).
+  // Bring the Rust/WASM core online at boot (client-only; the app is ssr=false), hand the
+  // engine to the document store (which rehydrates the last session onto it), and record the
+  // core version as data-core-version on <html> so it's observable in the DOM.
   onMount(async () => {
     await initCore();
+    editor.init();
     document.documentElement.dataset.coreVersion = core_version();
   });
 
