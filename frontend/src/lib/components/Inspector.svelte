@@ -8,14 +8,15 @@
   import AlignStartVertical from "@lucide/svelte/icons/align-start-vertical";
   import AlignVerticalDistributeCenter from "@lucide/svelte/icons/align-vertical-distribute-center";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
-  import ChevronUp from "@lucide/svelte/icons/chevron-up";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import Eye from "@lucide/svelte/icons/eye";
   import EyeOff from "@lucide/svelte/icons/eye-off";
-  import Plus from "@lucide/svelte/icons/plus";
+  import Group from "@lucide/svelte/icons/group";
   import Trash2 from "@lucide/svelte/icons/trash-2";
+  import Ungroup from "@lucide/svelte/icons/ungroup";
 
   import { subpathsBounds } from "$lib/model/geometry";
-  import type { NodeType } from "$lib/model/types";
+  import type { Layer, NodeType, PathElement } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
   import { tools } from "$lib/stores/tool.svelte";
   import { scaleSubpaths } from "$lib/tools/transform";
@@ -131,8 +132,40 @@
     editor.commit();
   }
 
-  // Layers shown top-of-stack first (the array is bottom → top), each with its real index.
-  const layersTopFirst = $derived(editor.layers.map((l, i) => ({ l, i })).reverse());
+  // The unified layers list: walk paths in array order, folding a contiguous run of same-group
+  // paths into a group row; loose paths are top-level rows. Reversed so top-of-stack shows
+  // first (later in the array = drawn on top).
+  type Row =
+    | { kind: "path"; p: PathElement; index: number }
+    | { kind: "group"; layer: Layer; items: { p: PathElement; index: number }[] };
+
+  const rows = $derived.by((): Row[] => {
+    const d = doc;
+    if (!d) return [];
+    const out: Row[] = [];
+    const ps = d.paths;
+    for (let idx = 0; idx < ps.length; idx++) {
+      const p = ps[idx];
+      if (p.deleted) continue;
+      const layer = p.layer ? d.layers?.find((l) => l.id === p.layer) : undefined;
+      if (layer) {
+        const items = [{ p, index: idx }];
+        while (idx + 1 < ps.length && !ps[idx + 1].deleted && ps[idx + 1].layer === p.layer) {
+          idx++;
+          items.push({ p: ps[idx], index: idx });
+        }
+        out.push({ kind: "group", layer, items });
+      } else {
+        out.push({ kind: "path", p, index: idx });
+      }
+    }
+    return out.reverse();
+  });
+
+  let collapsed = $state<string[]>([]);
+  function toggleCollapse(id: string) {
+    collapsed = collapsed.includes(id) ? collapsed.filter((x) => x !== id) : [...collapsed, id];
+  }
 
   let renamingLayer = $state<string | null>(null);
   let layerRenameValue = $state("");
@@ -344,158 +377,149 @@
     </section>
   {/if}
 
+  {#snippet pathRow(p: PathElement, index: number, nested: boolean)}
+    <li
+      class="pathrow"
+      class:nested
+      class:dragover={dragOver === index}
+      draggable={renaming !== index}
+      ondragstart={(e) => {
+        dragFrom = index;
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+      }}
+      ondragover={(e) => {
+        e.preventDefault();
+        dragOver = index;
+      }}
+      ondragleave={() => {
+        if (dragOver === index) dragOver = null;
+      }}
+      ondrop={(e) => {
+        e.preventDefault();
+        onDrop(index);
+      }}
+      ondragend={() => {
+        dragFrom = null;
+        dragOver = null;
+      }}
+    >
+      <button
+        class="eye"
+        title={p.hidden ? "show" : "hide"}
+        aria-label="toggle visibility"
+        onclick={() => editor.setPathHidden(index, !p.hidden)}
+      >
+        {#if p.hidden}<EyeOff size={13} />{:else}<Eye size={13} />{/if}
+      </button>
+      {#if renaming === index}
+        <input
+          class="rename"
+          bind:value={renameValue}
+          use:autofocus
+          onblur={() => commitRename(index)}
+          onkeydown={(e) => {
+            if (e.key === "Enter") commitRename(index);
+            else if (e.key === "Escape") renaming = null;
+          }}
+        />
+      {:else}
+        <button
+          class="row-btn"
+          class:active={editor.selectedPaths.includes(index)}
+          onclick={(e) => (e.shiftKey ? editor.togglePath(index) : editor.selectPath(index))}
+          ondblclick={() => startRename(index, p.id)}
+          title="click to select · shift-click multi · double-click to rename"
+        >
+          <span class="pid">{p.id}</span>
+        </button>
+      {/if}
+      <button
+        class="trash"
+        title="delete"
+        aria-label="delete path"
+        onclick={() => editor.deletePath(index)}
+      >
+        <Trash2 size={13} />
+      </button>
+    </li>
+  {/snippet}
+
   <section class="layers">
     <div class="lhead">
       <h2>layers</h2>
-      <button
-        class="add"
-        title="add layer"
-        aria-label="add layer"
-        onclick={() => editor.addLayer(`layer ${editor.layers.length + 1}`)}
-      >
-        <Plus size={14} />
-      </button>
-    </div>
-    {#if editor.layers.length}
-      <ul class="layerlist">
-        {#each layersTopFirst as { l, i } (l.id)}
-          <li class:active={editor.activeLayer === l.id}>
-            <button
-              class="eye"
-              title={l.visible ? "hide layer" : "show layer"}
-              aria-label="toggle layer visibility"
-              onclick={() => editor.setLayerVisible(l.id, !l.visible)}
-            >
-              {#if l.visible}<Eye size={14} />{:else}<EyeOff size={14} />{/if}
-            </button>
-            {#if renamingLayer === l.id}
-              <input
-                class="rename"
-                bind:value={layerRenameValue}
-                use:autofocus
-                onblur={() => commitLayerRename(l.id)}
-                onkeydown={(e) => {
-                  if (e.key === "Enter") commitLayerRename(l.id);
-                  else if (e.key === "Escape") renamingLayer = null;
-                }}
-              />
-            {:else}
-              <button
-                class="lname"
-                onclick={() => editor.setActiveLayer(l.id)}
-                ondblclick={() => startLayerRename(l.id, l.name)}
-                title="click to make active · double-click to rename"
-              >
-                {l.name}
-              </button>
-            {/if}
-            <button
-              class="mv"
-              title="raise"
-              aria-label="raise layer"
-              disabled={i === editor.layers.length - 1}
-              onclick={() => editor.reorderLayer(l.id, i + 1)}><ChevronUp size={13} /></button
-            >
-            <button
-              class="mv"
-              title="lower"
-              aria-label="lower layer"
-              disabled={i === 0}
-              onclick={() => editor.reorderLayer(l.id, i - 1)}><ChevronDown size={13} /></button
-            >
-            <button
-              class="trash"
-              title="delete layer"
-              aria-label="delete layer"
-              onclick={() => editor.deleteLayer(l.id)}><Trash2 size={13} /></button
-            >
-          </li>
-        {/each}
-      </ul>
-      {#if editor.selectedPaths.length > 0 && editor.activeLayer}
-        <button class="assign" onclick={() => editor.assignSelectionToLayer(editor.activeLayer)}>
-          move selection here
+      {#if editor.selectedPaths.length > 1}
+        <button
+          class="ghost-btn"
+          title="group selection"
+          aria-label="group selection"
+          onclick={() => editor.groupSelection(`group ${editor.layers.length + 1}`)}
+        >
+          <Group size={13} /> group
         </button>
       {/if}
-    {:else}
-      <p class="empty">no layers · new shapes stay unassigned</p>
-    {/if}
-  </section>
-
-  <section class="paths">
-    <h2>paths</h2>
-    {#if doc && doc.paths.some((p) => !p.deleted)}
-      <ul>
-        {#each doc.paths as p, pi (pi)}
-          {#if !p.deleted}
-            {@const nodes = p.subpaths.reduce((n, sp) => n + sp.nodes.length, 0)}
-            {@const closed = p.subpaths.some((sp) => sp.closed)}
-            <li
-              class:dragover={dragOver === pi}
-              draggable={renaming !== pi}
-              ondragstart={(e) => {
-                dragFrom = pi;
-                if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-              }}
-              ondragover={(e) => {
-                e.preventDefault();
-                dragOver = pi;
-              }}
-              ondragleave={() => {
-                if (dragOver === pi) dragOver = null;
-              }}
-              ondrop={(e) => {
-                e.preventDefault();
-                onDrop(pi);
-              }}
-              ondragend={() => {
-                dragFrom = null;
-                dragOver = null;
-              }}
-            >
-              {#if renaming === pi}
+    </div>
+    {#if rows.length}
+      <ul class="layerlist">
+        {#each rows as row (row.kind === "group" ? `g:${row.layer.id}` : `p:${row.index}`)}
+          {#if row.kind === "group"}
+            <li class="grouphead" class:active={editor.activeLayer === row.layer.id}>
+              <button
+                class="chev"
+                aria-label="collapse group"
+                onclick={() => toggleCollapse(row.layer.id)}
+              >
+                {#if collapsed.includes(row.layer.id)}<ChevronRight size={13} />{:else}<ChevronDown
+                    size={13}
+                  />{/if}
+              </button>
+              <button
+                class="eye"
+                title={row.layer.visible ? "hide group" : "show group"}
+                aria-label="toggle group visibility"
+                onclick={() => editor.setLayerVisible(row.layer.id, !row.layer.visible)}
+              >
+                {#if row.layer.visible}<Eye size={13} />{:else}<EyeOff size={13} />{/if}
+              </button>
+              {#if renamingLayer === row.layer.id}
                 <input
                   class="rename"
-                  bind:value={renameValue}
+                  bind:value={layerRenameValue}
                   use:autofocus
-                  onblur={() => commitRename(pi)}
+                  onblur={() => commitLayerRename(row.layer.id)}
                   onkeydown={(e) => {
-                    if (e.key === "Enter") commitRename(pi);
-                    else if (e.key === "Escape") renaming = null;
+                    if (e.key === "Enter") commitLayerRename(row.layer.id);
+                    else if (e.key === "Escape") renamingLayer = null;
                   }}
                 />
               {:else}
                 <button
-                  class="row-btn"
-                  class:active={editor.selectedPaths.includes(pi)}
-                  onclick={(e) => (e.shiftKey ? editor.togglePath(pi) : editor.selectPath(pi))}
-                  ondblclick={() => startRename(pi, p.id)}
-                  title="click to select · shift-click to multi-select · double-click to rename"
+                  class="lname"
+                  onclick={() => editor.setActiveLayer(row.layer.id)}
+                  ondblclick={() => startLayerRename(row.layer.id, row.layer.name)}
+                  title="click to make active · double-click to rename"
                 >
-                  <span class="pid">{p.id}</span>
-                  <span class="meta">
-                    {nodes} nodes{closed ? " · closed" : ""}{p.added
-                      ? " · drawn"
-                      : p.edited
-                        ? " · edited"
-                        : ""}
-                  </span>
+                  {row.layer.name}
                 </button>
               {/if}
               <button
                 class="trash"
-                title="delete path"
-                aria-label="delete path"
-                onclick={() => editor.deletePath(pi)}
+                title="ungroup"
+                aria-label="ungroup"
+                onclick={() => editor.ungroup(row.layer.id)}><Ungroup size={13} /></button
               >
-                <Trash2 size={14} />
-              </button>
             </li>
+            {#if !collapsed.includes(row.layer.id)}
+              {#each row.items as it (it.index)}
+                {@render pathRow(it.p, it.index, true)}
+              {/each}
+            {/if}
+          {:else}
+            {@render pathRow(row.p, row.index, false)}
           {/if}
         {/each}
       </ul>
     {:else}
-      <p class="empty">no paths</p>
+      <p class="empty">no shapes</p>
     {/if}
   </section>
 </aside>
@@ -516,7 +540,7 @@
     border-bottom: 1px solid var(--halo-border);
   }
 
-  section.paths {
+  section.layers {
     flex: 1;
     min-height: 0;
     border-bottom: none;
@@ -672,18 +696,21 @@
     justify-content: space-between;
   }
 
-  .lhead .add {
+  .ghost-btn {
     display: inline-flex;
-    padding: 3px;
-    border: none;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border: 1px solid var(--halo-border);
     border-radius: var(--halo-radius-pill);
-    background: transparent;
+    background: var(--halo-bg-main);
     color: var(--halo-text-muted);
+    font-size: 11px;
   }
 
-  .lhead .add:hover {
+  .ghost-btn:hover {
+    border-color: var(--halo-accent);
     color: var(--halo-accent);
-    background: var(--halo-bg-main);
   }
 
   .layerlist {
@@ -704,8 +731,18 @@
     background: var(--halo-accent-soft);
   }
 
+  /* nested path rows sit under their group header */
+  .layerlist li.nested {
+    padding-left: 16px;
+  }
+
+  /* drop indicator while dragging to reorder draw order */
+  .layerlist li.dragover {
+    box-shadow: inset 0 2px 0 var(--halo-accent);
+  }
+
   .layerlist .eye,
-  .layerlist .mv {
+  .layerlist .chev {
     display: inline-flex;
     padding: 4px;
     border: none;
@@ -713,13 +750,16 @@
     color: var(--halo-text-muted);
   }
 
-  .layerlist .mv:disabled {
-    opacity: 0.3;
+  .layerlist .eye:hover,
+  .layerlist .chev:hover {
+    color: var(--halo-accent);
   }
 
-  .layerlist .eye:hover,
-  .layerlist .mv:hover:not(:disabled) {
-    color: var(--halo-accent);
+  .grouphead {
+    font-family: var(--halo-font-heading);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .layerlist .lname {
@@ -737,16 +777,6 @@
 
   li.active .lname {
     color: var(--halo-accent);
-  }
-
-  .assign {
-    width: 100%;
-    padding: 5px 0;
-    border: 1px solid var(--halo-accent);
-    border-radius: var(--halo-radius-pill);
-    background: var(--halo-bg-main);
-    color: var(--halo-accent);
-    font-size: 12px;
   }
 
   /* align / distribute icon buttons */
@@ -773,29 +803,12 @@
     color: var(--halo-accent);
   }
 
-  .paths ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-
-  .paths li {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-  }
-
-  /* drop indicator while dragging a path to reorder draw order */
-  .paths li.dragover {
-    box-shadow: inset 0 2px 0 var(--halo-accent);
-  }
-
   .row-btn {
     flex: 1;
     min-width: 0;
     display: flex;
-    flex-direction: column;
-    padding: 6px 8px;
+    align-items: center;
+    padding: 5px 6px;
     border: none;
     border-radius: var(--halo-radius-pill);
     background: transparent;
@@ -836,14 +849,8 @@
   }
 
   .pid {
-    font-weight: 500;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .meta {
-    font-size: 11px;
-    color: var(--halo-text-muted);
   }
 </style>

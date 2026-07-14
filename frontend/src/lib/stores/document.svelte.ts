@@ -418,6 +418,29 @@ class DocumentStore {
     if (this.#apply({ type: "setPathLayer", path: pathIndex, layer: layer ?? undefined }))
       this.commit();
   }
+
+  /** Group the current object selection into a new named group (a `<g>`), pulled contiguous. */
+  groupSelection(name: string): void {
+    const sel = [...this.selectedPaths].sort((a, b) => a - b);
+    if (sel.length === 0) return;
+    const id = crypto.randomUUID();
+    if (this.#apply({ type: "groupPaths", paths: sel, id, name })) {
+      this.commit();
+      const start = sel[0];
+      this.selectedPaths = sel.map((_, k) => start + k); // the now-contiguous block
+      this.#persist();
+    }
+  }
+
+  /** Dissolve a group — its paths become top level (the geometry is untouched). */
+  ungroup(layerId: string): void {
+    this.deleteLayer(layerId);
+  }
+
+  /** Show/hide a single path. */
+  setPathHidden(pathIndex: number, hidden: boolean): void {
+    if (this.#apply({ type: "setPathHidden", path: pathIndex, hidden })) this.commit();
+  }
   /** Move every selected path onto a layer (one undo step). */
   assignSelectionToLayer(layer: string | null): void {
     if (this.selectedPaths.length === 0) return;

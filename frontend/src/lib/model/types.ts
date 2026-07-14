@@ -57,8 +57,10 @@ export type PathElement = {
   deleted?: boolean;
   /** The user renamed this path — write its `id` into the exported markup. */
   renamed?: boolean;
-  /** Id of the layer this path belongs to (absent = unassigned / default). */
+  /** Id of the group this path belongs to (absent = top level / ungrouped). */
   layer?: string;
+  /** Per-path visibility toggle (hidden = dropped from render + display:none on export). */
+  hidden?: boolean;
 };
 
 export type ViewBox = {

@@ -153,7 +153,7 @@ test("shift-selecting two paths enables align", async ({ page }) => {
   await page.keyboard.press("v");
 
   // Select the first path, shift-select the second → a multi-selection → the arrange panel.
-  const rows = page.locator(".paths .row-btn");
+  const rows = page.locator(".layerlist .row-btn");
   await expect(rows).toHaveCount(2);
   await rows.nth(0).click();
   await rows.nth(1).click({ modifiers: ["Shift"] });
@@ -170,7 +170,7 @@ test("shift-selecting two paths enables align", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
-test("layers: add a layer, draw onto it, then hide it", async ({ page }) => {
+test("layers: group two shapes, then hide the group", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => {
@@ -184,22 +184,31 @@ test("layers: add a layer, draw onto it, then hide it", async ({ page }) => {
   await page.getByRole("button", { name: "new drawing" }).click();
   await expect(page.locator("svg.canvas")).toBeVisible();
 
-  // Add a layer → one row appears and it becomes the active layer.
-  await page.getByRole("button", { name: "add layer" }).click();
-  await expect(page.locator(".layerlist li")).toHaveCount(1);
-
-  // Draw a rectangle → the drawn shape lands on the active layer and renders.
+  // Draw two rectangles.
   await page.keyboard.press("r");
   const box = await page.locator("svg.canvas").boundingBox();
   if (!box) throw new Error("canvas has no bounding box");
-  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
+  await page.mouse.move(box.x + box.width * 0.25, box.y + box.height * 0.25);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.6);
+  await page.mouse.move(box.x + box.width * 0.45, box.y + box.height * 0.45);
   await page.mouse.up();
-  await expect(page.locator("svg.canvas g.drawn path")).toHaveCount(1);
+  await page.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.55);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.75, box.y + box.height * 0.75);
+  await page.mouse.up();
+  await expect(page.locator("svg.canvas g.drawn path")).toHaveCount(2);
 
-  // Hiding the layer removes its shapes from the render.
-  await page.getByRole("button", { name: "toggle layer visibility" }).click();
+  // Select both shapes in the layers list, then group them.
+  await page.keyboard.press("v");
+  const rows = page.locator(".layerlist .row-btn");
+  await expect(rows).toHaveCount(2);
+  await rows.nth(0).click();
+  await rows.nth(1).click({ modifiers: ["Shift"] });
+  await page.locator(".lhead .ghost-btn").click();
+  await expect(page.locator(".layerlist .grouphead")).toHaveCount(1);
+
+  // Hiding the group removes its shapes from the render.
+  await page.getByRole("button", { name: "toggle group visibility" }).click();
   await expect(page.locator("svg.canvas g.drawn path")).toHaveCount(0);
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);

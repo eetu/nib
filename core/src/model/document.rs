@@ -195,6 +195,7 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
                 deleted: false,
                 renamed: false,
                 layer: None,
+                hidden: false,
             }
         })
         .collect();
@@ -330,10 +331,12 @@ fn drawn_path_tag(p: &PathElement, precision: usize, indent: &str) -> String {
     } else {
         String::new()
     };
+    let hidden = if p.hidden { " display=\"none\"" } else { "" };
     format!(
-        "{}<path{} d=\"{}\"{} />",
+        "{}<path{}{} d=\"{}\"{} />",
         indent,
         id,
+        hidden,
         path_to_d_prec(&p.subpaths, precision),
         attrs_to_string(p.attributes.as_ref())
     )
@@ -344,56 +347,38 @@ fn escape_attr(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;")
 }
 
-/// Insert in-app-drawn paths (no source location) just before the closing `</svg>`. With no
-/// named layers this is a flat list (byte-preservation for the rest of the doc is untouched);
-/// with layers, drawn paths group into `<g id="…">` blocks in layer z-order (a hidden layer's
-/// group carries `display="none"`), and any unassigned drawn paths append bare after them.
+/// Insert in-app-drawn paths (no source location) just before the closing `</svg>`, in draw
+/// (array) order — so the PATHS/layers panel z-order matches the export. A contiguous run of
+/// paths sharing a group id is wrapped in `<g id="name">` (a hidden group's `<g>` carries
+/// `display="none"`); loose paths emit bare. Members are kept contiguous by GroupPaths.
 fn append_drawn_paths(out: &str, doc: &SvgDocument, precision: usize) -> String {
-    let block = if doc.layers.is_empty() {
-        doc.paths
-            .iter()
-            .filter(|p| is_exportable_drawn(p))
-            .map(|p| drawn_path_tag(p, precision, "  "))
-            .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        let mut blocks: Vec<String> = Vec::new();
-        for layer in &doc.layers {
-            let inner: Vec<String> = doc
-                .paths
-                .iter()
-                .filter(|p| is_exportable_drawn(p) && p.layer.as_deref() == Some(layer.id.as_str()))
-                .map(|p| drawn_path_tag(p, precision, "    "))
-                .collect();
-            if inner.is_empty() {
-                continue;
+    let drawn: Vec<&PathElement> = doc.paths.iter().filter(|p| is_exportable_drawn(p)).collect();
+    let mut parts: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < drawn.len() {
+        let group = drawn[i]
+            .layer
+            .as_deref()
+            .and_then(|id| doc.layers.iter().find(|l| l.id == id));
+        if let Some(layer) = group {
+            let mut inner = Vec::new();
+            while i < drawn.len() && drawn[i].layer.as_deref() == Some(layer.id.as_str()) {
+                inner.push(drawn_path_tag(drawn[i], precision, "    "));
+                i += 1;
             }
-            let hidden = if layer.visible {
-                String::new()
-            } else {
-                " display=\"none\"".to_string()
-            };
-            blocks.push(format!(
+            let hidden = if layer.visible { "" } else { " display=\"none\"" };
+            parts.push(format!(
                 "  <g id=\"{}\"{}>\n{}\n  </g>",
                 escape_attr(&layer.name),
                 hidden,
                 inner.join("\n")
             ));
+        } else {
+            parts.push(drawn_path_tag(drawn[i], precision, "  "));
+            i += 1;
         }
-        // Unassigned drawn paths (no layer) append bare, after the layer groups.
-        let assigned: std::collections::HashSet<&str> =
-            doc.layers.iter().map(|l| l.id.as_str()).collect();
-        let loose: Vec<String> = doc
-            .paths
-            .iter()
-            .filter(|p| {
-                is_exportable_drawn(p) && !p.layer.as_deref().is_some_and(|l| assigned.contains(l))
-            })
-            .map(|p| drawn_path_tag(p, precision, "  "))
-            .collect();
-        blocks.extend(loose);
-        blocks.join("\n")
-    };
+    }
+    let block = parts.join("\n");
     if block.is_empty() {
         return out.to_string();
     }
@@ -409,6 +394,11 @@ fn on_hidden_layer(doc: &SvgDocument, p: &PathElement) -> bool {
         .as_deref()
         .and_then(|id| doc.layers.iter().find(|l| l.id == id))
         .is_some_and(|l| !l.visible)
+}
+
+/// A path is hidden if toggled off directly or its group is hidden.
+fn path_hidden(doc: &SvgDocument, p: &PathElement) -> bool {
+    p.hidden || on_hidden_layer(doc, p)
 }
 
 /// One gradient as a `<linearGradient>` / `<radialGradient>` element.
@@ -507,7 +497,7 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
         if !slot.deleted && oi < ordered.len() {
             let p = ordered[oi];
             oi += 1;
-            out.push_str(&edited_tag(p, precision, on_hidden_layer(doc, p)));
+            out.push_str(&edited_tag(p, precision, path_hidden(doc, p)));
         }
         // a deleted slot drops its tag (emits only the preceding span)
         cursor = end;
@@ -537,6 +527,7 @@ mod tests {
             deleted: false,
             renamed: false,
             layer: Some(layer.to_string()),
+            hidden: false,
         }
     }
 

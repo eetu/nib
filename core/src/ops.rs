@@ -133,6 +133,15 @@ pub enum Op {
     DeletePath { path: usize },
     /// Move a path within the ordered paths list — changes draw order (later = drawn on top).
     ReorderPath { from: usize, to: usize },
+    /// Show/hide a single path.
+    SetPathHidden { path: usize, hidden: bool },
+    /// Group paths into a new named group (a `<g>`): create the group (active), assign the
+    /// given paths to it, and pull them into a contiguous block at the lowest member's slot.
+    GroupPaths {
+        paths: Vec<usize>,
+        id: String,
+        name: String,
+    },
 
     /// Set (`value: Some`) or clear (`value: None`) one presentation attribute. Added paths
     /// edit their own `attributes`; imported paths accumulate a `style_override`.
@@ -356,6 +365,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 deleted: false,
                 renamed: false,
                 layer,
+                hidden: false,
             });
             true
         }
@@ -380,6 +390,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 deleted: false,
                 renamed: false,
                 layer,
+                hidden: false,
             });
             true
         }
@@ -412,6 +423,44 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             }
             let p = doc.paths.remove(*from);
             doc.paths.insert(to, p);
+            true
+        }
+        Op::SetPathHidden { path, hidden } => {
+            let Some(p) = doc.paths.get_mut(*path) else {
+                return false;
+            };
+            if p.hidden == *hidden {
+                return false;
+            }
+            p.hidden = *hidden;
+            true
+        }
+        Op::GroupPaths { paths, id, name } => {
+            let mut idxs: Vec<usize> =
+                paths.iter().copied().filter(|&i| i < doc.paths.len()).collect();
+            idxs.sort_unstable();
+            idxs.dedup();
+            if idxs.is_empty() || doc.layers.iter().any(|l| &l.id == id) {
+                return false;
+            }
+            doc.layers.push(Layer {
+                id: id.clone(),
+                name: name.clone(),
+                visible: true,
+            });
+            doc.active_layer = Some(id.clone());
+            for &i in &idxs {
+                if let Some(p) = doc.paths.get_mut(i) {
+                    p.layer = Some(id.clone());
+                }
+            }
+            // Pull the members into a contiguous block at the lowest member's position.
+            let at = idxs[0];
+            let mut block: Vec<PathElement> = idxs.iter().rev().map(|&i| doc.paths.remove(i)).collect();
+            block.reverse();
+            for (k, p) in block.into_iter().enumerate() {
+                doc.paths.insert(at + k, p);
+            }
             true
         }
         Op::SetStyle { path, key, value } => {
@@ -636,6 +685,7 @@ mod tests {
                 deleted: false,
                 renamed: false,
                 layer: None,
+                hidden: false,
             }],
             layers: Vec::new(),
             active_layer: None,
@@ -901,6 +951,45 @@ mod tests {
         assert_eq!(ids, ["c", "p0", "b"]);
         // a no-op move returns false
         assert!(!apply(&mut doc, &Op::ReorderPath { from: 1, to: 1 }));
+    }
+
+    #[test]
+    fn group_paths_creates_a_contiguous_active_group() {
+        let mut doc = doc_from("M 0 0 L 1 1", true); // p0
+        for id in ["b", "c", "d"] {
+            apply(
+                &mut doc,
+                &Op::AddPath {
+                    id: id.into(),
+                    subpaths: parse_path_d("M 0 0 L 2 2"),
+                    attributes: IndexMap::new(),
+                },
+            );
+        }
+        // paths p0,b,c,d → group the non-adjacent b (1) + d (3)
+        assert!(apply(
+            &mut doc,
+            &Op::GroupPaths {
+                paths: vec![1, 3],
+                id: "g1".into(),
+                name: "grp".into(),
+            }
+        ));
+        assert_eq!(doc.active_layer.as_deref(), Some("g1"));
+        // members pulled contiguous at the lowest slot, in ascending order
+        let ids: Vec<&str> = doc.paths.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["p0", "b", "d", "c"]);
+        assert_eq!(doc.paths[1].layer.as_deref(), Some("g1"));
+        assert_eq!(doc.paths[2].layer.as_deref(), Some("g1"));
+        assert_eq!(doc.paths[3].layer, None);
+    }
+
+    #[test]
+    fn set_path_hidden_toggles() {
+        let mut doc = doc_from("M 0 0 L 1 1", true);
+        assert!(apply(&mut doc, &Op::SetPathHidden { path: 0, hidden: true }));
+        assert!(doc.paths[0].hidden);
+        assert!(!apply(&mut doc, &Op::SetPathHidden { path: 0, hidden: true }));
     }
 
     #[test]

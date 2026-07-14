@@ -54,17 +54,26 @@ Per-area detail in `frontend/CLAUDE.md`.
   "drawn">`, not the imperatively-imported artwork) and are *appended* before
   `</svg>` on export. Everything else treats them like any path (editable,
   snappable, undoable, persisted).
-- **Named layers** (`nib-core` `Layer` + `SvgDocument.layers`/`activeLayer` +
-  `PathElement.layer`) are a flat, ordered grouping over paths: z-order, show/hide,
-  and an *active* layer new shapes land on. **Export stays byte-preserving while
-  `layers` is empty**; once layers exist, drawn paths group into top-level
-  `<g id="name">` blocks (a hidden layer's `<g>` carries `display="none"`) and
-  imported paths on a hidden layer get `display="none"` spliced into their tag —
-  the first *active re-serialization of structure* (everything else still splices
-  verbatim). Layer CRUD/reorder/visibility/assign are ops (`addLayer` … `setPathLayer`),
-  so they sync + undo like any edit; the Inspector LAYERS panel + the store's layer
-  methods + `EditorCanvas` (drawn paths ordered by layer z-order, hidden layers
-  filtered) drive them.
+- **Layers = objects + groups (Figma/Pixelmator model, one level).** The single
+  Inspector **LAYERS** panel *is* the object list: every path/shape is a row,
+  **z-order = the `paths` array order** (drag a row to reorder → `ReorderPath`),
+  and a contiguous run of paths sharing a `layer` id renders as a collapsible
+  **group**. **Group** (`GroupPaths` op) wraps the selection into a named group —
+  a `<g id="name">` on export — pulling its members contiguous; **Ungroup**
+  (`deleteLayer`) dissolves it (geometry untouched). Per-path (`PathElement.hidden`
+  + `SetPathHidden`) and per-group (`Layer.visible`) **show/hide** export as
+  `display="none"`. New shapes land on `activeLayer`. **The panel's z-order matches
+  the canvas *and* the export**: drawn paths append in array order (wrapping
+  contiguous group runs in `<g>`), imported paths fill their source `<path>` slots
+  in draw order. **Export is byte-for-byte until something is reordered/grouped/
+  edited/hidden** — grouping + reordering is the first *active re-serialization of
+  structure*. Core: `Layer`/`SvgDocument.layers`/`activeLayer` + `PathElement.layer`
+  +`hidden`; ops `groupPaths`/`setPathHidden`/`reorderPath`/`setLayerVisible`/
+  `renameLayer`/`deleteLayer`. **Caveats (Phase D):** groups are one level (no
+  groups-in-groups yet); imported paths group for membership/visibility/order but
+  aren't `<g>`-wrapped on export (they stay in their source slots), and drawn
+  shapes render in a group above all imported paths — full interleaving + nesting
+  needs the Phase-D object tree + stable ids.
 - **Two coordinate systems in the canvas.** Artwork is drawn in a scaled `<g>`
   (document units); the editing overlay is drawn in screen space so handles stay
   a constant pixel size at any zoom. `viewport.toScreen/toDoc` bridge them.

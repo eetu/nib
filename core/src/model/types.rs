@@ -177,9 +177,12 @@ pub struct PathElement {
     /// The user renamed this path — write its `id` into the exported markup.
     #[serde(skip_serializing_if = "is_false", default)]
     pub renamed: bool,
-    /// Id of the layer this path belongs to (`None` = unassigned / the implicit default).
+    /// Id of the group this path belongs to (`None` = top level / ungrouped).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub layer: Option<String>,
+    /// Per-path visibility toggle (hidden = omitted from render + `display="none"` on export).
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

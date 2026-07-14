@@ -31,21 +31,12 @@
   const hiddenLayers = $derived(
     new Set((editor.doc?.layers ?? []).filter((l) => !l.visible).map((l) => l.id)),
   );
-  // Drawn paths to render: skip hidden layers, ordered by layer z-order (unassigned last).
-  const newPaths = $derived.by(() => {
-    const doc = editor.doc;
-    if (!doc) return [];
-    const added = doc.paths.filter(
-      (p) => p.added && !p.deleted && !(p.layer && hiddenLayers.has(p.layer)),
-    );
-    if (!doc.layers?.length) return added;
-    const order = new Map(doc.layers.map((l, i) => [l.id, i]));
-    return [...added].sort(
-      (a, b) =>
-        (a.layer != null ? (order.get(a.layer) ?? Infinity) : Infinity) -
-        (b.layer != null ? (order.get(b.layer) ?? Infinity) : Infinity),
-    );
-  });
+  // Drawn paths to render, in draw (array) order = z-order; skip hidden paths + hidden groups.
+  const newPaths = $derived(
+    editor.doc?.paths.filter(
+      (p) => p.added && !p.deleted && !p.hidden && !(p.layer && hiddenLayers.has(p.layer)),
+    ) ?? [],
+  );
 
   // WebKit-only trackpad gesture event (Safari); not in the standard DOM lib.
   type GestureLike = Event & { scale: number; clientX: number; clientY: number };
@@ -109,7 +100,7 @@
     for (const p of doc.paths) {
       const el = livePaths[p.index];
       if (!el) continue;
-      if (p.deleted || (p.layer && hiddenLayers.has(p.layer))) {
+      if (p.deleted || p.hidden || (p.layer && hiddenLayers.has(p.layer))) {
         el.setAttribute("display", "none");
         continue;
       }
