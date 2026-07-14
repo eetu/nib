@@ -177,6 +177,15 @@ pub enum Op {
     SetGradient { gradient: Gradient },
     /// Remove a gradient by id.
     RemoveGradient { id: String },
+
+    /// Combine paths with a boolean op ("union"|"intersect"|"subtract"|"exclude"): the inputs
+    /// are soft-deleted and replaced by one new path (`id`) built from the result. Curves are
+    /// flattened to lines. For "subtract", the lowest-index path is the subject.
+    BooleanOp {
+        op: String,
+        paths: Vec<usize>,
+        id: String,
+    },
 }
 
 /// Apply an op to the document in place. Returns `true` if it found its target and mutated,
@@ -587,6 +596,54 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             let before = doc.gradients.len();
             doc.gradients.retain(|g| &g.id != id);
             doc.gradients.len() != before
+        }
+        Op::BooleanOp { op, paths, id } => {
+            let mut idxs: Vec<usize> = paths
+                .iter()
+                .copied()
+                .filter(|&i| doc.paths.get(i).is_some_and(|p| !p.deleted))
+                .collect();
+            idxs.sort_unstable();
+            idxs.dedup();
+            if idxs.len() < 2 {
+                return false;
+            }
+            let subpaths = {
+                let refs: Vec<&PathElement> = idxs.iter().map(|&i| &doc.paths[i]).collect();
+                match crate::model::booleans::boolean(op, &refs) {
+                    Some(s) => s,
+                    None => return false,
+                }
+            };
+            // The result inherits the subject's (lowest-index) effective style + group.
+            let first = &doc.paths[idxs[0]];
+            let mut attributes = first.attributes.clone().unwrap_or_default();
+            if let Some(so) = &first.style_override {
+                for (k, v) in so {
+                    attributes.insert(k.clone(), v.clone());
+                }
+            }
+            let layer = first.layer.clone();
+            for &i in &idxs {
+                doc.paths[i].deleted = true;
+            }
+            let index = doc.paths.len();
+            doc.paths.push(PathElement {
+                id: id.clone(),
+                index,
+                original_d: String::new(),
+                subpaths,
+                edited: true,
+                added: true,
+                attributes: Some(attributes),
+                style_override: None,
+                original_tag: None,
+                deleted: false,
+                renamed: false,
+                layer,
+                hidden: false,
+            });
+            true
         }
     }
 }

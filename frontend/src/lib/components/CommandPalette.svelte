@@ -38,6 +38,11 @@
       enabled: hasSelection,
     },
     { label: "Deselect", run: () => editor.deselect() },
+    ...(["union", "subtract", "intersect", "exclude"] as const).map((op) => ({
+      label: `Boolean: ${op}`,
+      run: () => editor.booleanOp(op),
+      enabled: () => editor.selectedPaths.length >= 2,
+    })),
     { label: "Toggle grid", run: () => (tools.gridEnabled = !tools.gridEnabled) },
     { label: "Toggle snap to points", run: () => (tools.snapEnabled = !tools.snapEnabled) },
     { label: "Toggle smart guides", run: () => (tools.guidesEnabled = !tools.guidesEnabled) },

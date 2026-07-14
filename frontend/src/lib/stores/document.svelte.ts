@@ -387,6 +387,16 @@ class DocumentStore {
     this.commit();
   }
 
+  /** Combine the selected paths with a boolean op — replaces them with one result path. */
+  booleanOp(op: "union" | "intersect" | "subtract" | "exclude"): void {
+    if (this.selectedPaths.length < 2) return;
+    const id = crypto.randomUUID();
+    if (this.#apply({ type: "booleanOp", op, paths: [...this.selectedPaths], id })) {
+      this.commit();
+      this.selectPath((this.doc?.paths.length ?? 1) - 1); // the appended result
+    }
+  }
+
   /** Soft-delete every selected path (soft-delete keeps indices stable, so no reindexing). */
   deleteSelectedPaths(): void {
     if (this.selectedPaths.length === 0) return;

@@ -211,10 +211,6 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
     })
 }
 
-fn style_overridden(p: &PathElement) -> bool {
-    p.style_override.as_ref().is_some_and(|m| !m.is_empty())
-}
-
 /// An imported path's opening tag with its edits applied (d / id / style-override / hidden).
 /// With no edits it returns the original tag verbatim, so unchanged paths stay byte-for-byte.
 fn edited_tag(p: &PathElement, precision: usize, hidden: bool) -> String {

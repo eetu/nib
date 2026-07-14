@@ -245,6 +245,15 @@
           </button>
         </div>
       {/if}
+      <div class="combine">
+        <button title="unite" onclick={() => editor.booleanOp("union")}>union</button>
+        <button title="front minus back" onclick={() => editor.booleanOp("subtract")}
+          >subtract</button
+        >
+        <button title="intersection" onclick={() => editor.booleanOp("intersect")}>intersect</button
+        >
+        <button title="exclude overlap" onclick={() => editor.booleanOp("exclude")}>exclude</button>
+      </div>
     </section>
   {/if}
 
@@ -799,6 +808,27 @@
   }
 
   .arrange button:hover {
+    border-color: var(--halo-accent);
+    color: var(--halo-accent);
+  }
+
+  /* boolean path ops (union / subtract / intersect / exclude) */
+  .combine {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+  }
+
+  .combine button {
+    padding: 4px 0;
+    border: 1px solid var(--halo-border);
+    border-radius: var(--halo-radius-pill);
+    background: var(--halo-bg-main);
+    color: var(--halo-text-muted);
+    font-size: 11px;
+  }
+
+  .combine button:hover {
     border-color: var(--halo-accent);
     color: var(--halo-accent);
   }
