@@ -139,21 +139,24 @@
 </script>
 
 <aside class="inspector">
-  <section>
-    <h2>{path ? "style" : isCreateTool ? "new shape style" : "style"}</h2>
-    {#snippet seg(label: string, key: string, options: string[], dflt: string)}
-      <div class="segrow">
-        <span class="seglbl">{label}</span>
-        <div class="segbtns">
-          {#each options as opt (opt)}
-            <button class:active={(style[key] ?? dflt) === opt} onclick={() => setStyle(key, opt)}>
-              {opt}
-            </button>
-          {/each}
+  {#if path || isCreateTool}
+    <section>
+      <h2>{path ? "style" : "new shape style"}</h2>
+      {#snippet seg(label: string, key: string, options: string[], dflt: string)}
+        <div class="segrow">
+          <span class="seglbl">{label}</span>
+          <div class="segbtns">
+            {#each options as opt (opt)}
+              <button
+                class:active={(style[key] ?? dflt) === opt}
+                onclick={() => setStyle(key, opt)}
+              >
+                {opt}
+              </button>
+            {/each}
+          </div>
         </div>
-      </div>
-    {/snippet}
-    {#if path || isCreateTool}
+      {/snippet}
       <ColorInput
         label="fill"
         value={style.fill ?? "none"}
@@ -202,14 +205,12 @@
         />
         <span class="pct">{opacityShown}%</span>
       </label>
-    {:else}
-      <p class="empty">no path selected</p>
-    {/if}
-  </section>
+    </section>
+  {/if}
 
-  <section>
-    <h2>transform</h2>
-    {#if path && bounds}
+  {#if path && bounds}
+    <section>
+      <h2>transform</h2>
       <div class="coords">
         <label
           >x <input
@@ -242,14 +243,12 @@
           /></label
         >
       </div>
-    {:else}
-      <p class="empty">no path selected</p>
-    {/if}
-  </section>
+    </section>
+  {/if}
 
-  <section>
-    <h2>node</h2>
-    {#if node && sel}
+  {#if node && sel}
+    <section>
+      <h2>node</h2>
       <div class="coords">
         <label>x <input type="text" value={round(node.point.x)} onchange={setX} /></label>
         <label>y <input type="text" value={round(node.point.y)} onchange={setY} /></label>
@@ -265,26 +264,8 @@
       <button class="delete" onclick={() => sel && editor.deleteNode(sel)}>
         <Trash2 size={15} /> delete node
       </button>
-    {:else}
-      <p class="empty">no node selected</p>
-    {/if}
-  </section>
-
-  <section>
-    <h2>snap</h2>
-    <label class="row"
-      ><input type="checkbox" bind:checked={tools.snapEnabled} /> snap to points</label
-    >
-    <label class="row sub">
-      radius <input type="number" min="2" max="40" bind:value={tools.snapThresholdPx} /> px
-    </label>
-    <label class="row"
-      ><input type="checkbox" bind:checked={tools.gridEnabled} /> snap to grid</label
-    >
-    <label class="row sub">
-      size <input type="number" min="1" max="200" bind:value={tools.gridSize} />
-    </label>
-  </section>
+    </section>
+  {/if}
 
   <section class="paths">
     <h2>paths</h2>
@@ -379,11 +360,6 @@
     align-items: center;
     gap: 6px;
     margin-bottom: 6px;
-  }
-
-  .row.sub {
-    padding-left: 20px;
-    color: var(--halo-text-muted);
   }
 
   .row input[type="number"] {
