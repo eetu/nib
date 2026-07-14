@@ -16,6 +16,7 @@ export type Hit =
       t: number;
       point: Point;
     }
+  | { kind: "fill"; pathIndex: number }
   | { kind: "empty" };
 
 export type ToolContext = {

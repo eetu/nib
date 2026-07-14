@@ -38,3 +38,37 @@ test("boots the core, loads a sample, draws, and undoes without errors", async (
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
+
+test("clicking a filled shape's interior selects it (fill hit-test)", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+
+  // Paste a filled square whose middle sits at the viewBox centre (→ the canvas centre).
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M20 20 H80 V80 H20 Z" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await expect(page.locator("svg.canvas g.artwork path")).toBeAttached();
+
+  // Click the canvas centre (= doc 50,50, inside the fill but far from every edge/anchor).
+  await page.keyboard.press("v");
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+
+  // The whole path is now object-selected → the transform box is drawn in the overlay.
+  await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});

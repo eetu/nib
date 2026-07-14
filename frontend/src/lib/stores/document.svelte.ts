@@ -254,6 +254,13 @@ class DocumentStore {
     if (this.#apply({ type: "setStyle", path: pathIndex, key, value })) this.commit();
   }
 
+  /** Live-preview a style change without committing — for a color-picker drag, so the shape
+   *  updates as you pick. The interaction commits once (via setPathStyle) when it settles. */
+  previewPathStyle(pathIndex: number, key: string, value: string | null): void {
+    this.#apply({ type: "setStyle", path: pathIndex, key, value });
+    this.#sync();
+  }
+
   // --- live mutations (tool drives these; commit at gesture end) ---------
 
   setSubpaths(pathIndex: number, subpaths: Subpath[]): void {

@@ -40,6 +40,13 @@
     else if (isCreateTool) tools.setNewStyle(key, value);
   }
 
+  // Live preview while the color picker is open — reflect the change on the shape without
+  // committing an undo step per event; setStyle (on picker close) records the single step.
+  function previewStyle(key: string, value: string | null) {
+    if (path && pathIndex !== null) editor.previewPathStyle(pathIndex, key, value);
+    else if (isCreateTool) tools.setNewStyle(key, value);
+  }
+
   function setWidth(e: Event) {
     const v = Number((e.currentTarget as HTMLInputElement).value);
     if (Number.isFinite(v) && v >= 0) setStyle("stroke-width", String(v));
@@ -97,12 +104,14 @@
         label="fill"
         value={style.fill ?? "none"}
         editable
+        oninput={(v) => previewStyle("fill", v)}
         onchange={(v) => setStyle("fill", v)}
       />
       <ColorInput
         label="stroke"
         value={style.stroke ?? "none"}
         editable
+        oninput={(v) => previewStyle("stroke", v)}
         onchange={(v) => setStyle("stroke", v)}
       />
       <label class="row">

@@ -1,6 +1,6 @@
-import { distance, subpathsBounds } from "$lib/model/geometry";
-import { nearestOnSubpath } from "$lib/model/path";
-import type { NodeRef, Point } from "$lib/model/types";
+import { cubicAt, distance, subpathsBounds } from "$lib/model/geometry";
+import { nearestOnSubpath, segmentControlPoints } from "$lib/model/path";
+import type { NodeRef, Point, Subpath } from "$lib/model/types";
 import { editor } from "$lib/stores/document.svelte";
 import { viewport } from "$lib/stores/viewport.svelte";
 
@@ -10,9 +10,45 @@ import type { Hit } from "./types";
 const ANCHOR_HIT_PX = 11;
 const HANDLE_HIT_PX = 11;
 const SEGMENT_HIT_PX = 8;
+const FLATTEN_STEPS = 12;
 
 function screenDist(docPt: Point, screen: Point): number {
   return distance(viewport.toScreen(docPt), screen);
+}
+
+/** Sample a subpath's outline into a polyline (open subpaths close implicitly for fill). */
+function flattenSubpath(sp: Subpath): Point[] {
+  const n = sp.nodes.length;
+  if (n < 2) return [];
+  const pts: Point[] = [];
+  const segs = sp.closed ? n : n - 1;
+  for (let i = 0; i < segs; i++) {
+    const [p0, p1, p2, p3] = segmentControlPoints(sp, i);
+    for (let s = 0; s < FLATTEN_STEPS; s++) pts.push(cubicAt(p0, p1, p2, p3, s / FLATTEN_STEPS));
+  }
+  return pts;
+}
+
+/** Is `pt` inside the path's filled area? Nonzero-winding ray cast over the flattened
+ *  subpaths (matches SVG's default fill-rule), so clicking a shape's body selects it. */
+function pointInPath(subpaths: Subpath[], pt: Point): boolean {
+  let winding = 0;
+  for (const sp of subpaths) {
+    const poly = flattenSubpath(sp);
+    const m = poly.length;
+    if (m < 3) continue;
+    for (let i = 0; i < m; i++) {
+      const a = poly[i];
+      const b = poly[(i + 1) % m];
+      const c = (b.x - a.x) * (pt.y - a.y) - (b.y - a.y) * (pt.x - a.x);
+      if (a.y <= pt.y) {
+        if (b.y > pt.y && c > 0) winding++;
+      } else if (b.y <= pt.y && c < 0) {
+        winding--;
+      }
+    }
+  }
+  return winding !== 0;
 }
 
 /**
@@ -93,6 +129,16 @@ export function hitTest(screen: Point): Hit {
     });
   });
   if (best) return best;
+
+  // 5. Fill — clicking inside a filled path's body selects it (front-most first). Skips
+  //    stroke-only paths (fill="none"); an absent fill counts as filled (SVG default).
+  for (let pathIndex = doc.paths.length - 1; pathIndex >= 0; pathIndex--) {
+    const p = doc.paths[pathIndex];
+    if (p.deleted) continue;
+    const fill = p.styleOverride?.fill ?? p.attributes?.fill;
+    if (fill === "none") continue;
+    if (pointInPath(p.subpaths, docPoint)) return { kind: "fill", pathIndex };
+  }
 
   return { kind: "empty" };
 }

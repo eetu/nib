@@ -7,6 +7,7 @@
   import SourceView from "$lib/components/SourceView.svelte";
   import ToolRail from "$lib/components/ToolRail.svelte";
   import TopBar from "$lib/components/TopBar.svelte";
+  import { subpathsBounds } from "$lib/model/geometry";
   import { editor } from "$lib/stores/document.svelte";
   import { interaction } from "$lib/stores/interaction.svelte";
   import { type ToolId, tools } from "$lib/stores/tool.svelte";
@@ -41,6 +42,34 @@
   function typing(target: EventTarget | null): boolean {
     const el = target as HTMLElement | null;
     return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA");
+  }
+
+  // Fit-to-view frames the actual drawing (union of all path bounds), not the static
+  // viewBox — so a drawing placed outside the declared viewport still centers. Falls back
+  // to the viewBox when there's no geometry yet.
+  function fitToView() {
+    const doc = editor.doc;
+    if (!doc) return;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let any = false;
+    for (const p of doc.paths) {
+      if (p.deleted) continue;
+      const b = subpathsBounds(p.subpaths);
+      if (!b) continue;
+      any = true;
+      minX = Math.min(minX, b.minX);
+      minY = Math.min(minY, b.minY);
+      maxX = Math.max(maxX, b.maxX);
+      maxY = Math.max(maxY, b.maxY);
+    }
+    const vb =
+      any && maxX > minX && maxY > minY
+        ? { minX, minY, width: maxX - minX, height: maxY - minY }
+        : doc.viewBox;
+    viewport.fitDocument(vb);
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -109,7 +138,7 @@
 
     const tool = SHORTCUTS[k];
     if (tool) tools.set(tool);
-    if (e.key === "0" && editor.doc) viewport.fitDocument(editor.doc.viewBox);
+    if (e.key === "0") fitToView();
   }
 
   function isSvgFile(file: File): boolean {

@@ -4,9 +4,11 @@
     value: string;
     editable: boolean;
     onchange: (value: string) => void;
+    /** Live updates while the native picker is open (before it closes / commits). */
+    oninput?: (value: string) => void;
   };
 
-  let { label, value, editable, onchange }: Props = $props();
+  let { label, value, editable, onchange, oninput }: Props = $props();
 
   const HEX = /^#[0-9a-fA-F]{6}$/;
   const isHex = $derived(HEX.test(value));
@@ -14,6 +16,10 @@
 
   function pick(e: Event) {
     onchange((e.currentTarget as HTMLInputElement).value);
+  }
+
+  function live(e: Event) {
+    oninput?.((e.currentTarget as HTMLInputElement).value);
   }
 
   function typeHex(e: Event) {
@@ -29,7 +35,13 @@
     style:background={isHex ? value : value === "currentColor" ? "currentColor" : undefined}
   >
     {#if editable}
-      <input type="color" value={isHex ? value : "#888888"} onchange={pick} disabled={isNone} />
+      <input
+        type="color"
+        value={isHex ? value : "#888888"}
+        oninput={live}
+        onchange={pick}
+        disabled={isNone}
+      />
     {/if}
   </span>
   <input

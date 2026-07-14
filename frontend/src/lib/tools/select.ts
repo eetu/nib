@@ -164,7 +164,7 @@ export const selectTool: Tool = {
   cursor(hit) {
     if (hit.kind === "transform") return transformCursor(hit.handle);
     if (hit.kind === "handle" || hit.kind === "anchor") return "grab";
-    if (hit.kind === "segment") return "move";
+    if (hit.kind === "segment" || hit.kind === "fill") return "move";
     return "default";
   },
   begin(ctx) {
@@ -183,8 +183,8 @@ export const selectTool: Tool = {
       const start = editor.selectedNode ? { ...editor.selectedNode.point } : ctx.docPoint;
       return anchorDrag(hit.ref, start);
     }
-    if (hit.kind === "segment") {
-      // Grab a path's body to select it and move the whole shape.
+    if (hit.kind === "segment" || hit.kind === "fill") {
+      // Grab a path's body (its outline or its filled interior) to select + move it.
       editor.selectPath(hit.pathIndex);
       return pathDrag(hit.pathIndex, ctx.docPoint);
     }
