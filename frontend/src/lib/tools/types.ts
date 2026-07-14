@@ -43,4 +43,7 @@ export type Tool = {
   /** Called on pointer move when no drag is active — for live aids (snap
    *  indicator, rubber-band). `docPoint` is the pointer in document units. */
   hover?(docPoint: Point): void;
+  /** Called when the user switches away from this tool — for cleanup (e.g. the pen
+   *  finishing its in-progress path). Driven centrally when `tools.active` changes. */
+  onDeactivate?(): void;
 };

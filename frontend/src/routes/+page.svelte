@@ -7,13 +7,12 @@
   import SourceView from "$lib/components/SourceView.svelte";
   import ToolRail from "$lib/components/ToolRail.svelte";
   import TopBar from "$lib/components/TopBar.svelte";
-  import { subpathsBounds } from "$lib/model/geometry";
   import { editor } from "$lib/stores/document.svelte";
   import { interaction } from "$lib/stores/interaction.svelte";
   import { type ToolId, tools } from "$lib/stores/tool.svelte";
-  import { viewport } from "$lib/stores/viewport.svelte";
   import { workspace } from "$lib/stores/workspace.svelte";
-  import { finishPen } from "$lib/tools";
+  import { finishPen, getTool, toolShortcuts } from "$lib/tools";
+  import { fitToView } from "$lib/view";
 
   let pasteOpen = $state(false);
   let settingsOpen = $state(false);
@@ -24,52 +23,22 @@
   <path d="M40 120 C 60 40, 120 40, 140 100 S 210 140, 205 70" fill="none" stroke="#f78f08" stroke-width="4" stroke-linecap="round"/>
 </svg>`;
 
-  const SHORTCUTS: Record<string, ToolId> = {
-    v: "select",
-    p: "pen",
-    c: "circle",
-    a: "add-node",
-    d: "delete-node",
-  };
-
-  // Leaving the pen tool (switching tools) ends the current path, and any live
-  // snap aid is cleared so it doesn't linger under the next tool.
+  // A tool switch runs the outgoing tool's cleanup (e.g. the pen finishing its path) and
+  // clears any live snap aid — the one place for tool-change lifecycle. `tools.active` stays
+  // the single source of truth for which tool is selected.
+  let prevTool: ToolId = tools.active;
   $effect(() => {
-    if (tools.active !== "pen") finishPen();
-    interaction.clearDrag();
+    const active = tools.active;
+    if (active !== prevTool) {
+      getTool(prevTool).onDeactivate?.();
+      interaction.clearDrag();
+      prevTool = active;
+    }
   });
 
   function typing(target: EventTarget | null): boolean {
     const el = target as HTMLElement | null;
     return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA");
-  }
-
-  // Fit-to-view frames the actual drawing (union of all path bounds), not the static
-  // viewBox — so a drawing placed outside the declared viewport still centers. Falls back
-  // to the viewBox when there's no geometry yet.
-  function fitToView() {
-    const doc = editor.doc;
-    if (!doc) return;
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    let any = false;
-    for (const p of doc.paths) {
-      if (p.deleted) continue;
-      const b = subpathsBounds(p.subpaths);
-      if (!b) continue;
-      any = true;
-      minX = Math.min(minX, b.minX);
-      minY = Math.min(minY, b.minY);
-      maxX = Math.max(maxX, b.maxX);
-      maxY = Math.max(maxY, b.maxY);
-    }
-    const vb =
-      any && maxX > minX && maxY > minY
-        ? { minX, minY, width: maxX - minX, height: maxY - minY }
-        : doc.viewBox;
-    viewport.fitDocument(vb);
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -104,8 +73,7 @@
 
     // Escape → back to the select tool (and finish any pen path in progress).
     if (e.key === "Escape") {
-      finishPen();
-      tools.set("select");
+      tools.set("select"); // switching away finishes the pen via its onDeactivate
       return;
     }
     if (e.key === "Enter" && tools.active === "pen") {
@@ -136,7 +104,7 @@
       return;
     }
 
-    const tool = SHORTCUTS[k];
+    const tool = toolShortcuts[k];
     if (tool) tools.set(tool);
     if (e.key === "0") fitToView();
   }

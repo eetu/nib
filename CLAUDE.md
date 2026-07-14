@@ -159,14 +159,20 @@ ops, geometry, parse/serialize, snap, and undo are in `nib-core`, and the live a
 runs on it. Still ahead, building on that foundation:
 
 - **Phase B (client-side pro pillars):** stroke cap/join/dash + fill-rule UI,
-  rect/line/polygon/star primitives + a shapes flyout, numeric-precision inspector,
+  rect/line/polygon/star primitives (rail flyout seam ready), numeric-precision
+  inspector, **named layers** (a flat, ordered list of layers → top-level `<g>` on
+  export, with z-order, show/hide, and an *active* layer new shapes land on),
   multi-select + marquee + align/distribute, rotate/skew about a movable pivot,
   boolean ops + offset/outline/simplify (Rust geometry kernel), smart guides,
-  gradients, command palette.
+  gradients, command palette. Layers is moved up from D because it is foundational
+  for the MCP approach — an LLM organizes generated shapes onto named layers far more
+  cleanly than into a flat path list; it also introduces the first *active
+  re-serialization* of structure (the byte-preserving splice can't wrap `<g>`s).
 - **Phase C (additive, flag-gated):** rust-axum backend running the same core —
   op-log-over-WebSocket sync + an MCP tool surface (the op vocabulary *is* the
   surface). Browser-only build stays fully functional.
-- **Phase D (gated):** layers/groups tree.
+- **Phase D (gated):** arbitrary nested groups — a full object tree layered on top of
+  Phase B's flat named layers.
 
 The `added`/`attributes` model + op vocabulary + pluggable tools + grouped rail are
 shaped to absorb these. If a feature crosses into an unbuilt area, check the

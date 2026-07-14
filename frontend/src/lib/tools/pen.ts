@@ -108,6 +108,7 @@ function penPoint(docPoint: Point): { point: Point; snapRef: NodeRef | null } {
 export const penTool: Tool = {
   id: "pen",
   cursor: () => "crosshair",
+  onDeactivate: finishPen,
   hover(docPoint) {
     if (interaction.penDrawing) {
       // Rubber-band from the last-placed anchor to the cursor while drawing.
