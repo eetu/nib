@@ -181,25 +181,29 @@ Per-area detail in `frontend/CLAUDE.md`.
 ## Roadmap (post-Phase-0)
 
 There is an approved roadmap to grow nib to a pro-tier vector editor on the
-Rust/WASM core. **Phase A (this: the core-first rewrite) has landed** — model,
-ops, geometry, parse/serialize, snap, and undo are in `nib-core`, and the live app
-runs on it. Still ahead, building on that foundation:
+Rust/WASM core. **Phases A + B have landed.** Phase A (the core-first rewrite):
+model, ops, geometry, parse/serialize, snap, undo in `nib-core`. Phase B (the
+client-side pro pillars, all running on the core):
 
-- **Phase B (client-side pro pillars):** stroke cap/join/dash + fill-rule UI,
-  rect/line/polygon/star primitives (rail flyout seam ready), numeric-precision
-  inspector, **named layers** (a flat, ordered list of layers → top-level `<g>` on
-  export, with z-order, show/hide, and an *active* layer new shapes land on),
-  multi-select + marquee + align/distribute, rotate/skew about a movable pivot,
-  boolean ops + offset/outline/simplify (Rust geometry kernel), smart guides,
-  gradients, command palette. Layers is moved up from D because it is foundational
-  for the MCP approach — an LLM organizes generated shapes onto named layers far more
-  cleanly than into a flat path list; it also introduces the first *active
-  re-serialization* of structure (the byte-preserving splice can't wrap `<g>`s).
-- **Phase C (additive, flag-gated):** rust-axum backend running the same core —
-  op-log-over-WebSocket sync + an MCP tool surface (the op vocabulary *is* the
-  surface). Browser-only build stays fully functional.
-- **Phase D (gated):** arbitrary nested groups — a full object tree layered on top of
-  Phase B's flat named layers.
+- **Landed:** stroke cap/join/dash + fill-rule, rect/line/polygon/star primitives,
+  numeric-precision inspector; **unified layers = objects + groups** (Figma/
+  Pixelmator model, one level — z-order/drag-reorder, show/hide, thumbnails, group/
+  ungroup via `<g>`, active layer, right-click context menus); multi-select +
+  marquee + align/distribute; rotate (about the box centre); **boolean ops**
+  (union/subtract/intersect/exclude via the `i_overlay` kernel), **simplify** (RDP),
+  **outline-stroke** (kurbo); smart guides; **gradients** (linear/radial, draggable
+  stops, radial cx/cy/r); command palette (⌘K); plus workflow polish (New/Save-As,
+  copy-style, source prettify + reveal, double-click node editing, friendly path
+  names, content-aware fit + export viewBox, tight selection bounds).
+- **B tails still open (nice-to-have):** offset-path (proper joins), rotate/skew
+  about a *movable* pivot.
+- **Phase C (next — additive, flag-gated):** rust-axum backend running the same core —
+  op-log-over-WebSocket sync + an MCP tool surface. **The op vocabulary the editor
+  already runs on IS the surface** (`moveNode` … `booleanOp` … `groupPaths`).
+  Browser-only build stays fully functional.
+- **Phase D (gated):** arbitrary *nested* groups — a full object tree on top of B's
+  one-level named groups (needs stable-id addressing; imported paths currently group
+  for membership/visibility/order but aren't `<g>`-wrapped on export).
 
 The `added`/`attributes` model + op vocabulary + pluggable tools + grouped rail are
 shaped to absorb these. If a feature crosses into an unbuilt area, check the
