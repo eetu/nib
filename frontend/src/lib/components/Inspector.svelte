@@ -422,7 +422,10 @@
           /></label
         >
       </div>
-      <button class="ghost-btn wide" onclick={() => editor.simplifyPath()}>simplify path</button>
+      <div class="pathops">
+        <button class="ghost-btn" onclick={() => editor.simplifyPath()}>simplify</button>
+        <button class="ghost-btn" onclick={() => editor.outlineStroke()}>outline stroke</button>
+      </div>
       {#if editor.objectSelected}
         <p class="hint">double-click to edit nodes</p>
       {/if}
@@ -831,10 +834,15 @@
     gap: 4px;
   }
 
-  .ghost-btn.wide {
-    width: 100%;
+  .pathops {
+    display: flex;
+    gap: 4px;
+    margin-top: 6px;
+  }
+
+  .pathops .ghost-btn {
+    flex: 1;
     justify-content: center;
-    margin-top: 4px;
   }
 
   .layerlist {

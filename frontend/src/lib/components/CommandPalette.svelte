@@ -50,6 +50,11 @@
       run: () => editor.simplifyPath(),
       enabled: () => editor.selectedPathIndex !== null,
     },
+    {
+      label: "Outline stroke",
+      run: () => editor.outlineStroke(),
+      enabled: () => editor.selectedPathIndex !== null,
+    },
     { label: "Toggle grid", run: () => (tools.gridEnabled = !tools.gridEnabled) },
     { label: "Toggle snap to points", run: () => (tools.snapEnabled = !tools.snapEnabled) },
     { label: "Toggle smart guides", run: () => (tools.guidesEnabled = !tools.guidesEnabled) },

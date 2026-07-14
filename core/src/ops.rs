@@ -188,6 +188,13 @@ pub enum Op {
     },
     /// Reduce a path's node count (Ramer–Douglas–Peucker) within `tolerance` document units.
     SimplifyPath { path: usize, tolerance: f64 },
+    /// Expand a path's stroke (`width`) into a filled outline: the source is soft-deleted and a
+    /// new fill path (`id`) is added, its fill taken from the source's stroke colour.
+    OutlineStroke {
+        path: usize,
+        width: f64,
+        id: String,
+    },
 }
 
 /// Apply an op to the document in place. Returns `true` if it found its target and mutated,
@@ -659,6 +666,49 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             }
             p.subpaths = simplified;
             p.edited = true;
+            true
+        }
+        Op::OutlineStroke { path, width, id } => {
+            let (subpaths, attributes, layer) = {
+                let Some(p) = doc.paths.get(*path) else {
+                    return false;
+                };
+                if p.deleted {
+                    return false;
+                }
+                let subpaths = crate::model::path::outline_stroke(&p.subpaths, *width, 0.25);
+                if subpaths.is_empty() {
+                    return false;
+                }
+                let mut m = p.attributes.clone().unwrap_or_default();
+                if let Some(so) = &p.style_override {
+                    for (k, v) in so {
+                        m.insert(k.clone(), v.clone());
+                    }
+                }
+                let stroke_color = m.get("stroke").cloned().unwrap_or_else(|| "#000000".to_string());
+                m.insert("fill".to_string(), stroke_color);
+                m.insert("stroke".to_string(), "none".to_string());
+                m.shift_remove("stroke-width");
+                (subpaths, m, p.layer.clone())
+            };
+            doc.paths[*path].deleted = true;
+            let index = doc.paths.len();
+            doc.paths.push(PathElement {
+                id: id.clone(),
+                index,
+                original_d: String::new(),
+                subpaths,
+                edited: true,
+                added: true,
+                attributes: Some(attributes),
+                style_override: None,
+                original_tag: None,
+                deleted: false,
+                renamed: false,
+                layer,
+                hidden: false,
+            });
             true
         }
     }

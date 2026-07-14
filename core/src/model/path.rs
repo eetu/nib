@@ -5,7 +5,7 @@
 //! (already absolute; arcs → cubics, H/V → lines, S/T reflected) and elevate its `QuadTo`
 //! elements to cubics here — the one normalization kurbo leaves to us.
 
-use kurbo::{BezPath, PathEl};
+use kurbo::{BezPath, PathEl, Stroke, StrokeOpts};
 
 use super::geometry::{cubic_at, distance, handles_collinear, lerp, split_cubic};
 use super::types::{NodeType, PathNode, Point, Subpath};
@@ -52,6 +52,17 @@ fn rdp_keep(pts: &[Point], eps: f64) -> Vec<usize> {
     let mut kept: Vec<usize> = (0..n).filter(|&i| keep[i]).collect();
     kept.sort_unstable();
     kept
+}
+
+/// Expand a stroke of the given `width` into a filled outline shape (kurbo's stroke → fill).
+/// Returns the outline as anchor subpaths (empty if the geometry doesn't parse).
+pub fn outline_stroke(subpaths: &[Subpath], width: f64, tolerance: f64) -> Vec<Subpath> {
+    let Ok(bez) = BezPath::from_svg(&path_to_d_prec(subpaths, 6)) else {
+        return Vec::new();
+    };
+    let style = Stroke::new(width);
+    let out = kurbo::stroke(bez.iter(), &style, &StrokeOpts::default(), tolerance);
+    parse_path_d(&out.to_svg())
 }
 
 /// Reduce each subpath's node count with RDP over its anchor points (survivors keep their
@@ -415,6 +426,29 @@ mod tests {
             closed: false,
         };
         assert!(simplify_subpaths(&[bent], 0.1)[0].nodes.len() >= 3);
+    }
+
+    #[test]
+    fn outline_stroke_expands_a_line_into_a_band() {
+        let line = Subpath {
+            nodes: vec![
+                PathNode::corner(Point::new(0.0, 0.0)),
+                PathNode::corner(Point::new(10.0, 0.0)),
+            ],
+            closed: false,
+        };
+        let out = outline_stroke(&[line], 2.0, 0.25);
+        assert!(!out.is_empty());
+        let mut min_y = f64::INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for sp in &out {
+            for n in &sp.nodes {
+                min_y = min_y.min(n.point.y);
+                max_y = max_y.max(n.point.y);
+            }
+        }
+        // width 2 → the band spans roughly y ∈ [-1, 1].
+        assert!(min_y <= -0.9 && max_y >= 0.9, "{min_y}..{max_y}");
     }
 
     #[test]

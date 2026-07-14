@@ -398,6 +398,20 @@ class DocumentStore {
     if (this.#apply({ type: "simplifyPath", path: i, tolerance: tol })) this.commit();
   }
 
+  /** Expand the selected path's stroke into a filled outline shape. */
+  outlineStroke(): void {
+    const i = this.selectedPathIndex;
+    const p = i !== null ? this.doc?.paths[i] : null;
+    if (i === null || !p) return;
+    const eff = { ...(p.attributes ?? {}), ...(p.styleOverride ?? {}) };
+    const width = Number(eff["stroke-width"] ?? "1") || 1;
+    const id = crypto.randomUUID();
+    if (this.#apply({ type: "outlineStroke", path: i, width, id })) {
+      this.commit();
+      this.selectPath((this.doc?.paths.length ?? 1) - 1);
+    }
+  }
+
   /** Combine the selected paths with a boolean op — replaces them with one result path. */
   booleanOp(op: "union" | "intersect" | "subtract" | "exclude"): void {
     if (this.selectedPaths.length < 2) return;

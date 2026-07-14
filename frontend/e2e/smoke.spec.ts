@@ -332,6 +332,39 @@ test("simplify reduces a path's node count", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("outline stroke turns a stroked line into a filled shape", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M10 10 L60 50" stroke="#ff0000" stroke-width="6" fill="none"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  await page.locator(".layerlist .row-btn").first().click();
+  await page.keyboard.press("Meta+k");
+  await page.locator(".palette .q").fill("outline");
+  await page.keyboard.press("Enter");
+
+  // The stroked line is replaced by a drawn fill shape whose fill is the old stroke colour.
+  const drawn = page.locator("svg.canvas g.drawn path");
+  await expect(drawn).toHaveCount(1);
+  await expect(drawn).toHaveAttribute("fill", "#ff0000");
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("boolean union combines two shapes into one", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
