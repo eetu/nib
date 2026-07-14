@@ -243,6 +243,9 @@
           /></label
         >
       </div>
+      {#if editor.objectSelected}
+        <p class="hint">double-click to edit nodes</p>
+      {/if}
     </section>
   {/if}
 
@@ -480,6 +483,12 @@
     margin: 0;
     color: var(--halo-text-muted);
     font-style: italic;
+  }
+
+  .hint {
+    margin: 2px 0 0;
+    font-size: 11px;
+    color: var(--halo-text-muted);
   }
 
   .paths ul {
