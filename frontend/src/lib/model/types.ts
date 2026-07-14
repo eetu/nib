@@ -87,3 +87,20 @@ export function nodeRefEquals(a: NodeRef | null, b: NodeRef | null): boolean {
     a.pathIndex === b.pathIndex && a.subpathIndex === b.subpathIndex && a.nodeIndex === b.nodeIndex
   );
 }
+
+/** A parametric primitive — the payload of the core's addShape/setShape ops. Matches the
+ *  Rust `ShapeSpec` (serde tag "shape"). Shapes are built into ordinary editable paths. */
+export type ShapeSpec =
+  | { shape: "ellipse"; cx: number; cy: number; rx: number; ry: number }
+  | { shape: "rect"; x0: number; y0: number; x1: number; y1: number }
+  | { shape: "line"; x0: number; y0: number; x1: number; y1: number }
+  | { shape: "polygon"; cx: number; cy: number; r: number; sides: number; rotation: number }
+  | {
+      shape: "star";
+      cx: number;
+      cy: number;
+      outer: number;
+      inner: number;
+      points: number;
+      rotation: number;
+    };

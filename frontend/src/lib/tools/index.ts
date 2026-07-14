@@ -1,8 +1,12 @@
 import Circle from "@lucide/svelte/icons/circle";
 import Eraser from "@lucide/svelte/icons/eraser";
+import Hexagon from "@lucide/svelte/icons/hexagon";
 import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
 import PenTool from "@lucide/svelte/icons/pen-tool";
 import Plus from "@lucide/svelte/icons/plus";
+import Slash from "@lucide/svelte/icons/slash";
+import Square from "@lucide/svelte/icons/square";
+import Star from "@lucide/svelte/icons/star";
 import type { Component } from "svelte";
 
 import type { ToolId } from "$lib/stores/tool.svelte";
@@ -10,8 +14,12 @@ import type { ToolId } from "$lib/stores/tool.svelte";
 import { addNodeTool } from "./add-node";
 import { circleTool } from "./circle";
 import { deleteNodeTool } from "./delete-node";
+import { lineTool } from "./line";
 import { penTool } from "./pen";
+import { polygonTool } from "./polygon";
+import { rectTool } from "./rect";
 import { selectTool } from "./select";
+import { starTool } from "./star";
 import type { Tool } from "./types";
 
 /** One tool's full definition — behavior + everything the rail/shortcuts need. This is the
@@ -56,7 +64,13 @@ export const TOOL_GROUPS: ToolGroup[] = [
     // flyout automatically once there's more than one.
     name: "shapes",
     flyout: true,
-    tools: [{ id: "circle", tool: circleTool, label: "Circle", shortcut: "c", icon: Circle }],
+    tools: [
+      { id: "circle", tool: circleTool, label: "Circle", shortcut: "c", icon: Circle },
+      { id: "rect", tool: rectTool, label: "Rectangle", shortcut: "r", icon: Square },
+      { id: "line", tool: lineTool, label: "Line", shortcut: "l", icon: Slash },
+      { id: "polygon", tool: polygonTool, label: "Polygon", shortcut: "g", icon: Hexagon },
+      { id: "star", tool: starTool, label: "Star", shortcut: "s", icon: Star },
+    ],
   },
   {
     name: "nodes",

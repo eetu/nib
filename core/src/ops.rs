@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::geometry::{distance, normalize};
 use crate::model::path::{close_subpath, insert_node_at, reversed_subpath};
-use crate::model::shapes::ellipse_nodes;
+use crate::model::shapes::{ellipse_nodes, line_nodes, polygon_nodes, rect_nodes, star_nodes};
 use crate::model::types::{NodeRef, NodeType, PathElement, PathNode, Point, Subpath, SvgDocument};
 
 /// Which control handle of a node an op targets.
@@ -24,6 +24,36 @@ use crate::model::types::{NodeRef, NodeType, PathElement, PathNode, Point, Subpa
 pub enum Handle {
     In,
     Out,
+}
+
+/// A parametric primitive. One vocabulary for every shape tool + the MCP surface ("make a
+/// rect / star here"); the reducer builds the anchor nodes from it, so shapes stay ordinary
+/// editable paths.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "shape", rename_all = "camelCase")]
+pub enum ShapeSpec {
+    Ellipse { cx: f64, cy: f64, rx: f64, ry: f64 },
+    Rect { x0: f64, y0: f64, x1: f64, y1: f64 },
+    Line { x0: f64, y0: f64, x1: f64, y1: f64 },
+    Polygon { cx: f64, cy: f64, r: f64, sides: u32, rotation: f64 },
+    Star { cx: f64, cy: f64, outer: f64, inner: f64, points: u32, rotation: f64 },
+}
+
+impl ShapeSpec {
+    /// Build the shape's anchor nodes + whether the subpath is closed (lines are open).
+    fn build(&self) -> (Vec<PathNode>, bool) {
+        match *self {
+            ShapeSpec::Ellipse { cx, cy, rx, ry } => (ellipse_nodes(cx, cy, rx, ry), true),
+            ShapeSpec::Rect { x0, y0, x1, y1 } => (rect_nodes(x0, y0, x1, y1), true),
+            ShapeSpec::Line { x0, y0, x1, y1 } => (line_nodes(x0, y0, x1, y1), false),
+            ShapeSpec::Polygon { cx, cy, r, sides, rotation } => {
+                (polygon_nodes(cx, cy, r, sides, rotation), true)
+            }
+            ShapeSpec::Star { cx, cy, outer, inner, points, rotation } => {
+                (star_nodes(cx, cy, outer, inner, points, rotation), true)
+            }
+        }
+    }
 }
 
 /// A single document mutation. `apply` is total: an op whose target is missing is a no-op.
@@ -75,20 +105,24 @@ pub enum Op {
     CloseLoop { path: usize, subpath: usize },
     /// Close a subpath (connect last→first) without moving any node (pen "click the start").
     ClosePath { path: usize, subpath: usize },
-    /// Resize the ellipse in a subpath to new centre + radii.
-    ResizeEllipse {
+    /// Rebuild a subpath from a parametric shape spec (shape tools resize live through this).
+    SetShape {
         path: usize,
         subpath: usize,
-        center: Point,
-        rx: f64,
-        ry: f64,
+        spec: ShapeSpec,
     },
 
-    /// Append a new drawn path (pen start, circle start, paste). The caller supplies the id
-    /// (so all clients agree) and the resolved style.
+    /// Append a new drawn path (pen start, paste). The caller supplies the id (so all clients
+    /// agree) and the resolved style.
     AddPath {
         id: String,
         subpaths: Vec<Subpath>,
+        attributes: IndexMap<String, String>,
+    },
+    /// Append a new drawn path built from a shape spec (shape tools + MCP).
+    AddShape {
+        id: String,
+        spec: ShapeSpec,
         attributes: IndexMap<String, String>,
     },
     /// Rename a path (updates its display id and, on export, its `id` attr).
@@ -257,18 +291,17 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             mark_edited(doc, *path);
             true
         }
-        Op::ResizeEllipse {
+        Op::SetShape {
             path,
             subpath,
-            center,
-            rx,
-            ry,
+            spec,
         } => {
             let Some(sp) = subpath_mut(doc, *path, *subpath) else {
                 return false;
             };
-            sp.nodes = ellipse_nodes(center.x, center.y, *rx, *ry);
-            sp.closed = true;
+            let (nodes, closed) = spec.build();
+            sp.nodes = nodes;
+            sp.closed = closed;
             mark_edited(doc, *path);
             true
         }
@@ -283,6 +316,28 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 index,
                 original_d: String::new(),
                 subpaths: subpaths.clone(),
+                edited: true,
+                added: true,
+                attributes: Some(attributes.clone()),
+                style_override: None,
+                original_tag: None,
+                deleted: false,
+                renamed: false,
+            });
+            true
+        }
+        Op::AddShape {
+            id,
+            spec,
+            attributes,
+        } => {
+            let (nodes, closed) = spec.build();
+            let index = doc.paths.len();
+            doc.paths.push(PathElement {
+                id: id.clone(),
+                index,
+                original_d: String::new(),
+                subpaths: vec![Subpath { nodes, closed }],
                 edited: true,
                 added: true,
                 attributes: Some(attributes.clone()),
@@ -654,22 +709,73 @@ mod tests {
     }
 
     #[test]
-    fn resize_ellipse_rebuilds_four_smooth_nodes() {
+    fn set_shape_rebuilds_an_ellipse() {
         let mut doc = doc_from("M 0 0 L 10 0", true);
         assert!(apply(
             &mut doc,
-            &Op::ResizeEllipse {
+            &Op::SetShape {
                 path: 0,
                 subpath: 0,
-                center: Point::new(50.0, 50.0),
-                rx: 10.0,
-                ry: 20.0,
+                spec: ShapeSpec::Ellipse {
+                    cx: 50.0,
+                    cy: 50.0,
+                    rx: 10.0,
+                    ry: 20.0,
+                },
             }
         ));
         let sp = &doc.paths[0].subpaths[0];
         assert_eq!(sp.nodes.len(), 4);
         assert!(sp.closed);
         assert_eq!(sp.nodes[0].point, Point::new(60.0, 50.0));
+    }
+
+    #[test]
+    fn set_shape_builds_a_rect_and_a_line() {
+        let mut doc = doc_from("M 0 0 L 10 0", true);
+        apply(
+            &mut doc,
+            &Op::SetShape {
+                path: 0,
+                subpath: 0,
+                spec: ShapeSpec::Rect { x0: 10.0, y0: 20.0, x1: 30.0, y1: 40.0 },
+            },
+        );
+        assert_eq!(doc.paths[0].subpaths[0].nodes.len(), 4);
+        assert!(doc.paths[0].subpaths[0].closed);
+
+        apply(
+            &mut doc,
+            &Op::SetShape {
+                path: 0,
+                subpath: 0,
+                spec: ShapeSpec::Line { x0: 0.0, y0: 0.0, x1: 5.0, y1: 5.0 },
+            },
+        );
+        assert_eq!(doc.paths[0].subpaths[0].nodes.len(), 2);
+        assert!(!doc.paths[0].subpaths[0].closed); // lines are open
+    }
+
+    #[test]
+    fn add_shape_appends_a_polygon_path() {
+        let mut doc = doc_from("M 0 0 L 10 0", false);
+        assert!(apply(
+            &mut doc,
+            &Op::AddShape {
+                id: "poly".into(),
+                spec: ShapeSpec::Polygon {
+                    cx: 0.0,
+                    cy: 0.0,
+                    r: 10.0,
+                    sides: 6,
+                    rotation: 0.0,
+                },
+                attributes: IndexMap::new(),
+            }
+        ));
+        assert_eq!(doc.paths.len(), 2);
+        assert_eq!(doc.paths[1].subpaths[0].nodes.len(), 6);
+        assert!(doc.paths[1].added);
     }
 
     #[test]

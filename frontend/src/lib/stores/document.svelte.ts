@@ -1,11 +1,11 @@
 import { Editor as WasmEditor } from "$lib/core";
-import { ellipseSubpath } from "$lib/model/shapes";
 import type {
   NodeRef,
   NodeType,
   PathElement,
   PathNode,
   Point,
+  ShapeSpec,
   Subpath,
   SvgDocument,
 } from "$lib/model/types";
@@ -293,14 +293,9 @@ class DocumentStore {
     this.#sync();
   }
 
-  resizeEllipse(
-    pathIndex: number,
-    subpathIndex: number,
-    center: Point,
-    rx: number,
-    ry: number,
-  ): void {
-    this.#apply({ type: "resizeEllipse", path: pathIndex, subpath: subpathIndex, center, rx, ry });
+  /** Rebuild a shape subpath from an updated spec (live during a create-tool drag). */
+  setShape(pathIndex: number, subpathIndex: number, spec: ShapeSpec): void {
+    this.#apply({ type: "setShape", path: pathIndex, subpath: subpathIndex, spec });
     this.#sync();
   }
 
@@ -396,15 +391,16 @@ class DocumentStore {
     return ref;
   }
 
-  beginEllipse(center: Point): NodeRef {
+  /** Start a new shape path from a parametric spec (create tools seed it degenerate, then
+   *  resize live via setShape). Returns its first node's ref. */
+  beginShape(spec: ShapeSpec): NodeRef {
     this.ensureBlank();
     if (!this.doc || !this.#wasm) return { pathIndex: 0, subpathIndex: 0, nodeIndex: 0 };
     const pathIndex = this.doc.paths.length;
-    const subpaths: Subpath[] = [ellipseSubpath(center.x, center.y, 0, 0)];
     this.#apply({
-      type: "addPath",
+      type: "addShape",
       id: crypto.randomUUID(),
-      subpaths,
+      spec,
       attributes: { ...tools.newStyle },
     });
     const ref = { pathIndex, subpathIndex: 0, nodeIndex: 0 };

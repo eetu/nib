@@ -39,6 +39,37 @@ test("boots the core, loads a sample, draws, and undoes without errors", async (
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("draws a rectangle with the rect shape tool", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+
+  // Start a blank drawing so the canvas mounts, pick the rect tool (shortcut), drag it out.
+  await page.getByRole("button", { name: "new drawing" }).click();
+  await expect(page.locator("svg.canvas")).toBeVisible();
+  await page.keyboard.press("r");
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.35);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.6);
+  await page.mouse.up();
+
+  // One drawn path (the rectangle), and it round-trips to a 4-corner closed `d`.
+  const rect = page.locator("svg.canvas g.drawn path");
+  await expect(rect).toHaveCount(1);
+  await expect(rect).toHaveAttribute("d", /Z$/);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("clicking a filled shape's interior selects it (fill hit-test)", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
