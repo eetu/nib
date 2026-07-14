@@ -13,6 +13,7 @@
 use wasm_bindgen::prelude::*;
 
 pub mod model;
+pub mod ops;
 pub mod snap;
 
 /// The nib editing engine. It **owns** the document + history + selection across calls;
