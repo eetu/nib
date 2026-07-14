@@ -186,6 +186,8 @@ pub enum Op {
         paths: Vec<usize>,
         id: String,
     },
+    /// Reduce a path's node count (Ramer–Douglas–Peucker) within `tolerance` document units.
+    SimplifyPath { path: usize, tolerance: f64 },
 }
 
 /// Apply an op to the document in place. Returns `true` if it found its target and mutated,
@@ -643,6 +645,20 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 layer,
                 hidden: false,
             });
+            true
+        }
+        Op::SimplifyPath { path, tolerance } => {
+            let Some(p) = doc.paths.get_mut(*path) else {
+                return false;
+            };
+            let before: usize = p.subpaths.iter().map(|sp| sp.nodes.len()).sum();
+            let simplified = crate::model::path::simplify_subpaths(&p.subpaths, *tolerance);
+            let after: usize = simplified.iter().map(|sp| sp.nodes.len()).sum();
+            if after >= before {
+                return false;
+            }
+            p.subpaths = simplified;
+            p.edited = true;
             true
         }
     }

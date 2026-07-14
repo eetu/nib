@@ -388,6 +388,16 @@ class DocumentStore {
     this.commit();
   }
 
+  /** Simplify the selected path — thin its nodes (RDP) at ~1% of its size. */
+  simplifyPath(): void {
+    const i = this.selectedPathIndex;
+    const p = i !== null ? this.doc?.paths[i] : null;
+    if (i === null || !p) return;
+    const b = tightBounds(p.subpaths);
+    const tol = b ? Math.max(b.maxX - b.minX, b.maxY - b.minY, 1) * 0.01 : 1;
+    if (this.#apply({ type: "simplifyPath", path: i, tolerance: tol })) this.commit();
+  }
+
   /** Combine the selected paths with a boolean op — replaces them with one result path. */
   booleanOp(op: "union" | "intersect" | "subtract" | "exclude"): void {
     if (this.selectedPaths.length < 2) return;

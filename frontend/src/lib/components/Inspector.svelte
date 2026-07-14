@@ -422,6 +422,7 @@
           /></label
         >
       </div>
+      <button class="ghost-btn wide" onclick={() => editor.simplifyPath()}>simplify path</button>
       {#if editor.objectSelected}
         <p class="hint">double-click to edit nodes</p>
       {/if}
@@ -828,6 +829,12 @@
   .lhead-actions {
     display: flex;
     gap: 4px;
+  }
+
+  .ghost-btn.wide {
+    width: 100%;
+    justify-content: center;
+    margin-top: 4px;
   }
 
   .layerlist {

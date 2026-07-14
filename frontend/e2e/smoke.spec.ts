@@ -298,6 +298,40 @@ test("copy style transfers a fill from one path to another", async ({ page }) =>
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("simplify reduces a path's node count", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 20"><path d="M0 5 L10 5 L20 5 L30 5 L40 5 L50 5" fill="none" stroke="#000"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const artwork = page.locator("svg.canvas g.artwork path");
+  const before = await artwork.getAttribute("d");
+  await page.locator(".layerlist .row-btn").first().click();
+  await page.keyboard.press("Meta+k");
+  await page.locator(".palette .q").fill("simplify");
+  await page.keyboard.press("Enter");
+  // The collinear midpoints collapse → the d shortens.
+  await expect(artwork).not.toHaveAttribute("d", before ?? "");
+  const after = await artwork.getAttribute("d");
+  expect((after ?? "").length).toBeLessThan((before ?? "").length);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("boolean union combines two shapes into one", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
