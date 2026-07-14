@@ -19,7 +19,7 @@
   // The transform box + centerline show only for an object (whole-path)
   // selection — node editing stays clean (just anchors + handles).
   const boxPath = $derived(
-    editor.objectSelected ? (doc?.paths[editor.selectedPath ?? -1] ?? null) : null,
+    editor.objectSelected ? (doc?.paths[editor.selectedPathIndex ?? -1] ?? null) : null,
   );
 
   // Project a path's geometry into screen space so its outline can be traced as
@@ -61,6 +61,17 @@
         y2={viewport.toScreen({ x: 0, y: gy }).y}
       />
     {/each}
+    {#if interaction.marquee}
+      {@const a = viewport.toScreen({ x: interaction.marquee.x0, y: interaction.marquee.y0 })}
+      {@const b = viewport.toScreen({ x: interaction.marquee.x1, y: interaction.marquee.y1 })}
+      <rect
+        class="marquee"
+        x={Math.min(a.x, b.x)}
+        y={Math.min(a.y, b.y)}
+        width={Math.abs(b.x - a.x)}
+        height={Math.abs(b.y - a.y)}
+      />
+    {/if}
     {#if outlineD}
       <!-- selection centerline: light casing + accent core so it reads on any
            stroke colour (Pixelmator-style) -->
@@ -81,6 +92,15 @@
           {@const hp = viewport.toScreen(h.point)}
           <rect class="xf-handle" x={hp.x - 4} y={hp.y - 4} width="8" height="8" />
         {/each}
+      {/if}
+    {/if}
+    {#if editor.multiSelected}
+      {@const raw = editor.selectionBounds}
+      {#if raw}
+        {@const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX))}
+        {@const tl = viewport.toScreen({ x: bb.minX, y: bb.minY })}
+        {@const br = viewport.toScreen({ x: bb.maxX, y: bb.maxY })}
+        <rect class="sel-box" x={tl.x} y={tl.y} width={br.x - tl.x} height={br.y - tl.y} />
       {/if}
     {/if}
     {#if nodeEditing}
@@ -193,6 +213,14 @@
     fill: var(--halo-bg-main);
     stroke: var(--halo-accent);
     stroke-width: 1.5;
+  }
+
+  /* rubber-band marquee (drag over empty canvas to select) */
+  .marquee {
+    fill: var(--halo-accent-soft);
+    stroke: var(--halo-accent);
+    stroke-width: 1;
+    opacity: 0.5;
   }
 
   /* smart alignment guides while dragging */

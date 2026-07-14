@@ -1,4 +1,5 @@
 import { Editor as WasmEditor } from "$lib/core";
+import { subpathsBounds } from "$lib/model/geometry";
 import type {
   NodeRef,
   NodeType,
@@ -13,10 +14,13 @@ import { debounce, loadState, saveState } from "$lib/persistence";
 
 import { tools } from "./tool.svelte";
 
+type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
+
 type Session = {
   doc: SvgDocument | null;
   selection: NodeRef | null;
   selectedPath: number | null;
+  selectedPaths?: number[];
   dirty: boolean;
   fileName: string | null;
 };
@@ -64,6 +68,9 @@ class DocumentStore {
   doc = $state<SvgDocument | null>(null);
   selection = $state<NodeRef | null>(null);
   selectedPath = $state<number | null>(null);
+  /** Object selection as a set of path indices (client-side). 0 = nothing, 1 = a single
+   *  shape (full transform box), >1 = a multi-selection (union box + align/distribute). */
+  selectedPaths = $state<number[]>([]);
   /** Path currently in node-editing mode (Figma-style: entered by double-click). While null
    *  the select tool moves whole shapes; when set, that path's anchors/handles are editable.
    *  Client-only editing mode — not persisted (reload starts in object mode). */
@@ -81,6 +88,7 @@ class DocumentStore {
       doc: this.doc,
       selection: this.selection,
       selectedPath: this.selectedPath,
+      selectedPaths: this.selectedPaths,
       dirty: this.dirty,
       fileName: this.fileName,
     });
@@ -97,8 +105,13 @@ class DocumentStore {
         this.#wasm.setDocument(s.doc);
         // Node-edit mode isn't persisted, so restore any selection as an object selection
         // (transform box) rather than a dangling node with nowhere to edit.
-        const restorePath = s.selection?.pathIndex ?? s.selectedPath;
-        if (restorePath != null) this.#wasm.selectPath(restorePath);
+        const restore = s.selectedPaths?.length
+          ? s.selectedPaths
+          : (s.selection?.pathIndex ?? s.selectedPath) != null
+            ? [(s.selection?.pathIndex ?? s.selectedPath) as number]
+            : [];
+        this.selectedPaths = restore;
+        if (restore.length) this.#wasm.selectPath(restore[0]);
         this.fileName = s.fileName;
         this.#sync();
         this.dirty = s.dirty; // after #sync (which doesn't touch dirty)
@@ -129,7 +142,8 @@ class DocumentStore {
   // --- derived selection state -------------------------------------------
 
   get selectedPathIndex(): number | null {
-    return this.selection ? this.selection.pathIndex : this.selectedPath;
+    if (this.selection) return this.selection.pathIndex;
+    return this.selectedPaths.length === 1 ? this.selectedPaths[0] : null;
   }
 
   get selectedPathElement(): PathElement | null {
@@ -137,8 +151,37 @@ class DocumentStore {
     return i !== null ? (this.doc?.paths[i] ?? null) : null;
   }
 
+  /** Exactly one whole shape selected → the full transform box (scale/rotate) shows. */
   get objectSelected(): boolean {
-    return this.selection === null && this.selectedPath !== null && this.nodeEditIndex === null;
+    return (
+      this.selection === null && this.nodeEditIndex === null && this.selectedPaths.length === 1
+    );
+  }
+
+  /** More than one shape selected → a union box + align/distribute, move-as-a-group. */
+  get multiSelected(): boolean {
+    return this.selection === null && this.nodeEditIndex === null && this.selectedPaths.length > 1;
+  }
+
+  /** Union bounding box of the current object selection (for the multi-select box + align). */
+  get selectionBounds(): Bounds | null {
+    if (!this.doc || this.selectedPaths.length === 0) return null;
+    let box: Bounds | null = null;
+    for (const i of this.selectedPaths) {
+      const p = this.doc.paths[i];
+      if (!p || p.deleted) continue;
+      const b = subpathsBounds(p.subpaths);
+      if (!b) continue;
+      box = box
+        ? {
+            minX: Math.min(box.minX, b.minX),
+            minY: Math.min(box.minY, b.minY),
+            maxX: Math.max(box.maxX, b.maxX),
+            maxY: Math.max(box.maxY, b.maxY),
+          }
+        : { ...b };
+    }
+    return box;
   }
 
   get selectedNode(): PathNode | null {
@@ -204,8 +247,9 @@ class DocumentStore {
   // --- selection ---------------------------------------------------------
 
   select(ref: NodeRef | null): void {
-    // Selecting a node implies node-editing that path.
+    // Selecting a node implies node-editing that path; clears any multi-selection.
     this.nodeEditIndex = ref ? ref.pathIndex : null;
+    this.selectedPaths = ref ? [ref.pathIndex] : [];
     this.#wasm?.select(ref);
     this.#sync();
     this.#persist();
@@ -213,13 +257,36 @@ class DocumentStore {
 
   selectPath(pathIndex: number | null): void {
     this.nodeEditIndex = null; // object mode
+    this.selectedPaths = pathIndex == null ? [] : [pathIndex];
     this.#wasm?.selectPath(pathIndex ?? undefined);
+    this.#sync();
+    this.#persist();
+  }
+
+  /** Toggle a path in/out of the object selection (shift-click). */
+  togglePath(pathIndex: number): void {
+    this.nodeEditIndex = null;
+    this.selectedPaths = this.selectedPaths.includes(pathIndex)
+      ? this.selectedPaths.filter((i) => i !== pathIndex)
+      : [...this.selectedPaths, pathIndex];
+    const primary = this.selectedPaths.at(-1) ?? null;
+    this.#wasm?.selectPath(primary ?? undefined);
+    this.#sync();
+    this.#persist();
+  }
+
+  /** Replace the object selection with a set of paths (marquee). */
+  setSelectedPaths(indices: number[]): void {
+    this.nodeEditIndex = null;
+    this.selectedPaths = [...indices];
+    this.#wasm?.selectPath(indices[0] ?? undefined);
     this.#sync();
     this.#persist();
   }
 
   deselect(): void {
     this.nodeEditIndex = null;
+    this.selectedPaths = [];
     this.#wasm?.deselect();
     this.#sync();
     this.#persist();
@@ -229,6 +296,7 @@ class DocumentStore {
    *  its nodes as editable so the overlay shows anchors and the select tool edits them. */
   enterNodeEdit(pathIndex: number): void {
     this.#wasm?.selectPath(pathIndex);
+    this.selectedPaths = [pathIndex];
     this.nodeEditIndex = pathIndex;
     this.#sync();
     this.#persist();
@@ -241,6 +309,67 @@ class DocumentStore {
     this.#wasm?.select(null); // drop the node; selectPath is preserved
     this.#sync();
     this.#persist();
+  }
+
+  // --- multi-selection group operations ----------------------------------
+
+  /** Live-move every selected path by (dx, dy) — the group drag. Commit at gesture end. */
+  moveSelectedBy(dx: number, dy: number): void {
+    for (const i of this.selectedPaths) this.#apply({ type: "movePathBy", path: i, dx, dy });
+    this.#sync();
+  }
+
+  /** Align every selected shape's bbox to one edge/centre of the selection's union box. */
+  align(edge: "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom"): void {
+    const doc = this.doc;
+    const u = this.selectionBounds;
+    if (!doc || !u || this.selectedPaths.length < 2) return;
+    for (const i of this.selectedPaths) {
+      const p = doc.paths[i];
+      if (!p || p.deleted) continue;
+      const b = subpathsBounds(p.subpaths);
+      if (!b) continue;
+      let dx = 0;
+      let dy = 0;
+      if (edge === "left") dx = u.minX - b.minX;
+      else if (edge === "right") dx = u.maxX - b.maxX;
+      else if (edge === "hcenter") dx = (u.minX + u.maxX) / 2 - (b.minX + b.maxX) / 2;
+      else if (edge === "top") dy = u.minY - b.minY;
+      else if (edge === "bottom") dy = u.maxY - b.maxY;
+      else dy = (u.minY + u.maxY) / 2 - (b.minY + b.maxY) / 2;
+      if (dx || dy) this.#apply({ type: "movePathBy", path: i, dx, dy });
+    }
+    this.commit();
+  }
+
+  /** Even out spacing between the selected shapes' centres along one axis (needs ≥3). */
+  distribute(axis: "h" | "v"): void {
+    const doc = this.doc;
+    if (!doc) return;
+    const items = this.selectedPaths
+      .map((i) => ({ i, b: subpathsBounds(doc.paths[i]?.subpaths ?? []) }))
+      .filter((x): x is { i: number; b: Bounds } => !!x.b && !doc.paths[x.i]?.deleted);
+    if (items.length < 3) return;
+    const mid = (b: Bounds) => (axis === "h" ? (b.minX + b.maxX) / 2 : (b.minY + b.maxY) / 2);
+    items.sort((a, c) => mid(a.b) - mid(c.b));
+    const first = mid(items[0].b);
+    const step = (mid(items[items.length - 1].b) - first) / (items.length - 1);
+    items.forEach((it, k) => {
+      if (k === 0 || k === items.length - 1) return;
+      const delta = first + step * k - mid(it.b);
+      if (axis === "h") this.#apply({ type: "movePathBy", path: it.i, dx: delta, dy: 0 });
+      else this.#apply({ type: "movePathBy", path: it.i, dx: 0, dy: delta });
+    });
+    this.commit();
+  }
+
+  /** Soft-delete every selected path (soft-delete keeps indices stable, so no reindexing). */
+  deleteSelectedPaths(): void {
+    if (this.selectedPaths.length === 0) return;
+    for (const i of this.selectedPaths) this.#apply({ type: "deletePath", path: i });
+    this.#wasm?.deselect();
+    this.selectedPaths = [];
+    this.commit();
   }
 
   // --- gesture lifecycle -------------------------------------------------
@@ -483,8 +612,8 @@ class DocumentStore {
         this.moveNode(this.selection, { x: node.point.x + dx, y: node.point.y + dy });
         this.commit();
       }
-    } else if (this.selectedPath !== null) {
-      this.movePathBy(this.selectedPath, dx, dy);
+    } else if (this.selectedPaths.length > 0) {
+      this.moveSelectedBy(dx, dy);
       this.commit();
     }
   }

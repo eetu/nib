@@ -1,4 +1,12 @@
 <script lang="ts">
+  import AlignCenterHorizontal from "@lucide/svelte/icons/align-center-horizontal";
+  import AlignCenterVertical from "@lucide/svelte/icons/align-center-vertical";
+  import AlignEndHorizontal from "@lucide/svelte/icons/align-end-horizontal";
+  import AlignEndVertical from "@lucide/svelte/icons/align-end-vertical";
+  import AlignHorizontalDistributeCenter from "@lucide/svelte/icons/align-horizontal-distribute-center";
+  import AlignStartHorizontal from "@lucide/svelte/icons/align-start-horizontal";
+  import AlignStartVertical from "@lucide/svelte/icons/align-start-vertical";
+  import AlignVerticalDistributeCenter from "@lucide/svelte/icons/align-vertical-distribute-center";
   import Trash2 from "@lucide/svelte/icons/trash-2";
 
   import { subpathsBounds } from "$lib/model/geometry";
@@ -139,6 +147,42 @@
 </script>
 
 <aside class="inspector">
+  {#if editor.multiSelected}
+    <section>
+      <h2>arrange · {editor.selectedPaths.length}</h2>
+      <div class="arrange">
+        <button title="align left" onclick={() => editor.align("left")}>
+          <AlignStartVertical size={16} />
+        </button>
+        <button title="align horizontal centres" onclick={() => editor.align("hcenter")}>
+          <AlignCenterVertical size={16} />
+        </button>
+        <button title="align right" onclick={() => editor.align("right")}>
+          <AlignEndVertical size={16} />
+        </button>
+        <button title="align top" onclick={() => editor.align("top")}>
+          <AlignStartHorizontal size={16} />
+        </button>
+        <button title="align vertical centres" onclick={() => editor.align("vcenter")}>
+          <AlignCenterHorizontal size={16} />
+        </button>
+        <button title="align bottom" onclick={() => editor.align("bottom")}>
+          <AlignEndHorizontal size={16} />
+        </button>
+      </div>
+      {#if editor.selectedPaths.length >= 3}
+        <div class="arrange">
+          <button title="distribute horizontally" onclick={() => editor.distribute("h")}>
+            <AlignHorizontalDistributeCenter size={16} />
+          </button>
+          <button title="distribute vertically" onclick={() => editor.distribute("v")}>
+            <AlignVerticalDistributeCenter size={16} />
+          </button>
+        </div>
+      {/if}
+    </section>
+  {/if}
+
   {#if path || isCreateTool}
     <section>
       <h2>{path ? "style" : "new shape style"}</h2>
@@ -293,10 +337,10 @@
               {:else}
                 <button
                   class="row-btn"
-                  class:active={editor.selectedPathIndex === pi}
-                  onclick={() => editor.selectPath(pi)}
+                  class:active={editor.selectedPaths.includes(pi)}
+                  onclick={(e) => (e.shiftKey ? editor.togglePath(pi) : editor.selectPath(pi))}
                   ondblclick={() => startRename(pi, p.id)}
-                  title="double-click to rename"
+                  title="click to select · shift-click to multi-select · double-click to rename"
                 >
                   <span class="pid">{p.id}</span>
                   <span class="meta">
@@ -489,6 +533,30 @@
     margin: 2px 0 0;
     font-size: 11px;
     color: var(--halo-text-muted);
+  }
+
+  /* align / distribute icon buttons */
+  .arrange {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+
+  .arrange button {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 5px 0;
+    border: 1px solid var(--halo-border);
+    border-radius: var(--halo-radius-pill);
+    background: var(--halo-bg-main);
+    color: var(--halo-text-muted);
+  }
+
+  .arrange button:hover {
+    border-color: var(--halo-accent);
+    color: var(--halo-accent);
   }
 
   .paths ul {

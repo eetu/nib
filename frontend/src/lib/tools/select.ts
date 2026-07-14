@@ -102,16 +102,21 @@ function handleDrag(ref: NodeRef, which: "in" | "out", anchor: Point): DragSessi
 // Snap distance (screen px) for smart guides — a bit tighter than anchor snapping.
 const GUIDE_PX = 6;
 
-/** Drag a path's body to move the whole shape (all nodes translate together). Shift locks
- *  the translation to one axis; otherwise smart guides align its edges/centre to other
- *  shapes + the canvas (when enabled). */
-function pathDrag(pathIndex: number, start: Point): DragSession {
+function bboxIntersects(a: Bounds, b: Bounds): boolean {
+  return a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
+}
+
+/** Move the whole object selection (one shape, or a multi-selection as a group). Shift
+ *  axis-locks; otherwise smart guides align the selection's union box to other shapes + the
+ *  canvas. A plain click (no move) on a member of a multi-selection reduces it to that one
+ *  shape (Figma-style). */
+function selectionDrag(start: Point, primary: number, wasMulti: boolean): DragSession {
   const doc = editor.doc;
-  const base = doc?.paths[pathIndex] ? subpathsBounds(doc.paths[pathIndex].subpaths) : null;
-  // Other shapes' bounds, captured once, as smart-guide targets.
+  const base = editor.selectionBounds;
+  const sel = new Set(editor.selectedPaths);
   const others: Bounds[] = [];
   doc?.paths.forEach((p, i) => {
-    if (i === pathIndex || p.deleted) return;
+    if (sel.has(i) || p.deleted) return;
     const b = subpathsBounds(p.subpaths);
     if (b) others.push(b);
   });
@@ -143,7 +148,7 @@ function pathDrag(pathIndex: number, start: Point): DragSession {
       const dx = tx - appliedX;
       const dy = ty - appliedY;
       if (dx === 0 && dy === 0) return;
-      editor.movePathBy(pathIndex, dx, dy);
+      editor.moveSelectedBy(dx, dy);
       appliedX = tx;
       appliedY = ty;
       moved = true;
@@ -151,10 +156,49 @@ function pathDrag(pathIndex: number, start: Point): DragSession {
     up() {
       interaction.clearDrag();
       if (moved) editor.commit();
+      else if (wasMulti) editor.selectPath(primary);
     },
     cancel() {
       interaction.clearDrag();
       if (moved) editor.revert();
+    },
+  };
+}
+
+/** Rubber-band selection over empty canvas: every shape whose bbox intersects the box gets
+ *  selected. A plain click (no drag) on empty clears the selection. */
+function marqueeDrag(start: Point): DragSession {
+  let moved = false;
+  return {
+    move(docPoint) {
+      moved = true;
+      interaction.marquee = { x0: start.x, y0: start.y, x1: docPoint.x, y1: docPoint.y };
+    },
+    up() {
+      const m = interaction.marquee;
+      interaction.marquee = null;
+      const doc = editor.doc;
+      if (!moved || !m || !doc) {
+        editor.deselect();
+        return;
+      }
+      const rect: Bounds = {
+        minX: Math.min(m.x0, m.x1),
+        minY: Math.min(m.y0, m.y1),
+        maxX: Math.max(m.x0, m.x1),
+        maxY: Math.max(m.y0, m.y1),
+      };
+      const hits: number[] = [];
+      doc.paths.forEach((p, i) => {
+        if (p.deleted) return;
+        const b = subpathsBounds(p.subpaths);
+        if (b && bboxIntersects(b, rect)) hits.push(i);
+      });
+      if (hits.length) editor.setSelectedPaths(hits);
+      else editor.deselect();
+    },
+    cancel() {
+      interaction.marquee = null;
     },
   };
 }
@@ -256,13 +300,19 @@ export const selectTool: Tool = {
       return anchorDrag(hit.ref, start);
     }
     if (hit.kind === "segment" || hit.kind === "fill") {
-      // Grab a path's body (its outline or filled interior) to move it. Grabbing the body of
-      // the path you're node-editing keeps you in node mode; grabbing any other path
-      // object-selects it (dropping node mode).
-      if (editor.nodeEditIndex !== hit.pathIndex) editor.selectPath(hit.pathIndex);
-      return pathDrag(hit.pathIndex, ctx.docPoint);
+      const pi = hit.pathIndex;
+      // Shift-click toggles a shape in/out of the selection (no drag).
+      if (ctx.event.shiftKey) {
+        editor.togglePath(pi);
+        return null;
+      }
+      // Grabbing a member of a multi-selection drags the whole group; grabbing any other
+      // shape object-selects it (the path you're node-editing keeps node mode).
+      const inMulti = editor.multiSelected && editor.selectedPaths.includes(pi);
+      if (!inMulti && editor.nodeEditIndex !== pi) editor.selectPath(pi);
+      return selectionDrag(ctx.docPoint, pi, inMulti);
     }
-    editor.deselect();
-    return null;
+    // Empty canvas → rubber-band marquee (a plain click clears the selection).
+    return marqueeDrag(ctx.docPoint);
   },
 };

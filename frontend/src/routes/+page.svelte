@@ -92,15 +92,15 @@
       if (editor.selection) {
         e.preventDefault();
         editor.deleteNode(editor.selection);
-      } else if (editor.selectedPathIndex !== null) {
+      } else if (editor.selectedPaths.length > 0) {
         e.preventDefault();
-        editor.deletePath(editor.selectedPathIndex);
+        editor.deleteSelectedPaths();
       }
       return;
     }
 
     // Arrow keys nudge the selection (10 units with shift).
-    const hasSel = editor.selection !== null || editor.selectedPathIndex !== null;
+    const hasSel = editor.selection !== null || editor.selectedPaths.length > 0;
     if (hasSel && e.key.startsWith("Arrow")) {
       e.preventDefault();
       const step = e.shiftKey ? 10 : 1;

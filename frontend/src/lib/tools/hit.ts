@@ -101,8 +101,8 @@ export function hitTest(screen: Point): Hit {
 
   // 3. Transform handles — only for an object (whole-path) selection, at
   //    corners/edges not occupied by a node.
-  if (editor.objectSelected && editor.selectedPath !== null) {
-    const p = doc.paths[editor.selectedPath];
+  if (editor.objectSelected && editor.selectedPathIndex !== null) {
+    const p = doc.paths[editor.selectedPathIndex];
     if (p && !p.deleted) {
       const raw = subpathsBounds(p.subpaths);
       if (raw) {
