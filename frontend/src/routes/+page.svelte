@@ -10,9 +10,10 @@
   import TopBar from "$lib/components/TopBar.svelte";
   import { editor } from "$lib/stores/document.svelte";
   import { interaction } from "$lib/stores/interaction.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
   import { type ToolId, tools } from "$lib/stores/tool.svelte";
   import { workspace } from "$lib/stores/workspace.svelte";
-  import { finishPen, getTool, toolShortcuts } from "$lib/tools";
+  import { ADVANCED_TOOL_IDS, finishPen, getTool, toolShortcuts } from "$lib/tools";
   import { fitToView } from "$lib/view";
 
   let pasteOpen = $state(false);
@@ -114,7 +115,9 @@
     }
 
     const tool = toolShortcuts[k];
-    if (tool) tools.set(tool);
+    // In basic (touch-up) mode, advanced-tool shortcuts are inert so you never land on an
+    // off-screen tool.
+    if (tool && (settings.uiLevel === "advanced" || !ADVANCED_TOOL_IDS.has(tool))) tools.set(tool);
     if (e.key === "0") fitToView();
   }
 

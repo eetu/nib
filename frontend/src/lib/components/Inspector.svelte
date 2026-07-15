@@ -20,11 +20,15 @@
   import { pathToD } from "$lib/model/path";
   import type { Layer, NodeType, PathElement } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
   import { tools } from "$lib/stores/tool.svelte";
   import { scaleSubpaths, shearSubpaths } from "$lib/tools/transform";
 
   import PaintInput from "./PaintInput.svelte";
 
+  // Basic (touch-up) mode hides pro sections (arrange/align, path craft, booleans, skew,
+  // grouping, gradients); advanced shows them. Keeps basic = tweak-and-save.
+  const advanced = $derived(settings.uiLevel === "advanced");
   const doc = $derived(editor.doc);
   const sel = $derived(editor.selection);
   const node = $derived(editor.selectedNode);
@@ -292,7 +296,7 @@
 </script>
 
 <aside class="inspector">
-  {#if editor.multiSelected}
+  {#if editor.multiSelected && advanced}
     <section>
       <h2>arrange · {editor.selectedPaths.length}</h2>
       <div class="arrange">
@@ -466,39 +470,41 @@
           /></label
         >
       </div>
-      <div class="pathops">
-        <button class="ghost-btn" onclick={() => editor.simplifyPath()}>simplify</button>
-        <button class="ghost-btn" onclick={() => editor.outlineStroke()}>outline stroke</button>
-      </div>
-      {#if path && path.subpaths.length > 1}
-        <button
-          class="combine-all"
-          title="release compound — split subpaths into separate, individually styleable paths"
-          onclick={() => editor.releaseCompound()}>release compound</button
-        >
+      {#if advanced}
+        <div class="pathops">
+          <button class="ghost-btn" onclick={() => editor.simplifyPath()}>simplify</button>
+          <button class="ghost-btn" onclick={() => editor.outlineStroke()}>outline stroke</button>
+        </div>
+        {#if path && path.subpaths.length > 1}
+          <button
+            class="combine-all"
+            title="release compound — split subpaths into separate, individually styleable paths"
+            onclick={() => editor.releaseCompound()}>release compound</button
+          >
+        {/if}
+        <div class="offsetrow">
+          <span class="seglbl">offset</span>
+          <input type="number" step="1" bind:value={offsetDist} />
+          <button class="ghost-btn" onclick={() => editor.offsetPath(offsetDist)}>apply</button>
+        </div>
+        <div class="offsetrow">
+          <span class="seglbl">skew°</span>
+          <input
+            type="number"
+            step="1"
+            value="0"
+            title="skew X (degrees)"
+            onchange={(e) => skew("x", e)}
+          />
+          <input
+            type="number"
+            step="1"
+            value="0"
+            title="skew Y (degrees)"
+            onchange={(e) => skew("y", e)}
+          />
+        </div>
       {/if}
-      <div class="offsetrow">
-        <span class="seglbl">offset</span>
-        <input type="number" step="1" bind:value={offsetDist} />
-        <button class="ghost-btn" onclick={() => editor.offsetPath(offsetDist)}>apply</button>
-      </div>
-      <div class="offsetrow">
-        <span class="seglbl">skew°</span>
-        <input
-          type="number"
-          step="1"
-          value="0"
-          title="skew X (degrees)"
-          onchange={(e) => skew("x", e)}
-        />
-        <input
-          type="number"
-          step="1"
-          value="0"
-          title="skew Y (degrees)"
-          onchange={(e) => skew("y", e)}
-        />
-      </div>
       {#if editor.objectSelected}
         <p class="hint">double-click to edit nodes</p>
       {/if}
@@ -612,7 +618,7 @@
   <section class="layers">
     <div class="lhead">
       <h2>layers</h2>
-      {#if editor.selectedPaths.length > 1}
+      {#if editor.selectedPaths.length > 1 && advanced}
         <button
           class="ghost-btn"
           title="group selection"

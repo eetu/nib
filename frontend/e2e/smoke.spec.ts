@@ -597,6 +597,41 @@ test("live boolean keeps operands editable and recomputes the result", async ({ 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("basic UI level hides advanced tools; advanced restores them", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+
+  // Default is advanced → the shapes flyout is present.
+  const shapes = page.getByRole("button", { name: "shapes tools" });
+  await expect(shapes).toBeVisible();
+
+  // Switch to basic via settings → shape primitives disappear from the rail.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "basic", exact: true }).click();
+  await page.getByRole("button", { name: "done" }).click();
+  await expect(shapes).toHaveCount(0);
+
+  // The advanced-tool shortcut is inert in basic (pressing "r" doesn't switch to rect).
+  await page.keyboard.press("r");
+  await expect(shapes).toHaveCount(0);
+
+  // Back to advanced restores them.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "advanced", exact: true }).click();
+  await page.getByRole("button", { name: "done" }).click();
+  await expect(shapes).toBeVisible();
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("clicking a filled shape's interior selects it (fill hit-test)", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

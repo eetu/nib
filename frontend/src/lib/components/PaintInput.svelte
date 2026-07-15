@@ -1,8 +1,26 @@
 <script lang="ts">
   import type { GradientStop } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
 
   import ColorInput from "./ColorInput.svelte";
+
+  type Mode = "none" | "solid" | "linear" | "radial";
+  // Gradients are an advanced paint; basic (touch-up) mode offers solid colour only. An
+  // existing gradient still displays + edits — you just can't create one in basic.
+  const modes = $derived<[Mode, string][]>(
+    settings.uiLevel === "advanced"
+      ? [
+          ["none", "—"],
+          ["solid", "solid"],
+          ["linear", "linear"],
+          ["radial", "radial"],
+        ]
+      : [
+          ["none", "—"],
+          ["solid", "solid"],
+        ],
+  );
 
   // A paint control: solid colour (ColorInput), or a linear/radial gradient whose def lives
   // in the document (referenced by `url(#id)`). Gradient edits go through the editor's
@@ -133,11 +151,8 @@
   <div class="ptop">
     <span class="plabel">{label}</span>
     <div class="pmode">
-      {#each [["none", "—"], ["solid", "solid"], ["linear", "linear"], ["radial", "radial"]] as [m, lbl] (m)}
-        <button
-          class:active={mode === m}
-          onclick={() => setMode(m as "none" | "solid" | "linear" | "radial")}>{lbl}</button
-        >
+      {#each modes as [m, lbl] (m)}
+        <button class:active={mode === m} onclick={() => setMode(m)}>{lbl}</button>
       {/each}
     </div>
   </div>

@@ -3,12 +3,19 @@
   import Scan from "@lucide/svelte/icons/scan";
 
   import { editor } from "$lib/stores/document.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
   import { type ToolId, tools } from "$lib/stores/tool.svelte";
   import { TOOL_GROUPS, type ToolGroup } from "$lib/tools";
   import { fitToView } from "$lib/view";
 
   // Which flyout group's popup is open (by group name), if any.
   let openGroup = $state<string | null>(null);
+
+  // Basic (touch-up) mode hides advanced groups (shape primitives); the full surface shows
+  // in advanced mode. The engine keeps every tool regardless.
+  const groups = $derived(
+    TOOL_GROUPS.filter((g) => settings.uiLevel === "advanced" || !g.advanced),
+  );
 
   // A flyout group only collapses into a popup once it holds more than one tool — so a
   // single-tool "shapes" group renders as a plain button now, and gains the flyout for free
@@ -38,7 +45,7 @@
 </script>
 
 <div class="rail">
-  {#each TOOL_GROUPS as group, gi (group.name)}
+  {#each groups as group, gi (group.name)}
     {#if gi > 0}<div class="sep"></div>{/if}
     {#if isFlyout(group)}
       {@const shown = group.tools.find((t) => t.id === tools.active) ?? group.tools[0]}

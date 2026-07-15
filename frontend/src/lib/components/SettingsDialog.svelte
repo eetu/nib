@@ -5,7 +5,7 @@
   import Moon from "@lucide/svelte/icons/moon";
   import Sun from "@lucide/svelte/icons/sun";
 
-  import { setCanvasBg, setThemeMode, settings } from "$lib/stores/settings.svelte";
+  import { setCanvasBg, setThemeMode, settings, setUiLevel } from "$lib/stores/settings.svelte";
 
   let { open, onClose }: { open: boolean; onClose: () => void } = $props();
 
@@ -26,6 +26,22 @@
       onkeydown={onKeydown}
     >
       <h2>settings</h2>
+
+      <div class="setting">
+        <span class="setting-label">interface</span>
+        <div class="seg">
+          <button class:on={settings.uiLevel === "basic"} onclick={() => setUiLevel("basic")}>
+            basic
+          </button>
+          <button class:on={settings.uiLevel === "advanced"} onclick={() => setUiLevel("advanced")}>
+            advanced
+          </button>
+        </div>
+        <span class="setting-hint">
+          basic shows just touch-up tools; advanced adds shapes, path craft, booleans, gradients +
+          groups.
+        </span>
+      </div>
 
       <div class="setting">
         <span class="setting-label">theme</span>

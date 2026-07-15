@@ -15,9 +15,14 @@
 
 export type ThemeMode = "auto" | "light" | "dark";
 export type CanvasBg = "checker" | "light" | "dark";
+/** UI density preference: `basic` surfaces only touch-up tools (select/node-edit/style/
+ *  save); `advanced` shows the full pro surface (shapes, path craft, booleans, gradients,
+ *  group tree). Gates chrome only — the engine + LLM/MCP op surface are always full. */
+export type UiLevel = "basic" | "advanced";
 
 const THEME_KEY = "nib:theme";
 const BG_KEY = "nib:canvasBg";
+const UI_LEVEL_KEY = "nib:uiLevel";
 
 function read(key: string): string | null {
   return typeof localStorage !== "undefined" ? localStorage.getItem(key) : null;
@@ -33,9 +38,21 @@ function initialBg(): CanvasBg {
   return v === "light" || v === "dark" || v === "checker" ? v : "checker";
 }
 
-export const settings = $state<{ themeMode: ThemeMode; canvasBg: CanvasBg }>({
+function initialUiLevel(): UiLevel {
+  // Default to the full surface (no capability hidden on first run — "not a toy"); basic is
+  // the deliberate opt-in that declutters down to touch-ups.
+  const v = read(UI_LEVEL_KEY);
+  return v === "basic" || v === "advanced" ? v : "advanced";
+}
+
+export const settings = $state<{
+  themeMode: ThemeMode;
+  canvasBg: CanvasBg;
+  uiLevel: UiLevel;
+}>({
   themeMode: initialMode(),
   canvasBg: initialBg(),
+  uiLevel: initialUiLevel(),
 });
 
 function persist(key: string, value: string) {
@@ -54,4 +71,9 @@ export function setThemeMode(mode: ThemeMode) {
 export function setCanvasBg(bg: CanvasBg) {
   settings.canvasBg = bg;
   persist(BG_KEY, bg);
+}
+
+export function setUiLevel(level: UiLevel) {
+  settings.uiLevel = level;
+  persist(UI_LEVEL_KEY, level);
 }

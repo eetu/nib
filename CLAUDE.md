@@ -241,10 +241,14 @@ client-side pro pillars, all running on the core):
   groups (subsumes D); E4 text/image/use; E5 defs (clip/mask/filter). Plus an explicit
   "export normalized copy" action. Full plan: `~/.claude/plans/nib-full-svg-dom.md`.
   Make-or-break = round-trip fidelity on a real-SVG corpus (the `Raw` node de-risks it).
-  Paired UX: a persisted **basic/advanced** UI preference (`settings.uiLevel`) — *basic*
-  (default) surfaces only touch-up tools (select/node-edit/style/save); *advanced* is the
-  full pro surface (shapes, path craft, booleans, gradients, group tree). Engine + LLM/MCP
-  op surface stay full regardless; the toggle only gates chrome and can land before E.
+  Paired UX **(landed early, ahead of E):** a persisted **basic/advanced** UI preference
+  (`settings.uiLevel`, default **advanced**) — *basic* is the opt-in that declutters to
+  touch-up tools (select/node-edit/solid-style/save; hides the shapes rail group, arrange,
+  path craft, booleans, gradients, grouping, skew — and makes their shortcuts inert);
+  *advanced* is the full pro surface. Engine + LLM/MCP op surface stay full regardless; the
+  toggle only gates chrome. `ToolGroup.advanced` + `ADVANCED_TOOL_IDS` gate the rail +
+  shortcuts; `settings.uiLevel === "advanced"` gates Inspector sections + PaintInput
+  gradients; `SettingsDialog` switches it.
 
 The `added`/`attributes` model + op vocabulary + pluggable tools + grouped rail are
 shaped to absorb these. If a feature crosses into an unbuilt area, check the

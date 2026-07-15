@@ -35,10 +35,12 @@ export type ToolDef = {
 };
 
 /** A rail section. `flyout` groups collapse into one rail slot with a popup once they hold
- *  more than one tool (so the rail stays scannable as shape primitives grow). */
+ *  more than one tool (so the rail stays scannable as shape primitives grow). `advanced`
+ *  groups are hidden in the basic UI level (touch-up mode) — the engine still has them. */
 export type ToolGroup = {
   name: string;
   flyout?: boolean;
+  advanced?: boolean;
   tools: ToolDef[];
 };
 
@@ -61,9 +63,11 @@ export const TOOL_GROUPS: ToolGroup[] = [
   },
   {
     // Shape primitives — rect / line / polygon / star slot in here and the group becomes a
-    // flyout automatically once there's more than one.
+    // flyout automatically once there's more than one. Creating primitives is a from-scratch
+    // (advanced) activity, so the group is hidden in basic (touch-up) mode.
     name: "shapes",
     flyout: true,
+    advanced: true,
     tools: [
       { id: "circle", tool: circleTool, label: "Circle", shortcut: "c", icon: Circle },
       { id: "rect", tool: rectTool, label: "Rectangle", shortcut: "r", icon: Square },
@@ -100,6 +104,12 @@ export const toolShortcuts: Record<string, ToolId> = {};
 for (const d of ALL) {
   if (d.shortcut) toolShortcuts[d.shortcut] = d.id;
 }
+
+/** Tool ids that live in an `advanced` group — hidden (and their shortcuts inert) in the
+ *  basic UI level, so a basic user never activates an off-screen tool. */
+export const ADVANCED_TOOL_IDS: Set<ToolId> = new Set(
+  TOOL_GROUPS.filter((g) => g.advanced).flatMap((g) => g.tools.map((t) => t.id)),
+);
 
 export { hitTest } from "./hit";
 export { finishPen } from "./pen";
