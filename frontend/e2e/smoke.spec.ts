@@ -708,6 +708,41 @@ test("declarative render draws shapes as paths and opaque elements (text) verbat
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("declarative render keeps gradient defs functional (SVG namespace) + fill refs", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><radialGradient id="g" cx="0" cy="0" r="100" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></radialGradient></defs><rect fill="url(#g)" width="100" height="100"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+
+  // The gradient def renders inside the canvas — and crucially in the SVG namespace, or the
+  // browser silently ignores it and the fill shows nothing.
+  const grad = page.locator("svg.canvas radialGradient#g");
+  await expect(grad).toHaveCount(1);
+  const ns = await grad.evaluate((el) => el.namespaceURI);
+  expect(ns).toBe("http://www.w3.org/2000/svg");
+  // Two stops rendered under it.
+  await expect(page.locator("svg.canvas radialGradient#g stop")).toHaveCount(2);
+  // The rect (drawn as a path) still references the gradient.
+  await expect(page.locator('svg.canvas g.artwork path[fill="url(#g)"]')).toHaveCount(1);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("clicking a filled shape's interior selects it (fill hit-test)", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

@@ -84,6 +84,34 @@
     return { ...(p.attributes ?? {}), ...(p.styleOverride ?? {}) };
   }
 
+  // Geometry attributes replaced by the path's `d` (dropped when drawing a primitive as a path).
+  const GEOM_ATTRS = new Set([
+    "x",
+    "y",
+    "width",
+    "height",
+    "cx",
+    "cy",
+    "r",
+    "rx",
+    "ry",
+    "x1",
+    "y1",
+    "x2",
+    "y2",
+    "points",
+    "d",
+  ]);
+  // Attributes for an editable shape drawn as a `<path>`: keep *all* the source element's attrs
+  // (class / transform / clip-path / fill=url(#…) / …) minus the geometry ones, then apply any
+  // style edits. Using the node's full attrs (not just the model's parsed style) is what keeps
+  // gradients, CSS classes, and transforms intact through the declarative render.
+  function shapeAttrs(attrs: Record<string, string>, p: PathElement): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const k in attrs) if (!GEOM_ATTRS.has(k)) out[k] = attrs[k];
+    return { ...out, ...(p.styleOverride ?? {}) };
+  }
+
   // Whether an editable shape node paints (skips deleted/hidden/hidden-layer/boolean-operand).
   function shapeVisible(p: PathElement): boolean {
     return (
@@ -312,11 +340,14 @@
       {:else}
         {@const p = pathByUid.get(n.uid)}
         {#if p}
-          <!-- editable shape: drawn from the model (live geometry), in true document z-order -->
-          {#if shapeVisible(p)}<path {...eff(p)} d={pathToD(p.subpaths)} />{/if}
+          <!-- editable shape: drawn from the model (live geometry) in true z-order, keeping the
+               source element's class/transform/fill=url(#…)/… so gradients + CSS survive -->
+          {#if shapeVisible(p)}<path {...shapeAttrs(n.attrs, p)} d={pathToD(p.subpaths)} />{/if}
         {:else}
-          <!-- opaque element (g / defs / text / image / …): rendered verbatim from the tree -->
-          <svelte:element this={n.tag} {...n.attrs}>
+          <!-- opaque element (g / defs / text / image / …): rendered verbatim from the tree.
+               Explicit SVG namespace — Svelte can't always infer it for a dynamic recursive tag,
+               and gradient/defs elements in the wrong namespace silently stop functioning. -->
+          <svelte:element this={n.tag} xmlns="http://www.w3.org/2000/svg" {...n.attrs}>
             {#each n.children as c, i (i)}{@render renderNode(c)}{/each}
           </svelte:element>
         {/if}
