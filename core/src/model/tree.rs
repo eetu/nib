@@ -8,10 +8,12 @@
 //! preservation generalizes from paths to all elements; only an *edited* node regenerates its
 //! tag. Element types nib doesn't model deeply still round-trip as structured-but-opaque nodes.
 //!
-//! Built + proven in isolation here (parse→serialize is byte-for-byte on the round-trip corpus);
-//! **wiring it into the `Editor`/frontend — projecting `paths`, migrating ops — is in progress
-//! (see `project_paths`).** Byte-for-byte holds *by construction*: the source is partitioned into
-//! slices along child boundaries, each owned by exactly one node, so concatenating reproduces it.
+//! **Wired into the `Editor`:** it holds a parsed `Tree` as the constant serialization base;
+//! `project_paths` seeds the working model (so imported primitives are editable) and
+//! `reconcile_paths` + `serialize_tree` write edits back on export (`serialize_via_tree`). Ops +
+//! undo stay on the flat `doc.paths`. Byte-for-byte holds *by construction*: the source is
+//! partitioned into slices along child boundaries, each owned by exactly one node, so
+//! concatenating reproduces it; edits regenerate only their own node.
 
 use std::collections::HashMap;
 

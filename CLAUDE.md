@@ -236,18 +236,24 @@ client-side pro pillars, all running on the core):
 - **Phase D (gated):** arbitrary *nested* groups — a full object tree on top of B's
   one-level named groups (needs stable-id addressing; imported paths currently group
   for membership/visibility/order but aren't `<g>`-wrapped on export). **Folds into E.**
-- **Phase E (approved, scoped — the big model shift):** grow from **paths-only** (rest
-  preserved as an opaque source string) to a **full SVG element tree** parsed natively,
-  so **save = re-emit the tree** ("import → native → export" cornerstone). Key insight
-  keeps it *safe + incremental*: **per-node original text** (unedited node re-emits
-  verbatim → byte-preservation generalizes from paths to *all* elements; only edited
-  nodes change) + an **opaque `Raw` node** for element types not yet modeled (zero loss;
-  promote opaque→typed over time). Byte-for-byte stops being a serializer strategy and
-  becomes a per-node dirty-tracking property. Phases: E1 tree parse + `Raw` + re-emit +
-  stable-id addressing; E2 editable primitives (`<rect>`/`<circle>`/…); E3 real nested
-  groups (subsumes D); E4 text/image/use; E5 defs (clip/mask/filter). Plus an explicit
-  "export normalized copy" action. Full plan: `~/.claude/plans/nib-full-svg-dom.md`.
-  Make-or-break = round-trip fidelity on a real-SVG corpus (the `Raw` node de-risks it).
+- **Phase E (the big model shift — E1 flip + E2 LANDED):** grew from **paths-only** (rest
+  preserved as an opaque source string) toward a **full SVG element tree** (`core/src/model/
+  tree.rs`), so **save re-emits the tree** ("import → native → export" cornerstone). Key
+  insight kept it safe: **per-node original text** (unedited node re-emits verbatim →
+  byte-preservation generalizes from paths to *all* elements; only edited nodes change).
+  **What's live:** the `Editor` holds a parsed `Tree` as a **constant serialization base**;
+  `doc.paths` stays the mutable working model (**ops + undo unchanged**), seeded via
+  `Tree::project_paths` so **imported primitives (`<rect>`/`<circle>`/`<ellipse>`/`<line>`/
+  `<polygon>`/`<polyline>`) are editable paths** (each carries a stable `uid`); `to_svg` =
+  `serialize_via_tree` (reconcile flat edits by uid onto a tree clone — edited primitive →
+  `<path>`, deleted dropped, siblings verbatim — then append drawn + inject defs + grow
+  viewBox). Frontend: edited `<path>`s update in place; edited primitives hide their source
+  node + repaint declaratively as `<path>`. Fidelity gate: `core/tests/roundtrip.rs` corpus.
+  **Remaining:** E3 real nested groups (object tree, subsumes D) · E4 text/image/use · E5
+  defs · a full declarative tree render (#30, retires the imperative import + fixes the
+  edited-primitive z-order wart) · "export normalized copy" · then finalize. Caveats now:
+  edited primitives render above other artwork; reordering *imported* paths may not reflect
+  on export. Full plan: `~/.claude/plans/nib-full-svg-dom.md`.
   Paired UX **(landed early, ahead of E):** a persisted **basic/advanced** UI preference
   (`settings.uiLevel`, default **advanced**) — *basic* is the opt-in that declutters to
   touch-up tools (select/node-edit/solid-style/save; hides the shapes rail group, arrange,
