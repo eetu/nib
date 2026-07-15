@@ -457,6 +457,11 @@ test("combine merges two paths into one compound path", async ({ page }) => {
   const d = await page.locator("svg.canvas g.drawn path").getAttribute("d");
   expect((d ?? "").match(/M/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
 
+  // Release splits it back into two independent, individually-styleable paths.
+  await rows.nth(0).click();
+  await page.getByRole("button", { name: "release compound" }).click();
+  await expect(rows).toHaveCount(2);
+
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 

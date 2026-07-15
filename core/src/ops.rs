@@ -191,6 +191,9 @@ pub enum Op {
     /// geometry merge), so a line + a detached dome become one editable element. Inherits the
     /// lowest-index subject's style + group.
     CombinePaths { paths: Vec<usize>, id: String },
+    /// Release a compound path: soft-delete it and add one path per subpath (`ids`, one per
+    /// subpath) so each becomes independently styleable. Inherits the source's style + group.
+    ReleaseCompound { path: usize, ids: Vec<String> },
     /// Reduce a path's node count (Ramer–Douglas–Peucker) within `tolerance` document units.
     SimplifyPath { path: usize, tolerance: f64 },
     /// Expand a path's stroke (`width`) into a filled outline: the source is soft-deleted and a
@@ -750,6 +753,48 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             });
             true
         }
+        Op::ReleaseCompound { path, ids } => {
+            let Some(p) = doc.paths.get(*path) else {
+                return false;
+            };
+            if p.deleted || p.subpaths.len() < 2 {
+                return false;
+            }
+            // Effective style flattens attributes ← styleOverride, so each released path
+            // paints exactly as the compound did (they become `added` — no source slot).
+            let mut attributes = p.attributes.clone().unwrap_or_default();
+            if let Some(so) = &p.style_override {
+                for (k, v) in so {
+                    attributes.insert(k.clone(), v.clone());
+                }
+            }
+            let layer = p.layer.clone();
+            let subpaths = p.subpaths.clone();
+            doc.paths[*path].deleted = true;
+            for (k, sp) in subpaths.into_iter().enumerate() {
+                let id = ids
+                    .get(k)
+                    .cloned()
+                    .unwrap_or_else(|| format!("{}-{}", doc.paths[*path].id, k + 1));
+                let index = doc.paths.len();
+                doc.paths.push(PathElement {
+                    id,
+                    index,
+                    original_d: String::new(),
+                    subpaths: vec![sp],
+                    edited: true,
+                    added: true,
+                    attributes: Some(attributes.clone()),
+                    style_override: None,
+                    original_tag: None,
+                    deleted: false,
+                    renamed: false,
+                    layer: layer.clone(),
+                    hidden: false,
+                });
+            }
+            true
+        }
         Op::SimplifyPath { path, tolerance } => {
             let Some(p) = doc.paths.get_mut(*path) else {
                 return false;
@@ -1294,6 +1339,49 @@ mod tests {
         assert_eq!(compound.id, "compound");
         assert_eq!(compound.subpaths.len(), 2); // line + dome, kept distinct
         assert!(compound.added && !compound.deleted);
+    }
+
+    #[test]
+    fn release_splits_a_compound_into_independent_paths() {
+        let mut doc = doc_from("M 0 0 L 10 0", false);
+        apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "dome".into(),
+                subpaths: parse_path_d("M 3 -2 Q 5 -6 7 -2"),
+                attributes: IndexMap::new(),
+            },
+        );
+        apply(
+            &mut doc,
+            &Op::CombinePaths {
+                paths: vec![0, 1],
+                id: "compound".into(),
+            },
+        );
+        let compound_idx = doc.paths.len() - 1;
+        assert!(apply(
+            &mut doc,
+            &Op::ReleaseCompound {
+                path: compound_idx,
+                ids: vec!["piece-a".into(), "piece-b".into()],
+            }
+        ));
+        assert!(doc.paths[compound_idx].deleted); // source compound gone
+        let live: Vec<&PathElement> = doc.paths.iter().filter(|p| !p.deleted).collect();
+        assert_eq!(live.len(), 2); // one path per subpath
+        assert!(live.iter().all(|p| p.subpaths.len() == 1 && p.added));
+        let ids: Vec<&str> = live.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["piece-a", "piece-b"]);
+        // releasing a single-subpath path is a no-op
+        let last = doc.paths.len() - 1;
+        assert!(!apply(
+            &mut doc,
+            &Op::ReleaseCompound {
+                path: last,
+                ids: vec!["x".into()],
+            }
+        ));
     }
 
     #[test]

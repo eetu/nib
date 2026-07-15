@@ -51,6 +51,11 @@
       enabled: () => editor.selectedPaths.length >= 2,
     },
     {
+      label: "Release compound path",
+      run: () => editor.releaseCompound(),
+      enabled: () => (editor.selectedPathElement?.subpaths.length ?? 0) > 1,
+    },
+    {
       label: "Simplify path",
       run: () => editor.simplifyPath(),
       enabled: () => editor.selectedPathIndex !== null,

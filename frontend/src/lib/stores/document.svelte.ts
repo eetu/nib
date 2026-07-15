@@ -454,6 +454,21 @@ class DocumentStore {
     }
   }
 
+  /** Release a compound path: split its subpaths back into independent, individually
+   *  styleable paths (the inverse of `combinePaths`). Selects the freed pieces. */
+  releaseCompound(): void {
+    const i = this.selectedPathIndex;
+    const p = i !== null ? (this.doc?.paths[i] ?? null) : null;
+    if (i === null || !p || p.subpaths.length < 2) return;
+    const n = p.subpaths.length;
+    const ids = Array.from({ length: n }, (_, k) => this.#freshId(`${p.id} ${k + 1}`));
+    if (this.#apply({ type: "releaseCompound", path: i, ids })) {
+      this.commit();
+      const len = this.doc?.paths.length ?? 0;
+      this.setSelectedPaths(Array.from({ length: n }, (_, k) => len - n + k));
+    }
+  }
+
   /** Soft-delete every selected path (soft-delete keeps indices stable, so no reindexing). */
   deleteSelectedPaths(): void {
     if (this.selectedPaths.length === 0) return;

@@ -449,6 +449,13 @@
         <button class="ghost-btn" onclick={() => editor.simplifyPath()}>simplify</button>
         <button class="ghost-btn" onclick={() => editor.outlineStroke()}>outline stroke</button>
       </div>
+      {#if path && path.subpaths.length > 1}
+        <button
+          class="combine-all"
+          title="release compound — split subpaths into separate, individually styleable paths"
+          onclick={() => editor.releaseCompound()}>release compound</button
+        >
+      {/if}
       <div class="offsetrow">
         <span class="seglbl">offset</span>
         <input type="number" step="1" bind:value={offsetDist} />
