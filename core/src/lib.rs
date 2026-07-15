@@ -276,6 +276,29 @@ impl Editor {
         self.dirty = false;
     }
 
+    /// Serialize the structural tree for persistence — it's `serde(skip)` on the doc (kept off
+    /// the per-frame `state()` payload), so it's saved separately + only when the debounced
+    /// persist runs. `null` if there's no tree.
+    #[wasm_bindgen(js_name = treeJson)]
+    pub fn tree_json(&self) -> Result<JsValue, JsValue> {
+        let tree = self.doc.as_ref().and_then(|d| d.tree.clone());
+        serde_wasm_bindgen::to_value(&tree).map_err(Into::into)
+    }
+
+    /// Restore a persisted structural tree (overriding the source-rebuilt one), so structural
+    /// edits (group/hide/reorder) survive a session reload. Resets the undo baseline to match.
+    #[wasm_bindgen(js_name = setTree)]
+    pub fn set_tree(&mut self, json: JsValue) -> Result<(), JsValue> {
+        let tree: Option<Tree> = serde_wasm_bindgen::from_value(json)?;
+        if let Some(doc) = self.doc.as_mut() {
+            if tree.is_some() {
+                doc.tree = tree;
+            }
+        }
+        self.history.reset(self.snapshot());
+        Ok(())
+    }
+
     /// The document's render tree (the root `<svg>`'s children) — what the canvas draws
     /// declaratively. The frontend fetches this per source change; edits pull live geometry from
     /// `doc.paths` by uid, structural ops re-fetch it.

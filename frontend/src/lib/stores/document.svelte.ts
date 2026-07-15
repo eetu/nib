@@ -28,6 +28,9 @@ type Session = {
   selectedPaths?: number[];
   dirty: boolean;
   fileName: string | null;
+  /** The structural tree, persisted separately from `doc` (it's `serde(skip)` on the doc to
+   *  stay off the per-frame state payload) so structural edits survive a session reload. */
+  tree?: unknown;
 };
 
 /** The shape of `WasmEditor.state()` — a full render snapshot pulled after each mutation. */
@@ -103,8 +106,18 @@ class DocumentStore {
       selectedPaths: this.selectedPaths,
       dirty: this.dirty,
       fileName: this.fileName,
+      tree: this.#treeJson(),
     });
   }, 300);
+
+  /** The structural tree serialized for persistence (`null` if none / on error). */
+  #treeJson(): unknown {
+    try {
+      return this.#wasm?.treeJson() ?? null;
+    } catch {
+      return null;
+    }
+  }
 
   /** Bring the WASM engine online and rehydrate the last session. Must run after the core
    *  module is initialised (see +layout). Safe to call more than once. */
@@ -115,6 +128,15 @@ class DocumentStore {
     if (s?.doc) {
       try {
         this.#wasm.setDocument(s.doc);
+        // Restore persisted structural edits (group/hide/reorder) onto the tree — otherwise
+        // setDocument rebuilds the tree from source, losing them.
+        if (s.tree) {
+          try {
+            this.#wasm.setTree(s.tree);
+          } catch {
+            /* stale/incompatible persisted tree — keep the source-rebuilt one */
+          }
+        }
         // Node-edit mode isn't persisted, so restore any selection as an object selection
         // (transform box) rather than a dangling node with nowhere to edit.
         const restore = s.selectedPaths?.length
