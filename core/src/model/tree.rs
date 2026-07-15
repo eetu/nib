@@ -16,7 +16,7 @@
 use indexmap::IndexMap;
 
 use super::document::STYLE_KEYS;
-use super::path::parse_path_d;
+use super::path::{parse_path_d, path_to_d_prec};
 use super::types::PathElement;
 
 /// One node in the document tree.
@@ -246,6 +246,48 @@ fn collect_paths(node: &Node, out: &mut Vec<PathElement>) {
     }
 }
 
+fn set_or_push(attrs: &mut Vec<(String, String)>, key: &str, value: &str) {
+    match attrs.iter_mut().find(|(k, _)| k == key) {
+        Some((_, v)) => *v = value.to_string(),
+        None => attrs.push((key.to_string(), value.to_string())),
+    }
+}
+
+fn reconcile(node: &mut Node, paths: &[PathElement], i: &mut usize, precision: usize) {
+    // attrs/edited/children are disjoint fields, so we can update the tag *and* recurse here.
+    if let Node::Element {
+        tag,
+        attrs,
+        edited,
+        children,
+        ..
+    } = node
+    {
+        if tag == "path" {
+            if let Some(p) = paths.get(*i) {
+                if p.edited {
+                    set_or_push(attrs, "d", &path_to_d_prec(&p.subpaths, precision));
+                    *edited = true;
+                }
+                if p.renamed {
+                    set_or_push(attrs, "id", &p.id);
+                    *edited = true;
+                }
+                if let Some(so) = &p.style_override {
+                    for (k, v) in so {
+                        set_or_push(attrs, k, v);
+                        *edited = true;
+                    }
+                }
+            }
+            *i += 1;
+        }
+        for c in children {
+            reconcile(c, paths, i, precision);
+        }
+    }
+}
+
 impl Tree {
     /// Project the flat `<path>` view the current editor/frontend runs on out of the tree, in
     /// document order — the bridge that lets the `Editor` become tree-backed while the paths-based
@@ -256,6 +298,16 @@ impl Tree {
         let mut out = Vec::new();
         collect_paths(&self.root, &mut out);
         out
+    }
+
+    /// Write the flat paths view's edits back onto the tree's `<path>` nodes (document order), so
+    /// `serialize_tree` reflects them: an edited path regenerates its `d`, a renamed one its `id`,
+    /// and style overrides merge into attrs — each marking only that node edited (siblings stay
+    /// verbatim). The return direction of `project_paths`; together they bridge flat editing ↔ the
+    /// tree until ops mutate the tree directly. (Added/deleted paths + layers land with #29's flip.)
+    pub fn reconcile_paths(&mut self, paths: &[PathElement], precision: usize) {
+        let mut i = 0;
+        reconcile(&mut self.root, paths, &mut i, precision);
     }
 }
 
@@ -409,6 +461,33 @@ mod tests {
                 "fixture {i}: projected paths != flat parser"
             );
         }
+    }
+
+    #[test]
+    fn reconcile_writes_flat_edits_back_and_preserves_siblings() {
+        use crate::model::types::Point;
+        let mut tree = parse_tree(CORPUS[0]).unwrap(); // minimal: one path, fill="#333"
+        let mut paths = tree.project_paths();
+        // move the first node — the surgical geometry edit the tools make.
+        paths[0].subpaths[0].nodes[0].point = Point::new(5.0, 5.0);
+        paths[0].edited = true;
+        tree.reconcile_paths(&paths, 2);
+
+        let out = serialize_tree(&tree);
+        assert!(out.contains("fill=\"#333\""), "style preserved: {out}");
+        assert!(
+            !out.contains("M 10 10 L 90 10"),
+            "d regenerated (not original): {out}"
+        );
+        assert!(parse_tree(&out).is_ok(), "reconciled output still parses");
+        // an unedited reconcile is a no-op → byte-for-byte
+        let mut clean = parse_tree(CORPUS[0]).unwrap();
+        clean.reconcile_paths(&clean.project_paths(), 2);
+        assert_eq!(
+            serialize_tree(&clean),
+            CORPUS[0],
+            "unedited reconcile stays verbatim"
+        );
     }
 
     #[test]
