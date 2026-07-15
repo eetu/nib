@@ -222,10 +222,17 @@ client-side pro pillars, all running on the core):
 - **Deferred (needs a dedicated rotate tool):** rotate/skew about a *freely-movable*
   pivot — a centre pivot handle conflicts with the unified select tool's
   drag-to-move + double-click-to-node-edit.
-- **Phase C (next — additive, flag-gated):** rust-axum backend running the same core —
+- **Editor track = A → B → E → finalize; Phase C rides alongside.** Phase E is the
+  *editor's capstone* — once it lands the editor is feature-complete and the remaining work
+  is **finalization** (coverage/fidelity on a real-SVG corpus, robustness + large-doc perf,
+  UX polish, ship a 1.0), not new capability. **Phase C is not part of "the editor"** — it's
+  the co-editing/persistence infra wrapping the *same* core, a parallel/after track; the
+  browser-only editor stays fully functional without it.
+- **Phase C (additive, flag-gated):** rust-axum backend running the same core —
   op-log-over-WebSocket sync + an MCP tool surface. **The op vocabulary the editor
   already runs on IS the surface** (`moveNode` … `booleanOp` … `groupPaths`).
-  Browser-only build stays fully functional.
+  Browser-only build stays fully functional. C1 (backend serving the SPA + a validated
+  `.svg` documents API) has landed on the `phase-c` branch.
 - **Phase D (gated):** arbitrary *nested* groups — a full object tree on top of B's
   one-level named groups (needs stable-id addressing; imported paths currently group
   for membership/visibility/order but aren't `<g>`-wrapped on export). **Folds into E.**
