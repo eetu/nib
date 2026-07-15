@@ -237,10 +237,47 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             true
         }
         Op::SetNodeType { node, node_type } => {
-            let Some(n) = node_mut(doc, *node) else {
+            let Some(sp) = subpath_mut(doc, node.path_index, node.subpath_index) else {
                 return false;
             };
-            n.node_type = *node_type;
+            let ni = node.node_index;
+            let count = sp.nodes.len();
+            if ni >= count {
+                return false;
+            }
+            sp.nodes[ni].node_type = *node_type;
+            // Converting a handle-less node to smooth synthesizes a tangent from its neighbours
+            // (Catmull-Rom style: direction = prev→next, each handle ~1/3 the neighbour gap) —
+            // so it gains draggable control handles instead of staying a hard corner.
+            let bare = sp.nodes[ni].handle_in.is_none() && sp.nodes[ni].handle_out.is_none();
+            if *node_type == NodeType::Smooth && bare {
+                let p = sp.nodes[ni].point;
+                let prev = if ni > 0 {
+                    Some(sp.nodes[ni - 1].point)
+                } else if sp.closed {
+                    Some(sp.nodes[count - 1].point)
+                } else {
+                    None
+                };
+                let next = if ni + 1 < count {
+                    Some(sp.nodes[ni + 1].point)
+                } else if sp.closed {
+                    Some(sp.nodes[0].point)
+                } else {
+                    None
+                };
+                let dir = match (prev, next) {
+                    (Some(a), Some(b)) => normalize(Point::new(b.x - a.x, b.y - a.y)),
+                    (None, Some(b)) => normalize(Point::new(b.x - p.x, b.y - p.y)),
+                    (Some(a), None) => normalize(Point::new(p.x - a.x, p.y - a.y)),
+                    (None, None) => Point::new(0.0, 0.0),
+                };
+                let out_len = next.or(prev).map(|q| distance(p, q) / 3.0).unwrap_or(0.0);
+                let in_len = prev.or(next).map(|q| distance(p, q) / 3.0).unwrap_or(0.0);
+                sp.nodes[ni].handle_in = Some(Point::new(p.x - dir.x * in_len, p.y - dir.y * in_len));
+                sp.nodes[ni].handle_out =
+                    Some(Point::new(p.x + dir.x * out_len, p.y + dir.y * out_len));
+            }
             mark_edited(doc, node.path_index);
             true
         }
@@ -1158,6 +1195,28 @@ mod tests {
         assert!(apply(&mut doc, &Op::SetPathHidden { path: 0, hidden: true }));
         assert!(doc.paths[0].hidden);
         assert!(!apply(&mut doc, &Op::SetPathHidden { path: 0, hidden: true }));
+    }
+
+    #[test]
+    fn corner_to_smooth_synthesizes_a_tangent() {
+        // 3 corners; converting the middle to smooth gains it collinear handles.
+        let mut doc = doc_from("M 0 0 L 10 0 L 10 10", true);
+        assert!(doc.paths[0].subpaths[0].nodes[1].handle_in.is_none());
+        assert!(apply(
+            &mut doc,
+            &Op::SetNodeType {
+                node: nref(0, 0, 1),
+                node_type: NodeType::Smooth,
+            }
+        ));
+        let n = &doc.paths[0].subpaths[0].nodes[1];
+        assert_eq!(n.node_type, NodeType::Smooth);
+        let hin = n.handle_in.expect("handle in");
+        let hout = n.handle_out.expect("handle out");
+        // out-handle and in-handle point opposite ways through the anchor (a smooth tangent).
+        let cross =
+            (hout.x - n.point.x) * (n.point.y - hin.y) - (hout.y - n.point.y) * (n.point.x - hin.x);
+        assert!(cross.abs() < 1e-6, "handles should be collinear: {cross}");
     }
 
     #[test]
