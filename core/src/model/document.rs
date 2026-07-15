@@ -725,6 +725,26 @@ mod tests {
 </svg>"##;
 
     #[test]
+    fn via_tree_keeps_unedited_primitives_verbatim() {
+        // The Editor's export path (serialize_via_tree) on a doc whose paths are projected from
+        // the tree but *unedited* must stay byte-for-byte — primitives keep their `<rect>` etc.,
+        // only an edited primitive converts to `<path>`.
+        let src = include_str!("../../tests/fixtures/shapes.svg");
+        let tree = crate::model::tree::parse_tree(src).unwrap();
+        let mut doc = parse_svg(src).unwrap();
+        doc.paths = tree.project_paths(); // what the Editor does on load
+        assert_eq!(serialize_via_tree(&doc, &tree, 3), src);
+
+        // Editing one primitive converts only it; the rest stay verbatim.
+        doc.paths[0].subpaths[0].nodes[0].point = Point::new(21.0, 21.0);
+        doc.paths[0].edited = true;
+        let out = serialize_via_tree(&doc, &tree, 3);
+        assert!(!out.contains("<rect"), "edited rect → path");
+        assert!(out.contains("<circle"), "unedited circle stays <circle>");
+        assert!(out.contains("<ellipse") && out.contains("<polygon"));
+    }
+
+    #[test]
     fn reads_viewbox_and_enumerates_paths_in_order() {
         let doc = parse_svg(SAMPLE).unwrap();
         assert_eq!(
