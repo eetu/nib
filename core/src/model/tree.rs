@@ -140,6 +140,157 @@ pub fn shape_subpaths(tag: &str, attrs: &[(String, String)]) -> Option<Vec<Subpa
     }
 }
 
+/// Match tolerance (document units) for deciding an edited primitive still fits its form.
+const REFIT_EPS: f64 = 1e-3;
+
+fn fnum(v: f64, precision: usize) -> String {
+    let s = format!("{v:.precision$}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s.is_empty() || s == "-" {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// Axis-aligned bounds of all node *anchor points* (not bezier extrema — the primitives put
+/// their anchors at the extremes, which is what we compare against).
+fn points_bbox(subpaths: &[Subpath]) -> Option<(f64, f64, f64, f64)> {
+    let mut pts = subpaths
+        .iter()
+        .flat_map(|s| s.nodes.iter().map(|n| n.point));
+    let first = pts.next()?;
+    let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x, first.y);
+    for p in pts {
+        x0 = x0.min(p.x);
+        y0 = y0.min(p.y);
+        x1 = x1.max(p.x);
+        y1 = y1.max(p.y);
+    }
+    Some((x0, y0, x1, y1))
+}
+
+fn pt_close(a: Point, b: Point) -> bool {
+    (a.x - b.x).abs() < REFIT_EPS && (a.y - b.y).abs() < REFIT_EPS
+}
+fn opt_close(a: Option<Point>, b: Option<Point>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => pt_close(a, b),
+        _ => false,
+    }
+}
+/// Do two subpath sets match node-for-node (points + handles) within `REFIT_EPS`?
+fn subpaths_match(a: &[Subpath], b: &[Subpath]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(sa, sb)| {
+            sa.closed == sb.closed
+                && sa.nodes.len() == sb.nodes.len()
+                && sa.nodes.iter().zip(&sb.nodes).all(|(na, nb)| {
+                    pt_close(na.point, nb.point)
+                        && opt_close(na.handle_in, nb.handle_in)
+                        && opt_close(na.handle_out, nb.handle_out)
+                })
+        })
+}
+
+fn any_handles(sp: &Subpath) -> bool {
+    sp.nodes
+        .iter()
+        .any(|n| n.handle_in.is_some() || n.handle_out.is_some())
+}
+
+/// If the edited geometry *still fits* the primitive `tag`, return the geometry attributes to
+/// re-emit it as that primitive (so a moved/resized `<rect>` stays a `<rect>`). `None` means the
+/// edit broke the form (e.g. a dragged corner) → the caller falls back to a `<path>`. Detection
+/// is by rebuild-and-compare: reconstruct the canonical primitive from the current bounds/points
+/// and check it matches, so any form-preserving transform (translate/axis-scale) round-trips.
+fn refit(tag: &str, subpaths: &[Subpath], precision: usize) -> Option<Vec<(String, String)>> {
+    let n = |v: f64| fnum(v, precision);
+    match tag {
+        "rect" => {
+            let (x0, y0, x1, y1) = points_bbox(subpaths)?;
+            let rebuilt = [Subpath {
+                nodes: rect_nodes(x0, y0, x1, y1),
+                closed: true,
+            }];
+            subpaths_match(subpaths, &rebuilt).then(|| {
+                vec![
+                    ("x".into(), n(x0)),
+                    ("y".into(), n(y0)),
+                    ("width".into(), n(x1 - x0)),
+                    ("height".into(), n(y1 - y0)),
+                ]
+            })
+        }
+        "circle" | "ellipse" => {
+            let (x0, y0, x1, y1) = points_bbox(subpaths)?;
+            let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+            let (rx, ry) = ((x1 - x0) / 2.0, (y1 - y0) / 2.0);
+            if rx <= 0.0 || ry <= 0.0 {
+                return None;
+            }
+            let rebuilt = [Subpath {
+                nodes: ellipse_nodes(cx, cy, rx, ry),
+                closed: true,
+            }];
+            if !subpaths_match(subpaths, &rebuilt) {
+                return None;
+            }
+            if tag == "circle" {
+                // Only stays a circle while still round; a non-uniform resize → not a circle.
+                ((rx - ry).abs() < REFIT_EPS).then(|| {
+                    vec![
+                        ("cx".into(), n(cx)),
+                        ("cy".into(), n(cy)),
+                        ("r".into(), n(rx)),
+                    ]
+                })
+            } else {
+                Some(vec![
+                    ("cx".into(), n(cx)),
+                    ("cy".into(), n(cy)),
+                    ("rx".into(), n(rx)),
+                    ("ry".into(), n(ry)),
+                ])
+            }
+        }
+        "line" => {
+            let sp = subpaths.first()?;
+            (subpaths.len() == 1 && !sp.closed && sp.nodes.len() == 2 && !any_handles(sp)).then(
+                || {
+                    let (a, b) = (sp.nodes[0].point, sp.nodes[1].point);
+                    vec![
+                        ("x1".into(), n(a.x)),
+                        ("y1".into(), n(a.y)),
+                        ("x2".into(), n(b.x)),
+                        ("y2".into(), n(b.y)),
+                    ]
+                },
+            )
+        }
+        "polygon" | "polyline" => {
+            let sp = subpaths.first()?;
+            let want_closed = tag == "polygon";
+            if subpaths.len() != 1
+                || sp.closed != want_closed
+                || any_handles(sp)
+                || sp.nodes.len() < 2
+            {
+                return None; // a bezier handle or open/closed flip → no longer a straight poly
+            }
+            let points = sp
+                .nodes
+                .iter()
+                .map(|nd| format!("{},{}", n(nd.point.x), n(nd.point.y)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            Some(vec![("points".into(), points)])
+        }
+        _ => None,
+    }
+}
+
 /// One node in the document tree.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node {
@@ -415,13 +566,21 @@ fn reconcile_node(node: &mut Node, by_uid: &HashMap<&str, &PathElement>, precisi
             return;
         }
         if p.edited {
-            // An edited primitive becomes a `<path>` (its geometry is now the `d`; the shape
-            // attrs would be dead weight), then the regenerated `d` is written.
-            if tag != "path" {
+            if tag == "path" {
+                set_or_push(attrs, "d", &path_to_d_prec(&p.subpaths, precision));
+            } else if let Some(geo) = refit(tag, &p.subpaths, precision) {
+                // A move/resize keeps the primitive in form → re-emit it as itself with updated
+                // geometry attrs (a `<rect>` stays a `<rect>`), preserving clean markup.
+                for (k, v) in geo {
+                    set_or_push(attrs, &k, &v);
+                }
+            } else {
+                // The edit broke the primitive's form (e.g. a dragged corner) → become a `<path>`
+                // (its geometry is now the `d`; the shape attrs would be dead weight).
                 attrs.retain(|(k, _)| !GEOMETRY_ATTRS.contains(&k.as_str()));
                 *tag = "path".to_string();
+                set_or_push(attrs, "d", &path_to_d_prec(&p.subpaths, precision));
             }
-            set_or_push(attrs, "d", &path_to_d_prec(&p.subpaths, precision));
             *edited = true;
         }
         if p.renamed {
@@ -668,6 +827,57 @@ mod tests {
             "each projected path carries a uid"
         );
         assert!(paths[0].subpaths[0].closed && paths[0].subpaths[0].nodes.len() == 4); // rect
+    }
+
+    #[test]
+    fn moving_or_resizing_a_primitive_keeps_it_as_that_primitive() {
+        use crate::model::types::Point;
+        let mut tree = parse_tree(CORPUS[7]).unwrap(); // shapes fixture
+        let mut paths = tree.project_paths();
+        let shift = |p: &mut PathElement, dx: f64, dy: f64| {
+            for n in &mut p.subpaths[0].nodes {
+                n.point = Point::new(n.point.x + dx, n.point.y + dy);
+                n.handle_in = n.handle_in.map(|h| Point::new(h.x + dx, h.y + dy));
+                n.handle_out = n.handle_out.map(|h| Point::new(h.x + dx, h.y + dy));
+            }
+            p.edited = true;
+        };
+        shift(&mut paths[0], 5.0, 5.0); // rect  (20,20) → (25,25)
+        shift(&mut paths[1], 10.0, 0.0); // circle cx 160 → 170
+        shift(&mut paths[3], 3.0, 0.0); // line  x1 20 → 23
+        shift(&mut paths[4], 0.0, 4.0); // polygon
+        tree.reconcile_paths(&paths, 2);
+        let out = serialize_tree(&tree);
+        assert!(
+            out.contains("<rect x=\"25\" y=\"25\""),
+            "moved rect stays <rect>: {out}"
+        );
+        assert!(
+            out.contains("<circle cx=\"170\""),
+            "moved circle stays <circle>: {out}"
+        );
+        assert!(
+            out.contains("<line x1=\"23\""),
+            "moved line stays <line>: {out}"
+        );
+        assert!(
+            out.contains("<polygon points=\""),
+            "moved polygon stays <polygon>: {out}"
+        );
+    }
+
+    #[test]
+    fn reshaping_a_primitive_off_form_falls_back_to_a_path() {
+        use crate::model::types::Point;
+        let mut tree = parse_tree(CORPUS[7]).unwrap();
+        let mut paths = tree.project_paths();
+        // drag one rect corner inward → no longer axis-aligned → must become a <path>
+        paths[0].subpaths[0].nodes[0].point = Point::new(45.0, 45.0);
+        paths[0].edited = true;
+        tree.reconcile_paths(&paths, 2);
+        let out = serialize_tree(&tree);
+        assert!(!out.contains("<rect"), "reshaped rect → path: {out}");
+        assert!(out.contains("<path"), "a <path> is emitted: {out}");
     }
 
     #[test]

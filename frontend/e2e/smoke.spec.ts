@@ -632,9 +632,7 @@ test("basic UI level hides advanced tools; advanced restores them", async ({ pag
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
-test("an imported <rect> is an editable path and exports as <path> once edited", async ({
-  page,
-}) => {
+test("an imported <rect> is editable and stays a <rect> when moved", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => {
@@ -658,18 +656,19 @@ test("an imported <rect> is an editable path and exports as <path> once edited",
   const rows = page.locator(".layerlist .row-btn");
   await expect(rows).toHaveCount(1);
 
-  // Select + nudge → geometry edit. The edited primitive repaints declaratively as a <path>
-  // (its source <rect> hides), and export serializes it as <path> through the document tree.
+  // Select + nudge → the whole rect moves. It repaints declaratively as a <path> on the canvas
+  // (its source <rect> hides), but a form-preserving move keeps it a <rect> on export (re-fit).
   await rows.nth(0).click();
   for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowRight");
   await expect(page.locator("svg.canvas g.drawn path")).toHaveCount(1);
   await expect(page.locator("svg.canvas g.artwork rect")).toHaveAttribute("display", "none");
 
-  // Source (= export) now has a <path>, not a <rect>.
+  // Source (= export) still has a <rect> (moved), not a <path> — clean markup preserved.
   await page.getByRole("button", { name: "source" }).click();
   const src = await page.locator(".sourceview textarea").inputValue();
-  expect(src).toContain("<path");
-  expect(src).not.toContain("<rect");
+  expect(src).toContain("<rect");
+  expect(src).toContain('x="23"'); // nudged +3
+  expect(src).not.toContain("<path");
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
