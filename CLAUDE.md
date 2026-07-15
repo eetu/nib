@@ -49,52 +49,46 @@ Per-area detail in `frontend/CLAUDE.md`.
   only *edited* paths get their `d` re-serialized (spliced in place). Everything
   else — other elements, attributes, unedited paths — is preserved verbatim.
   Arcs in an *edited* path convert to cubics (lossy); untouched paths never change.
-- **Added (drawn) paths** carry `added: true` + their own `attributes` and have
-  no source location. They render from the model in a Svelte-managed `<g class=
-  "drawn">` (on top of the imported document's declarative render) and are
-  *appended* before `</svg>` on export. Everything else treats them like any path
-  (editable, snappable, undoable, persisted).
-- **Layers = objects + groups (Figma/Pixelmator model, one level).** The single
-  Inspector **LAYERS** panel *is* the object list: every path/shape is a row,
-  **z-order = the `paths` array order** (drag a row to reorder → `ReorderPath`),
-  and a contiguous run of paths sharing a `layer` id renders as a collapsible
-  **group**. **Group** (`GroupPaths` op) wraps the selection into a named group —
-  a `<g id="name">` on export — pulling its members contiguous; **Ungroup**
-  (`deleteLayer`) dissolves it (geometry untouched). Per-path (`PathElement.hidden`
-  + `SetPathHidden`) and per-group (`Layer.visible`) **show/hide** export as
-  `display="none"`. New shapes land on `activeLayer`. **The panel's z-order matches
-  the canvas *and* the export**: drawn paths append in array order (wrapping
-  contiguous group runs in `<g>`), imported paths fill their source `<path>` slots
-  in draw order. **Export is byte-for-byte until something is reordered/grouped/
-  edited/hidden** — grouping + reordering is the first *active re-serialization of
-  structure*. Core: `Layer`/`SvgDocument.layers`/`activeLayer` + `PathElement.layer`
-  +`hidden`; ops `groupPaths`/`setPathHidden`/`reorderPath`/`setLayerVisible`/
-  `renameLayer`/`deleteLayer`. **Caveats (Phase D):** groups are one level (no
-  groups-in-groups yet); imported paths group for membership/visibility/order but
-  aren't `<g>`-wrapped on export (they stay in their source slots), and drawn
-  shapes render in a group above all imported paths — full interleaving + nesting
-  needs the Phase-D object tree + stable ids.
-- **Live (non-destructive) booleans** are a *group with `Layer.boolean_op` set*
-  (union/subtract/intersect/exclude). Its member paths stay editable **operands**;
-  the doc renders + exports the *computed* boolean of them (subject = the backmost
-  member that fills), recomputed live as operands change. This is a **parametric
-  model concept SVG can't express**, so it lives in nib's model (persisted in
-  localStorage) — on **serialize it bakes to one `<g id><path/></g>`** (source =
-  export = valid SVG everywhere), and re-parsing edited source flattens it to a
-  plain group (lossy but graceful; SourceView flags this). The computed geometry is
-  *not stored on the doc* — the core recomputes it in `state()` and hands the UI
-  `EditorState.booleanResults` (`{layer, subpaths, attributes}` per group). Ops:
-  `BooleanGroup {op,paths,id,name}` (create; shares `group_paths_into` with
-  `GroupPaths`) + `SetLayerBoolean {layer,op?}` (switch op / flatten). Frontend:
-  `EditorCanvas` renders `booleanResults` in `<g class="drawn/booleans">` and drops
-  the operands' own fills; operands stay **hit-testable via model geometry** (so you
-  click/drag/node-edit them normally → live re-cut) and show as faint dashed
-  outlines in the Overlay when the group is active. UI: a "live (non-destructive)"
-  toggle on the multi-select boolean buttons + palette entries + a group-header
-  badge/context-menu. Distinct from the **destructive** `BooleanOp` (bakes + deletes
-  inputs immediately). **MVP caveats:** operands should be *drawn* paths (imported
-  operands compute but double-export / aren't slot-suppressed); the result renders
-  above all drawn paths (not interleaved at the group's z-slot) — both Phase-D.
+- **One representation: the document tree** (`core/src/model/tree.rs`, `Node`/`Tree`).
+  Imported *and* drawn content are nodes in the same tree — imported nodes parse from
+  source (verbatim spans, byte-for-byte re-emit); **drawn (added) paths** are `<path>`
+  nodes created by `add_drawn` (a fresh uid, appended to the root = top of z-order),
+  carrying `added: true` + their whole style in `attributes`. Every editable shape
+  projects to a flat `PathElement` (by `uid`) that tools/geometry/undo run on; edits
+  reconcile back onto its node by uid on serialize. There is **no separate drawn
+  zone** — the canvas renders one `g.artwork` from `editor.renderTree()`, the LAYERS
+  panel renders the same tree, and export walks the same tree.
+- **Groups = `<g>` nodes at any nesting depth.** The Inspector **LAYERS** panel *is*
+  the object tree: every path/shape is a row, every `<g>` a collapsible group (nested,
+  reversed so top-of-stack shows first), **z-order = document order**. **Group**
+  (`GroupNodes {uids,uid,name}`) wraps sibling nodes in a new `<g id="name">`;
+  **Ungroup** (`UngroupNode`) splices its children back into the parent; **reorder**
+  (`ReorderNode {uid,forward}`, bring-forward/send-backward in the row context menu)
+  swaps a node with its adjacent element sibling. **Show/hide** is per-node
+  (`SetNodeHidden` → `Node.hidden`, a group + its subtree) or per-path (`SetPathHidden`
+  → `PathElement.hidden`); both export `display="none"`. **Export is byte-for-byte
+  until something is edited/grouped/reordered/hidden/drawn** (grouping/reordering is an
+  active re-serialization of structure). *Caveat:* `GroupNodes` needs the selection to
+  share one parent (top-level selections always do); cross-level grouping is a no-op.
+- **Live (non-destructive) booleans** are a `<g>` node with `Node.boolean_op` set
+  (union/subtract/intersect/exclude). Its element children stay editable **operands**;
+  the doc renders + exports the *computed* boolean of them (subject = the first child
+  that fills), recomputed live as operands change. This is a **parametric concept SVG
+  can't express**, so it lives in nib's model (the tree is persisted in localStorage) —
+  on **serialize the `<g>` bakes to one `<path/>`** (source = export = valid SVG
+  everywhere), and re-parsing edited source flattens it to a plain group (lossy but
+  graceful). The computed geometry is *not stored on the doc* — the core recomputes it
+  in `state()` from the tree over live `doc.paths` and hands the UI
+  `EditorState.booleanResults` (`{uid, subpaths, attributes, operandUids}` per group,
+  keyed by the group node's uid). Ops: `SetNodeBoolean {uid,op?}` (set/flip/flatten);
+  the facade's `makeBooleanGroup` does `GroupNodes` + `SetNodeBoolean` as one undo step.
+  Frontend: `EditorCanvas`'s `renderNode` paints a `<g booleanOp>` node's computed
+  result (from `booleanResults`, keyed by uid) instead of recursing into the operands;
+  operands stay **hit-testable via model geometry** (click/drag/node-edit → live re-cut)
+  and show as faint dashed outlines in the Overlay (by `operandUids`) when the group is
+  active. UI: a "live (non-destructive)" toggle on the multi-select boolean buttons +
+  palette + a group-header badge/context-menu. Distinct from the **destructive**
+  `BooleanOp` (bakes + deletes inputs immediately).
 - **Two coordinate systems in the canvas.** Artwork is drawn in a scaled `<g>`
   (document units); the editing overlay is drawn in screen space so handles stay
   a constant pixel size at any zoom. `viewport.toScreen/toDoc` bridge them.
@@ -207,9 +201,10 @@ model, ops, geometry, parse/serialize, snap, undo in `nib-core`. Phase B (the
 client-side pro pillars, all running on the core):
 
 - **Landed:** stroke cap/join/dash + fill-rule, rect/line/polygon/star primitives,
-  numeric-precision inspector; **unified layers = objects + groups** (Figma/
-  Pixelmator model, one level — z-order/drag-reorder, show/hide, thumbnails, group/
-  ungroup via `<g>`, active layer, right-click context menus); multi-select +
+  numeric-precision inspector; **unified object tree** (imported + drawn content are
+  one tree of nodes — nested `<g>` groups at any depth, z-order = document order,
+  show/hide, thumbnails, group/ungroup/reorder, right-click context menus; the flat
+  `doc.layers` model is retired — see the "One representation" convention); multi-select +
   marquee + align/distribute; **rotate** (box centre) + **skew** (numeric);
   **path craft** — boolean ops (union/subtract/intersect/exclude via `i_overlay`,
   both **destructive** *and* **live/non-destructive** boolean groups),
@@ -230,12 +225,12 @@ client-side pro pillars, all running on the core):
   browser-only editor stays fully functional without it.
 - **Phase C (additive, flag-gated):** rust-axum backend running the same core —
   op-log-over-WebSocket sync + an MCP tool surface. **The op vocabulary the editor
-  already runs on IS the surface** (`moveNode` … `booleanOp` … `groupPaths`).
+  already runs on IS the surface** (`moveNode` … `booleanOp` … `groupNodes`).
   Browser-only build stays fully functional. C1 (backend serving the SPA + a validated
   `.svg` documents API) has landed on the `phase-c` branch.
-- **Phase D (gated):** arbitrary *nested* groups — a full object tree on top of B's
-  one-level named groups (needs stable-id addressing; imported paths currently group
-  for membership/visibility/order but aren't `<g>`-wrapped on export). **Folds into E.**
+- **Phase D — LANDED (folded into E3):** arbitrary *nested* groups are the object tree
+  itself — `GroupNodes`/`UngroupNode`/`ReorderNode`/`SetNodeHidden` on stable-id (`uid`)
+  addressing; drawn + imported content unified into one tree, `<g>`-wrapped on export.
 - **Phase E (the big model shift — E1 flip + E2 LANDED):** grew from **paths-only** (rest
   preserved as an opaque source string) toward a **full SVG element tree** (`core/src/model/
   tree.rs`), so **save re-emits the tree** ("import → native → export" cornerstone). Key
@@ -246,16 +241,17 @@ client-side pro pillars, all running on the core):
   `Tree::project_paths` so **imported primitives (`<rect>`/`<circle>`/`<ellipse>`/`<line>`/
   `<polygon>`/`<polyline>`) are editable paths** (each carries a stable `uid`); `to_svg` =
   `serialize_via_tree` (reconcile flat edits by uid onto a tree clone — edited primitive →
-  `<path>`, deleted dropped, siblings verbatim — then append drawn + inject defs + grow
-  viewBox). Edited primitives **re-fit** on export — a form-preserving move/resize stays
+  `<path>`, deleted dropped, siblings verbatim, drawn paths + baked booleans emitted from
+  their tree nodes — then inject defs + grow viewBox). Edited primitives **re-fit** on export — a form-preserving move/resize stays
   `<rect>`/`<circle>`/… with updated attrs, only a freeform reshape falls to `<path>`
   (`tree::refit`). **Rendering is fully declarative (#30 landed):** `EditorCanvas` draws the
   whole document from `editor.renderTree()` — editable shapes as `<path>` from the model in
   true z-order, opaque elements verbatim via `<svelte:element>`; the imperative import is
-  retired. Fidelity gate: `core/tests/roundtrip.rs` corpus. **Remaining:** E3 real nested
-  groups (object tree, subsumes D) · E4 text/image/use · E5 defs · "export normalized copy" ·
-  then finalize. Caveat: reordering *imported* paths may not reflect on export (tree emits in
-  source order). Full plan: `~/.claude/plans/nib-full-svg-dom.md`.
+  retired. Fidelity gate: `core/tests/roundtrip.rs` corpus. **E3 real nested groups LANDED**
+  (the unified object tree: drawn + imported content, nested `<g>` groups, live booleans, all
+  one tree — subsumes D; reorder/group/ungroup go through the tree so they reflect on export).
+  **Remaining:** E4 text/image/use · E5 defs · "export normalized copy" · then finalize.
+  Full plan: `~/.claude/plans/nib-full-svg-dom.md`.
   Paired UX **(landed early, ahead of E):** a persisted **basic/advanced** UI preference
   (`settings.uiLevel`, default **advanced**) — *basic* is the opt-in that declutters to
   touch-up tools (select/node-edit/solid-style/save; hides the shapes rail group, arrange,

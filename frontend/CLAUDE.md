@@ -50,8 +50,10 @@ Use yarn (the repo-vendored release). Unit tests cover the pure-TS core
   `settings.canvasBg` (checker/light/dark) is the artwork's preview surface —
   absolute colours, orthogonal to the UI theme.
 - EditorCanvas renders the whole document **declaratively** from the core's render tree
-  (`editor.renderTree()`, constant per source): a recursive snippet draws editable shapes as
-  `<path>` from the model (live geometry by `uid`, true document z-order) and opaque elements
-  (`<g>`/`<text>`/`<image>`/`<defs>`/…) verbatim via `<svelte:element>`. Drawn (added) paths +
-  computed boolean results render in sibling groups on top. (The old imperative artwork
-  import + `livePaths[index]` mapping is gone.)
+  (`editor.renderTree()`, re-fetched on source change + `treeVersion` bump): one recursive
+  snippet, one `g.artwork`. Editable shapes (imported *and* drawn — everything is a tree node
+  now) draw as `<path>` from the model (live geometry by `uid`, true document z-order); a
+  `<g booleanOp>` node paints its computed result (from `booleanResults`, keyed by uid) instead
+  of its operands; opaque elements (`<g>`/`<text>`/`<image>`/`<defs>`/…) render verbatim via
+  `<svelte:element>`. (The old imperative import + `livePaths[index]` mapping + the separate
+  `g.drawn`/`g.booleans` groups + the flat `doc.layers` model are gone.)
