@@ -213,6 +213,14 @@ pub enum Op {
     /// Move a tree node one element-slot within its parent — `forward` (later in document order =
     /// higher z) or backward. Re-projects the paths view (z-order changed).
     ReorderNode { uid: String, forward: bool },
+    /// Set (`Some`) or clear (`None`) the live-boolean op on a group node (by `uid`) in the tree:
+    /// turn a plain `<g>` into a live boolean, change the operation, or flatten it back. The
+    /// group's element children are the operands; the tree renders/exports the computed result.
+    SetNodeBoolean {
+        uid: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        op: Option<String>,
+    },
 
     /// Set (`value: Some`) or clear (`value: None`) one presentation attribute. Added paths
     /// edit their own `attributes`; imported paths accumulate a `style_override`.
@@ -322,12 +330,82 @@ fn group_paths_into(
     true
 }
 
+/// A fresh in-app-drawn `PathElement` (its `uid`/`index` are filled in by [`add_drawn`]). The
+/// standard shape for every added path — pen/shape/paste plus boolean/outline/offset results.
+fn drawn_path(id: String, subpaths: Vec<Subpath>, attributes: IndexMap<String, String>) -> PathElement {
+    PathElement {
+        id,
+        uid: String::new(),
+        index: 0,
+        original_d: String::new(),
+        subpaths,
+        edited: true,
+        added: true,
+        attributes: Some(attributes),
+        style_override: None,
+        original_tag: None,
+        deleted: false,
+        renamed: false,
+        layer: None,
+        hidden: false,
+    }
+}
+
+/// The single funnel for adding a drawn path: mint a tree `uid`, append a `<path>` node to the
+/// tree (top of z-order), and push the flat `PathElement`. Drawn content thus lives in the tree
+/// exactly like imported content — one representation, one serializer, unified z-order + panel.
+/// Returns the new path's index in `doc.paths`.
+fn add_drawn(doc: &mut SvgDocument, mut path: PathElement) -> usize {
+    let index = doc.paths.len();
+    path.index = index;
+    path.added = true;
+    if let Some(tree) = doc.tree.as_mut() {
+        let uid = tree.fresh_uid();
+        path.uid = uid.clone();
+        let attrs = path.attributes.clone().unwrap_or_default();
+        let d = crate::model::path::path_to_d_prec(&path.subpaths, 3);
+        tree.append_drawn(crate::model::tree::make_path_node(&uid, &attrs, &d));
+    }
+    doc.paths.push(path);
+    index
+}
+
+/// Ensure every drawn (`added`) path has a matching tree node — self-heals a document whose flat
+/// `paths` carry added paths the tree lacks (a session persisted before drawn content moved into
+/// the tree, or a `set_tree` that failed). Appends a `<path>` node per orphaned added path.
+pub fn ensure_drawn_in_tree(doc: &mut SvgDocument) {
+    let Some(tree) = doc.tree.as_mut() else {
+        return;
+    };
+    let mut known: std::collections::HashSet<String> = tree
+        .project_paths()
+        .into_iter()
+        .filter(|p| !p.uid.is_empty())
+        .map(|p| p.uid)
+        .collect();
+    for p in doc.paths.iter_mut() {
+        if !p.added || p.deleted {
+            continue;
+        }
+        if !p.uid.is_empty() && known.contains(&p.uid) {
+            continue;
+        }
+        let uid = tree.fresh_uid();
+        p.uid = uid.clone();
+        known.insert(uid.clone());
+        let attrs = p.attributes.clone().unwrap_or_default();
+        let d = crate::model::path::path_to_d_prec(&p.subpaths, 3);
+        tree.append_drawn(crate::model::tree::make_path_node(&uid, &attrs, &d));
+    }
+}
+
 /// Re-project the flat `paths` view from the (structurally-mutated) tree, **preserving edits**:
 /// a structural op (group/ungroup/reorder) can change shape document order, so paths are rebuilt
 /// from the tree, then each path's geometry/style/rename/hidden/delete/layer is carried over from
-/// the old paths by `uid`. In-app drawn paths (no uid, not in the tree) are re-appended. Indices
-/// are renumbered to array position. Keeps `doc.paths` consistent with the tree after structure
-/// edits without discarding the user's geometry work.
+/// the old paths by `uid`. Drawn paths now live in the tree too (added via [`add_drawn`]), so they
+/// project like imported ones; any stray uid-less path is re-appended defensively. Indices are
+/// renumbered to array position. Keeps `doc.paths` consistent with the tree after structure edits
+/// without discarding the user's geometry work.
 fn reproject_paths(doc: &mut SvgDocument) {
     let Some(tree) = &doc.tree else {
         return;
@@ -574,24 +652,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             subpaths,
             attributes,
         } => {
-            let index = doc.paths.len();
-            let layer = doc.active_layer.clone();
-            doc.paths.push(PathElement {
-                id: id.clone(),
-                uid: String::new(),
-                index,
-                original_d: String::new(),
-                subpaths: subpaths.clone(),
-                edited: true,
-                added: true,
-                attributes: Some(attributes.clone()),
-                style_override: None,
-                original_tag: None,
-                deleted: false,
-                renamed: false,
-                layer,
-                hidden: false,
-            });
+            add_drawn(doc, drawn_path(id.clone(), subpaths.clone(), attributes.clone()));
             true
         }
         Op::AddShape {
@@ -600,24 +661,14 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             attributes,
         } => {
             let (nodes, closed) = spec.build();
-            let index = doc.paths.len();
-            let layer = doc.active_layer.clone();
-            doc.paths.push(PathElement {
-                id: id.clone(),
-                uid: String::new(),
-                index,
-                original_d: String::new(),
-                subpaths: vec![Subpath { nodes, closed }],
-                edited: true,
-                added: true,
-                attributes: Some(attributes.clone()),
-                style_override: None,
-                original_tag: None,
-                deleted: false,
-                renamed: false,
-                layer,
-                hidden: false,
-            });
+            add_drawn(
+                doc,
+                drawn_path(
+                    id.clone(),
+                    vec![Subpath { nodes, closed }],
+                    attributes.clone(),
+                ),
+            );
             true
         }
         Op::RenamePath { path, name } => {
@@ -709,6 +760,11 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             }
             ok
         }
+        Op::SetNodeBoolean { uid, op } => doc
+            .tree
+            .as_mut()
+            .map(|t| t.set_boolean(uid, op.clone()))
+            .unwrap_or(false),
         Op::SetStyle { path, key, value } => {
             let Some(p) = doc.paths.get_mut(*path) else {
                 return false;
@@ -853,7 +909,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                     None => return false,
                 }
             };
-            // The result inherits the subject's (lowest-index) effective style + group.
+            // The result inherits the subject's (lowest-index) effective style.
             let first = &doc.paths[idxs[0]];
             let mut attributes = first.attributes.clone().unwrap_or_default();
             if let Some(so) = &first.style_override {
@@ -861,27 +917,10 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                     attributes.insert(k.clone(), v.clone());
                 }
             }
-            let layer = first.layer.clone();
             for &i in &idxs {
                 doc.paths[i].deleted = true;
             }
-            let index = doc.paths.len();
-            doc.paths.push(PathElement {
-                id: id.clone(),
-                uid: String::new(),
-                index,
-                original_d: String::new(),
-                subpaths,
-                edited: true,
-                added: true,
-                attributes: Some(attributes),
-                style_override: None,
-                original_tag: None,
-                deleted: false,
-                renamed: false,
-                layer,
-                hidden: false,
-            });
+            add_drawn(doc, drawn_path(id.clone(), subpaths, attributes));
             true
         }
         Op::CombinePaths { paths, id } => {
@@ -928,27 +967,10 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                     attributes.insert(k.clone(), v.clone());
                 }
             }
-            let layer = first.layer.clone();
             for &i in &idxs {
                 doc.paths[i].deleted = true;
             }
-            let index = doc.paths.len();
-            doc.paths.push(PathElement {
-                id: id.clone(),
-                uid: String::new(),
-                index,
-                original_d: String::new(),
-                subpaths,
-                edited: true,
-                added: true,
-                attributes: Some(attributes),
-                style_override: None,
-                original_tag: None,
-                deleted: false,
-                renamed: false,
-                layer,
-                hidden: false,
-            });
+            add_drawn(doc, drawn_path(id.clone(), subpaths, attributes));
             true
         }
         Op::ReleaseCompound { path, ids } => {
@@ -966,31 +988,15 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                     attributes.insert(k.clone(), v.clone());
                 }
             }
-            let layer = p.layer.clone();
+            let base_id = p.id.clone();
             let subpaths = p.subpaths.clone();
             doc.paths[*path].deleted = true;
             for (k, sp) in subpaths.into_iter().enumerate() {
                 let id = ids
                     .get(k)
                     .cloned()
-                    .unwrap_or_else(|| format!("{}-{}", doc.paths[*path].id, k + 1));
-                let index = doc.paths.len();
-                doc.paths.push(PathElement {
-                    id,
-                    uid: String::new(),
-                    index,
-                    original_d: String::new(),
-                    subpaths: vec![sp],
-                    edited: true,
-                    added: true,
-                    attributes: Some(attributes.clone()),
-                    style_override: None,
-                    original_tag: None,
-                    deleted: false,
-                    renamed: false,
-                    layer: layer.clone(),
-                    hidden: false,
-                });
+                    .unwrap_or_else(|| format!("{}-{}", base_id, k + 1));
+                add_drawn(doc, drawn_path(id, vec![sp], attributes.clone()));
             }
             true
         }
@@ -1009,7 +1015,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             true
         }
         Op::OutlineStroke { path, width, id } => {
-            let (subpaths, attributes, layer) = {
+            let (subpaths, attributes) = {
                 let Some(p) = doc.paths.get(*path) else {
                     return false;
                 };
@@ -1033,30 +1039,14 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 m.insert("fill".to_string(), stroke_color);
                 m.insert("stroke".to_string(), "none".to_string());
                 m.shift_remove("stroke-width");
-                (subpaths, m, p.layer.clone())
+                (subpaths, m)
             };
             doc.paths[*path].deleted = true;
-            let index = doc.paths.len();
-            doc.paths.push(PathElement {
-                id: id.clone(),
-                uid: String::new(),
-                index,
-                original_d: String::new(),
-                subpaths,
-                edited: true,
-                added: true,
-                attributes: Some(attributes),
-                style_override: None,
-                original_tag: None,
-                deleted: false,
-                renamed: false,
-                layer,
-                hidden: false,
-            });
+            add_drawn(doc, drawn_path(id.clone(), subpaths, attributes));
             true
         }
         Op::OffsetPath { path, distance, id } => {
-            let (subpaths, attributes, layer) = {
+            let (subpaths, attributes) = {
                 let Some(p) = doc.paths.get(*path) else {
                     return false;
                 };
@@ -1073,25 +1063,9 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                         m.insert(k.clone(), v.clone());
                     }
                 }
-                (subpaths, m, p.layer.clone())
+                (subpaths, m)
             };
-            let index = doc.paths.len();
-            doc.paths.push(PathElement {
-                id: id.clone(),
-                uid: String::new(),
-                index,
-                original_d: String::new(),
-                subpaths,
-                edited: true,
-                added: true,
-                attributes: Some(attributes),
-                style_override: None,
-                original_tag: None,
-                deleted: false,
-                renamed: false,
-                layer,
-                hidden: false,
-            });
+            add_drawn(doc, drawn_path(id.clone(), subpaths, attributes));
             true
         }
     }
@@ -1380,61 +1354,6 @@ mod tests {
     }
 
     #[test]
-    fn layer_lifecycle_and_active_assignment() {
-        let mut doc = doc_from("M 0 0 L 10 0", false);
-        // Add a layer → it becomes active.
-        assert!(apply(
-            &mut doc,
-            &Op::AddLayer {
-                id: "L1".into(),
-                name: "shapes".into()
-            }
-        ));
-        assert_eq!(doc.layers.len(), 1);
-        assert_eq!(doc.active_layer.as_deref(), Some("L1"));
-        // A duplicate id is a no-op.
-        assert!(!apply(
-            &mut doc,
-            &Op::AddLayer {
-                id: "L1".into(),
-                name: "dupe".into()
-            }
-        ));
-        // A new drawn shape lands on the active layer.
-        assert!(apply(
-            &mut doc,
-            &Op::AddPath {
-                id: "s1".into(),
-                subpaths: parse_path_d("M 1 1 L 2 2"),
-                attributes: IndexMap::new(),
-            }
-        ));
-        assert_eq!(doc.paths[1].layer.as_deref(), Some("L1"));
-        // Hide + rename.
-        assert!(apply(
-            &mut doc,
-            &Op::SetLayerVisible {
-                id: "L1".into(),
-                visible: false
-            }
-        ));
-        assert!(!doc.layers[0].visible);
-        assert!(apply(
-            &mut doc,
-            &Op::RenameLayer {
-                id: "L1".into(),
-                name: "outline".into()
-            }
-        ));
-        assert_eq!(doc.layers[0].name, "outline");
-        // Deleting the layer unassigns its paths + clears active.
-        assert!(apply(&mut doc, &Op::DeleteLayer { id: "L1".into() }));
-        assert!(doc.layers.is_empty());
-        assert_eq!(doc.paths[1].layer, None);
-        assert_eq!(doc.active_layer, None);
-    }
-
-    #[test]
     fn reorder_path_moves_within_the_draw_order() {
         let mut doc = doc_from("M 0 0 L 1 1", true);
         apply(
@@ -1556,6 +1475,102 @@ mod tests {
         let ia = out.find("id=\"a\"").unwrap();
         let ib = out.find("id=\"b\"").unwrap();
         assert!(ib < ia, "after bring-forward, b precedes a: {out}");
+    }
+
+    #[test]
+    fn drawn_path_lives_in_the_tree_and_serializes_via_it() {
+        use crate::model::document::{parse_svg, serialize_via_tree};
+        let mut doc = parse_svg(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="a" x="0" y="0" width="10" height="10"/></svg>"#,
+        )
+        .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        let mut style = IndexMap::new();
+        style.insert("fill".to_string(), "#f00".to_string());
+        assert!(apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "drawn".into(),
+                subpaths: parse_path_d("M 20 20 L 40 20 L 40 40 Z"),
+                attributes: style,
+            }
+        ));
+        // The drawn path got a tree uid + node (not a uid-less orphan).
+        let last = doc.paths.last().unwrap();
+        assert!(last.added && !last.uid.is_empty(), "drawn path is in the tree");
+        // Serializing via the tree emits it (no separate append step) + keeps the rect verbatim.
+        let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(out.contains("M 20 20"), "drawn geometry emitted: {out}");
+        assert!(out.contains("fill=\"#f00\""), "drawn style emitted: {out}");
+        assert!(out.contains("<rect id=\"a\""), "imported rect preserved: {out}");
+    }
+
+    #[test]
+    fn live_boolean_group_in_tree_bakes_and_computes_result() {
+        use crate::model::document::{parse_svg, serialize_via_tree, tree_boolean_results};
+        let mut doc =
+            parse_svg(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"></svg>"#)
+                .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        let rect = |x: f64| {
+            let mut m = IndexMap::new();
+            m.insert("fill".to_string(), "#00f".to_string());
+            (
+                parse_path_d(&format!(
+                    "M {x} 0 L {} 0 L {} 20 L {x} 20 Z",
+                    x + 30.0,
+                    x + 30.0
+                )),
+                m,
+            )
+        };
+        let (s0, a0) = rect(0.0);
+        let (s1, a1) = rect(20.0);
+        apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "r0".into(),
+                subpaths: s0,
+                attributes: a0,
+            },
+        );
+        apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "r1".into(),
+                subpaths: s1,
+                attributes: a1,
+            },
+        );
+        let (u0, u1) = (doc.paths[0].uid.clone(), doc.paths[1].uid.clone());
+        assert!(apply(
+            &mut doc,
+            &Op::GroupNodes {
+                uids: vec![u0, u1],
+                uid: "grp".into(),
+                name: "bool".into(),
+            }
+        ));
+        assert!(apply(
+            &mut doc,
+            &Op::SetNodeBoolean {
+                uid: "grp".into(),
+                op: Some("subtract".into()),
+            }
+        ));
+        // The live result is computed from the operands' geometry, keyed by the group uid.
+        let results = tree_boolean_results(&doc);
+        assert_eq!(results.len(), 1, "one live-boolean result");
+        assert_eq!(results[0].uid, "grp");
+        assert!(!results[0].subpaths.is_empty(), "non-empty subtract geometry");
+        assert_eq!(results[0].operand_uids.len(), 2, "two operands recorded");
+        // Export bakes the group to ONE computed path (operands not emitted separately).
+        let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert_eq!(
+            out.matches("<path").count(),
+            1,
+            "boolean group bakes to one path: {out}"
+        );
     }
 
     #[test]

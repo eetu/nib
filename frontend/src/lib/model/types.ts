@@ -88,10 +88,12 @@ export type Layer = {
 /** A live boolean group's computed render geometry + the paint it inherits (subject style).
  *  Derived by the core each snapshot (not stored on the doc); the canvas renders these. */
 export type BooleanResult = {
-  /** The boolean group's layer id. */
-  layer: string;
+  /** The boolean group node's stable uid (the canvas keys the painted result on it). */
+  uid: string;
   subpaths: Subpath[];
   attributes: Record<string, string>;
+  /** Uids of the group's operand paths — so the overlay can outline the editable sources. */
+  operandUids: string[];
 };
 
 export type GradientStop = { offset: number; color: string; opacity?: number };
@@ -122,6 +124,9 @@ export type RenderNode =
       attrs: Record<string, string>;
       children: RenderNode[];
       hidden: boolean;
+      /** Set on a live-boolean `<g>` — the canvas paints the computed result (from
+       *  `booleanResults`, keyed by this node's `uid`) instead of recursing into the operands. */
+      booleanOp?: "union" | "subtract" | "intersect" | "exclude";
     }
   | { kind: "text"; text: string };
 

@@ -313,6 +313,16 @@ pub enum Node {
         /// on export, skipped in the render.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         hidden: bool,
+        /// In-app-created node (a drawn path/shape or a group made in the editor) — it has no
+        /// verbatim source, so it always regenerates on emit and projects with `added: true`
+        /// (drives the STYLE panel's whole-style editing). Parsed nodes are `false`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        added: bool,
+        /// When `Some("union"/"subtract"/"intersect"/"exclude")` this `<g>` is a **live boolean**:
+        /// its element children are editable operands and it renders/exports the *computed* boolean
+        /// of them (recomputed live) instead of the children themselves. `None` = a plain group.
+        #[serde(rename = "booleanOp", default, skip_serializing_if = "Option::is_none")]
+        boolean_op: Option<String>,
     },
     /// Verbatim text (incl. whitespace between elements + element text content).
     Text(String),
@@ -377,6 +387,8 @@ fn build(node: roxmltree::Node, source: &str, next_uid: &mut usize) -> Node {
             children: Vec::new(),
             edited: false,
             hidden: false,
+            added: false,
+            boolean_op: None,
         };
     }
 
@@ -405,6 +417,8 @@ fn build(node: roxmltree::Node, source: &str, next_uid: &mut usize) -> Node {
         children,
         edited: false,
         hidden: false,
+        added: false,
+        boolean_op: None,
     }
 }
 
@@ -459,7 +473,86 @@ fn with_display_none(open: &str) -> String {
     )
 }
 
-fn emit(node: &Node, out: &mut String) {
+/// Read an element node's presentation style (the `STYLE_KEYS` attrs) into a map — the paint an
+/// operand contributes to a baked/rendered boolean result.
+fn node_style(attrs: &[(String, String)]) -> IndexMap<String, String> {
+    let mut style = IndexMap::new();
+    for key in STYLE_KEYS {
+        if let Some(v) = attr(attrs, key) {
+            style.insert(key.to_string(), v.to_string());
+        }
+    }
+    style
+}
+
+/// Turn a boolean group's element children into operand `PathElement`s (skipping hidden ones and
+/// non-shape/opaque nodes) — the live inputs a boolean is computed from.
+fn node_operands(children: &[Node]) -> Vec<PathElement> {
+    children
+        .iter()
+        .filter_map(|c| match c {
+            Node::Element {
+                tag,
+                attrs,
+                hidden: false,
+                ..
+            } => shape_subpaths(tag, attrs).map(|subpaths| PathElement {
+                id: String::new(),
+                uid: String::new(),
+                index: 0,
+                original_d: String::new(),
+                subpaths,
+                edited: false,
+                added: true,
+                attributes: Some(node_style(attrs)),
+                style_override: None,
+                original_tag: None,
+                deleted: false,
+                renamed: false,
+                layer: None,
+                hidden: false,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Compute a live-boolean group's baked `<path .../>` from its operand children. `None` when the
+/// boolean can't be formed (< 2 operands or empty geometry) so the caller emits the operands.
+fn baked_boolean(children: &[Node], op: &str, precision: usize) -> Option<String> {
+    let operands = node_operands(children);
+    if operands.len() < 2 {
+        return None;
+    }
+    let refs: Vec<&PathElement> = operands.iter().collect();
+    let subpaths = crate::model::booleans::boolean(op, &refs)?;
+    if subpaths.is_empty() {
+        return None;
+    }
+    // Subject paint = the first operand that actually fills (so a filled shape + a stroke-only
+    // cutter keeps the fill), else the first operand.
+    let subject = operands
+        .iter()
+        .find(|p| {
+            p.attributes
+                .as_ref()
+                .and_then(|a| a.get("fill"))
+                .map(|f| f != "none")
+                .unwrap_or(true)
+        })
+        .or_else(|| operands.first());
+    let style: String = subject
+        .and_then(|p| p.attributes.as_ref())
+        .map(|a| a.iter().map(|(k, v)| format!(" {k}=\"{v}\"")).collect())
+        .unwrap_or_default();
+    Some(format!(
+        "<path d=\"{}\"{} />",
+        path_to_d_prec(&subpaths, precision),
+        style
+    ))
+}
+
+fn emit_prec(node: &Node, out: &mut String, precision: usize) {
     match node {
         Node::Text(s) | Node::Comment(s) | Node::Other(s) => out.push_str(s),
         Node::Element {
@@ -470,7 +563,9 @@ fn emit(node: &Node, out: &mut String) {
             children,
             edited,
             hidden,
+            boolean_op,
             uid: _,
+            added: _,
         } => {
             let open = if *edited {
                 regen_open(tag, attrs, original_close.is_empty())
@@ -482,8 +577,23 @@ fn emit(node: &Node, out: &mut String) {
             } else {
                 open
             });
-            for c in children {
-                emit(c, out);
+            // A live-boolean `<g>` bakes to ONE computed `<path>` — SVG can't express the live op,
+            // so export renders correctly everywhere; the liveness lives in nib's model. Falls back
+            // to emitting the operands if the boolean can't be formed (< 2 operands / empty).
+            match boolean_op
+                .as_deref()
+                .and_then(|op| baked_boolean(children, op, precision))
+            {
+                Some(baked) => {
+                    out.push_str("\n    ");
+                    out.push_str(&baked);
+                    out.push('\n');
+                }
+                None => {
+                    for c in children {
+                        emit_prec(c, out, precision);
+                    }
+                }
             }
             out.push_str(original_close);
         }
@@ -491,11 +601,16 @@ fn emit(node: &Node, out: &mut String) {
 }
 
 /// Re-emit the tree to SVG text. Unedited nodes emit verbatim (byte-for-byte); edited elements
-/// regenerate their open tag from `tag` + `attrs`.
+/// regenerate their open tag from `tag` + `attrs`. Baked booleans + drawn geometry use precision 3.
 pub fn serialize_tree(tree: &Tree) -> String {
+    serialize_tree_prec(tree, 3)
+}
+
+/// Re-emit the tree at a chosen numeric precision (for regenerated `d`/baked-boolean geometry).
+pub fn serialize_tree_prec(tree: &Tree, precision: usize) -> String {
     let mut out = String::with_capacity(tree.prolog.len() + tree.epilog.len() + 256);
     out.push_str(&tree.prolog);
-    emit(&tree.root, &mut out);
+    emit_prec(&tree.root, &mut out, precision);
     out.push_str(&tree.epilog);
     out
 }
@@ -514,6 +629,7 @@ fn collect_paths(node: &Node, out: &mut Vec<PathElement>) {
         attrs,
         original_open,
         children,
+        added,
         ..
     } = node
     else {
@@ -534,12 +650,21 @@ fn collect_paths(node: &Node, out: &mut Vec<PathElement>) {
             .filter(|s| !s.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| format!("{tag}-{index}"));
-        let mut style = IndexMap::new();
-        for key in STYLE_KEYS {
-            if let Some(v) = attr(attrs, key) {
-                style.insert(key.to_string(), v.to_string());
-            }
-        }
+        // A drawn (added) node has no source tag: its `attributes` carry the *whole* style (every
+        // non-geometry attr), edited directly by the STYLE panel and regenerated on emit. An
+        // imported node keeps only the parsed `STYLE_KEYS` subset (its full tag is preserved
+        // verbatim); style edits accumulate in `style_override`.
+        let style: IndexMap<String, String> = if *added {
+            attrs
+                .iter()
+                .filter(|(k, _)| {
+                    k != "id" && k != "d" && !GEOMETRY_ATTRS.contains(&k.as_str())
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        } else {
+            node_style(attrs)
+        };
         // original_d is the source `d` for a path; shapes have none (their `d` is regenerated
         // on edit via reconcile).
         let original_d = if tag == "path" {
@@ -553,10 +678,14 @@ fn collect_paths(node: &Node, out: &mut Vec<PathElement>) {
             index,
             subpaths,
             attributes: Some(style),
-            original_tag: Some(original_open.clone()),
+            original_tag: if *added {
+                None
+            } else {
+                Some(original_open.clone())
+            },
             original_d,
             edited: false,
-            added: false,
+            added: *added,
             style_override: None,
             deleted: false,
             renamed: false,
@@ -585,6 +714,8 @@ fn reconcile_node(node: &mut Node, by_uid: &HashMap<&str, &PathElement>, precisi
         original_close,
         children,
         edited,
+        hidden,
+        added,
         ..
     } = node
     else {
@@ -600,33 +731,55 @@ fn reconcile_node(node: &mut Node, by_uid: &HashMap<&str, &PathElement>, precisi
             *edited = false;
             return;
         }
-        if p.edited {
-            if tag == "path" {
-                set_or_push(attrs, "d", &path_to_d_prec(&p.subpaths, precision));
-            } else if let Some(geo) = refit(tag, &p.subpaths, precision) {
-                // A move/resize keeps the primitive in form → re-emit it as itself with updated
-                // geometry attrs (a `<rect>` stays a `<rect>`), preserving clean markup.
-                for (k, v) in geo {
-                    set_or_push(attrs, &k, &v);
-                }
-            } else {
-                // The edit broke the primitive's form (e.g. a dragged corner) → become a `<path>`
-                // (its geometry is now the `d`; the shape attrs would be dead weight).
-                attrs.retain(|(k, _)| !GEOMETRY_ATTRS.contains(&k.as_str()));
-                *tag = "path".to_string();
-                set_or_push(attrs, "d", &path_to_d_prec(&p.subpaths, precision));
+        if *added {
+            // A drawn node regenerates wholesale from the model: `attributes` is its whole style
+            // (+ id if named) and the current geometry `d` (drawn shapes are always `<path>`).
+            let mut regen: Vec<(String, String)> = Vec::new();
+            if p.renamed {
+                regen.push(("id".to_string(), p.id.clone()));
             }
+            if let Some(a) = &p.attributes {
+                for (k, v) in a {
+                    regen.push((k.clone(), v.clone()));
+                }
+            }
+            regen.push(("d".to_string(), path_to_d_prec(&p.subpaths, precision)));
+            *attrs = regen;
+            *tag = "path".to_string();
             *edited = true;
-        }
-        if p.renamed {
-            set_or_push(attrs, "id", &p.id);
-            *edited = true;
-        }
-        if let Some(so) = &p.style_override {
-            for (k, v) in so {
-                set_or_push(attrs, k, v);
+        } else {
+            if p.edited {
+                if tag == "path" {
+                    set_or_push(attrs, "d", &path_to_d_prec(&p.subpaths, precision));
+                } else if let Some(geo) = refit(tag, &p.subpaths, precision) {
+                    // A move/resize keeps the primitive in form → re-emit it as itself with
+                    // updated geometry attrs (a `<rect>` stays a `<rect>`), preserving clean markup.
+                    for (k, v) in geo {
+                        set_or_push(attrs, &k, &v);
+                    }
+                } else {
+                    // The edit broke the form (e.g. a dragged corner) → become a `<path>` (its
+                    // geometry is now the `d`; the shape attrs would be dead weight).
+                    attrs.retain(|(k, _)| !GEOMETRY_ATTRS.contains(&k.as_str()));
+                    *tag = "path".to_string();
+                    set_or_push(attrs, "d", &path_to_d_prec(&p.subpaths, precision));
+                }
                 *edited = true;
             }
+            if p.renamed {
+                set_or_push(attrs, "id", &p.id);
+                *edited = true;
+            }
+            if let Some(so) = &p.style_override {
+                for (k, v) in so {
+                    set_or_push(attrs, k, v);
+                    *edited = true;
+                }
+            }
+        }
+        // Per-path hide (SetPathHidden) exports as `display="none"`, OR'd with any structural hide.
+        if p.hidden {
+            *hidden = true;
         }
     }
     for c in children {
@@ -693,6 +846,88 @@ impl Tree {
     pub fn reorder(&mut self, uid: &str, forward: bool) -> bool {
         reorder_in(&mut self.root, uid, forward)
     }
+
+    /// Set (`Some`) or clear (`None`) the live-boolean op on the group node `uid`. Returns whether
+    /// it was found (any element node can carry the marker; the frontend only sets it on groups).
+    pub fn set_boolean(&mut self, uid: &str, op: Option<String>) -> bool {
+        match self.root.find_by_uid_mut(uid) {
+            Some(Node::Element { boolean_op, .. }) => {
+                *boolean_op = op;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Append a freshly-built drawn node as the last child of the root `<svg>` (top of z-order),
+    /// on its own indented line. A childless root (self-closing `<svg/>` or empty `<svg></svg>`,
+    /// where the close tag folded into `original_open`) is regenerated into a real open + close so
+    /// the appended node lands *inside* the root.
+    pub fn append_drawn(&mut self, node: Node) {
+        if let Node::Element {
+            tag,
+            attrs,
+            children,
+            original_open,
+            original_close,
+            edited,
+            ..
+        } = &mut self.root
+        {
+            if original_close.is_empty() {
+                *original_open = regen_open(tag, attrs, false);
+                *original_close = format!("</{tag}>");
+                *edited = true;
+            }
+            children.push(Node::Text("\n  ".to_string()));
+            children.push(node);
+        }
+    }
+
+    /// A stable uid not already used by any element in the tree — `u0`, `u1`, … Drawn nodes and
+    /// groups mint one so their identity is unique for reconcile/addressing.
+    pub fn fresh_uid(&self) -> String {
+        let mut used = std::collections::HashSet::new();
+        fn walk<'a>(n: &'a Node, used: &mut std::collections::HashSet<&'a str>) {
+            if let Node::Element { uid, children, .. } = n {
+                used.insert(uid.as_str());
+                for c in children {
+                    walk(c, used);
+                }
+            }
+        }
+        walk(&self.root, &mut used);
+        let mut k = 0usize;
+        loop {
+            let candidate = format!("u{k}");
+            if !used.contains(candidate.as_str()) {
+                return candidate;
+            }
+            k += 1;
+        }
+    }
+}
+
+/// Build a drawn `<path>` node from its style `attributes` + geometry `d`. `edited: true` +
+/// `added: true` so it always regenerates on emit and projects with `added`; no verbatim source.
+pub fn make_path_node(uid: &str, attributes: &IndexMap<String, String>, d: &str) -> Node {
+    let mut attrs: Vec<(String, String)> = attributes
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    attrs.push(("d".to_string(), d.to_string()));
+    Node::Element {
+        uid: uid.to_string(),
+        tag: "path".to_string(),
+        attrs,
+        original_open: String::new(),
+        original_close: String::new(),
+        children: Vec::new(),
+        edited: true,
+        hidden: false,
+        added: true,
+        boolean_op: None,
+    }
 }
 
 fn reorder_in(node: &mut Node, uid: &str, forward: bool) -> bool {
@@ -746,6 +981,8 @@ fn group_in(node: &mut Node, uids: &[String], new_uid: &str, name: &str) -> bool
                 children: grabbed,
                 edited: false,
                 hidden: false,
+                added: true,
+                boolean_op: None,
             };
             children.insert(at.min(children.len()), g);
             return true;
@@ -791,6 +1028,10 @@ pub enum RenderNode {
         attrs: IndexMap<String, String>,
         children: Vec<RenderNode>,
         hidden: bool,
+        /// Set on a live-boolean `<g>` — the canvas paints the computed result (from
+        /// `booleanResults`, keyed by this node's `uid`) instead of recursing into the operands.
+        #[serde(rename = "booleanOp", skip_serializing_if = "Option::is_none")]
+        boolean_op: Option<String>,
     },
     Text {
         text: String,
@@ -805,6 +1046,7 @@ fn to_render(node: &Node) -> Option<RenderNode> {
             attrs,
             children,
             hidden,
+            boolean_op,
             ..
         } => Some(RenderNode::Element {
             uid: uid.clone(),
@@ -812,6 +1054,7 @@ fn to_render(node: &Node) -> Option<RenderNode> {
             attrs: attrs.iter().cloned().collect(),
             children: children.iter().filter_map(to_render).collect(),
             hidden: *hidden,
+            boolean_op: boolean_op.clone(),
         }),
         Node::Text(s) => Some(RenderNode::Text { text: s.clone() }),
         Node::Comment(_) | Node::Other(_) => None,

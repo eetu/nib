@@ -22,12 +22,10 @@
   const cursor = $derived(
     canvas.panning || canvas.dragging || interaction.spaceHeld ? "grabbing" : hoverCursor,
   );
-  // Ids of hidden layers — their paths drop from render.
-  const hiddenLayers = $derived(
-    new Set((editor.doc?.layers ?? []).filter((l) => !l.visible).map((l) => l.id)),
-  );
-  // Live boolean groups: members are operands → the computed result paints instead.
-  const booleanLayers = $derived(editor.booleanLayerIds);
+  // Live-boolean group results, keyed by the group node's uid: a `<g booleanOp>` in the render
+  // tree paints this computed geometry instead of its operand children. Recomputed each core sync
+  // (so it tracks operand drags), independent of the cached render tree.
+  const booleanByUid = $derived(new Map(editor.booleanResults.map((r) => [r.uid, r] as const)));
 
   // The document renders declaratively from the tree (the root <svg>'s children), fetched once
   // per source change; editable shapes within pull live geometry from doc.paths by uid so edits
@@ -73,23 +71,6 @@
     ),
   );
 
-  // Drawn (added) paths render on top of the imported tree (they have no source node).
-  const addedPaths = $derived(
-    editor.doc?.paths.filter(
-      (p) =>
-        p.added &&
-        !p.deleted &&
-        !p.hidden &&
-        !(p.layer && hiddenLayers.has(p.layer)) &&
-        !(p.layer && booleanLayers.has(p.layer)),
-    ) ?? [],
-  );
-
-  // A path's effective style (drawn: attributes; imported: attributes ⊕ styleOverride).
-  function eff(p: { attributes?: Record<string, string>; styleOverride?: Record<string, string> }) {
-    return { ...(p.attributes ?? {}), ...(p.styleOverride ?? {}) };
-  }
-
   // Geometry attributes replaced by the path's `d` (dropped when drawing a primitive as a path).
   const GEOM_ATTRS = new Set([
     "x",
@@ -108,24 +89,22 @@
     "points",
     "d",
   ]);
-  // Attributes for an editable shape drawn as a `<path>`: keep *all* the source element's attrs
-  // (class / transform / clip-path / fill=url(#…) / …) minus the geometry ones, then apply any
-  // style edits. Using the node's full attrs (not just the model's parsed style) is what keeps
-  // gradients, CSS classes, and transforms intact through the declarative render.
+  // Attributes for an editable shape drawn as a `<path>`. A drawn (added) path's whole style lives
+  // in `attributes` (edited live by the STYLE panel), so render that directly — the cached tree
+  // node's attrs would be stale. An imported path keeps *all* the source element's attrs (class /
+  // transform / clip-path / fill=url(#…) / …) minus geometry, then applies its `styleOverride` —
+  // what keeps gradients, CSS classes, and transforms intact through the declarative render.
   function shapeAttrs(attrs: Record<string, string>, p: PathElement): Record<string, string> {
+    if (p.added) return { ...(p.attributes ?? {}) };
     const out: Record<string, string> = {};
     for (const k in attrs) if (!GEOM_ATTRS.has(k)) out[k] = attrs[k];
     return { ...out, ...(p.styleOverride ?? {}) };
   }
 
-  // Whether an editable shape node paints (skips deleted/hidden/hidden-layer/boolean-operand).
+  // Whether an editable shape node paints (skips deleted/hidden). Boolean-group operands never
+  // reach here — a `<g booleanOp>` paints its computed result and doesn't recurse into children.
   function shapeVisible(p: PathElement): boolean {
-    return (
-      !p.deleted &&
-      !p.hidden &&
-      !(p.layer && hiddenLayers.has(p.layer)) &&
-      !(p.layer && booleanLayers.has(p.layer))
-    );
+    return !p.deleted && !p.hidden;
   }
 
   // WebKit-only trackpad gesture event (Safari); not in the standard DOM lib.
@@ -343,7 +322,14 @@
     {#snippet renderNode(n: RenderNode)}
       {#if n.kind === "text"}
         {n.text}
-      {:else if !n.hidden}
+      {:else if n.hidden}
+        <!-- hidden node + subtree: skipped -->
+      {:else if n.booleanOp}
+        <!-- live-boolean group: paint the computed result (operands stay editable but unpainted);
+             recomputed each sync via booleanResults so it tracks operand drags -->
+        {@const r = booleanByUid.get(n.uid)}
+        {#if r}<path {...r.attributes} d={pathToD(r.subpaths)} />{/if}
+      {:else}
         {@const p = pathByUid.get(n.uid)}
         {#if p}
           <!-- editable shape: drawn from the model (live geometry) in true z-order, keeping the
@@ -363,21 +349,10 @@
       class="scene"
       transform={`translate(${viewport.tx} ${viewport.ty}) scale(${viewport.scale})`}
     >
-      <!-- imported document: rendered declaratively from the tree in document order -->
+      <!-- the whole document — imported, drawn, and baked booleans — rendered declaratively from
+           the tree in true document order (one representation, one z-order) -->
       <g class="artwork">
         {#each renderTree as n, i (i)}{@render renderNode(n)}{/each}
-      </g>
-      <!-- in-app drawn paths: Svelte-managed, straight from the model (on top) -->
-      <g class="drawn">
-        {#each addedPaths as p (p.id)}
-          <path {...eff(p)} d={pathToD(p.subpaths)} />
-        {/each}
-      </g>
-      <!-- live boolean groups: the computed result (operands render as overlay outlines) -->
-      <g class="booleans">
-        {#each editor.booleanResults as r (r.layer)}
-          <path {...r.attributes} d={pathToD(r.subpaths)} />
-        {/each}
       </g>
     </g>
     <Overlay />

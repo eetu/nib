@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use kurbo::{BezPath, Shape};
 
 use super::path::{parse_path_d, path_to_d_prec};
-use super::tree::{Tree, serialize_tree};
+use super::tree::{Node, Tree, serialize_tree_prec};
 use super::types::{Gradient, Layer, PathElement, Subpath, SvgDocument, ViewBox};
 
 const DEFAULT_VIEWBOX: ViewBox = ViewBox {
@@ -379,6 +379,78 @@ pub fn boolean_group_result(
     Some((subpaths, style))
 }
 
+/// Every live-boolean group's rendered result, computed from the **live** `doc.paths` geometry:
+/// `(group uid, computed subpaths, subject style)` per `<g boolean_op>` node in the tree. This is
+/// what the canvas paints for a boolean group (recomputed each sync so it tracks operand drags,
+/// unlike the cached render tree). Skips hidden groups + those with < 2 operands / empty geometry.
+pub fn tree_boolean_results(doc: &SvgDocument) -> Vec<BooleanResult> {
+    let Some(tree) = &doc.tree else {
+        return Vec::new();
+    };
+    let by_uid: std::collections::HashMap<&str, &PathElement> = doc
+        .paths
+        .iter()
+        .filter(|p| !p.uid.is_empty() && !p.deleted)
+        .map(|p| (p.uid.as_str(), p))
+        .collect();
+    let mut out = Vec::new();
+    collect_boolean_results(&tree.root, &by_uid, &mut out);
+    out
+}
+
+/// A live-boolean group's computed geometry + the uids of its operands (so the UI can outline the
+/// editable sources) + the subject paint the result inherits.
+pub struct BooleanResult {
+    pub uid: String,
+    pub subpaths: Vec<Subpath>,
+    pub attributes: IndexMap<String, String>,
+    pub operand_uids: Vec<String>,
+}
+
+fn collect_boolean_results(
+    node: &Node,
+    by_uid: &std::collections::HashMap<&str, &PathElement>,
+    out: &mut Vec<BooleanResult>,
+) {
+    if let Node::Element {
+        uid,
+        children,
+        boolean_op,
+        hidden,
+        ..
+    } = node
+    {
+        if let (Some(op), false) = (boolean_op.as_deref(), *hidden) {
+            // Operands = the group's element children, mapped to their live editable paths.
+            let members: Vec<&PathElement> = children
+                .iter()
+                .filter_map(|c| match c {
+                    Node::Element { uid: cu, .. } => by_uid.get(cu.as_str()).copied(),
+                    _ => None,
+                })
+                .collect();
+            if members.len() >= 2 {
+                if let Some(subpaths) = crate::model::booleans::boolean(op, &members) {
+                    if !subpaths.is_empty() {
+                        let attributes = boolean_subject(&members)
+                            .map(effective_style)
+                            .unwrap_or_default();
+                        out.push(BooleanResult {
+                            uid: uid.clone(),
+                            subpaths,
+                            attributes,
+                            operand_uids: members.iter().map(|m| m.uid.clone()).collect(),
+                        });
+                    }
+                }
+            }
+        }
+        for c in children {
+            collect_boolean_results(c, by_uid, out);
+        }
+    }
+}
+
 /// Serialize one drawn `<path …>` (indented). `indent` is the leading whitespace.
 fn drawn_path_tag(p: &PathElement, precision: usize, indent: &str) -> String {
     let id = if p.renamed {
@@ -684,9 +756,11 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
 pub fn serialize_via_tree(doc: &SvgDocument, base: &Tree, precision: usize) -> String {
     let mut tree = base.clone();
     tree.reconcile_paths(&doc.paths, precision);
-    let out = serialize_tree(&tree);
-    let with_drawn = append_drawn_paths(&out, doc, precision);
-    let with_defs = inject_defs(&with_drawn, doc);
+    // Drawn paths + live-boolean groups now live in the tree, so `serialize_tree_prec` emits the
+    // whole document (imported verbatim, edited/drawn regenerated, booleans baked) — no separate
+    // drawn-path append step. Gradient defs are still injected (a `<defs>` head-injection).
+    let out = serialize_tree_prec(&tree, precision);
+    let with_defs = inject_defs(&out, doc);
     let evb = export_view_box(doc);
     if evb != doc.view_box {
         rewrite_svg_viewbox(&with_defs, evb)

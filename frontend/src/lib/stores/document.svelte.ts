@@ -137,6 +137,9 @@ class DocumentStore {
             /* stale/incompatible persisted tree — keep the source-rebuilt one */
           }
         }
+        // Reconcile drawn paths into the tree — a no-op for a current session, but migrates one
+        // persisted before drawn content lived in the tree (its added paths had no tree node).
+        this.#wasm.syncDrawn();
         // Node-edit mode isn't persisted, so restore any selection as an object selection
         // (transform box) rather than a dangling node with nowhere to edit.
         const restore = s.selectedPaths?.length
@@ -322,10 +325,23 @@ class DocumentStore {
     }
   }
 
-  /** Wrap tree nodes (`uids`, sharing one parent) in a new nested `<g id="name">`. */
-  groupNodes(uids: string[], name: string): void {
-    if (uids.length === 0) return;
-    if (this.#apply({ type: "groupNodes", uids, uid: crypto.randomUUID(), name })) {
+  /** Wrap tree nodes (`uids`, sharing one parent) in a new nested `<g id="name">`. Returns the
+   *  new group's uid (or `null` if nothing was grouped). */
+  groupNodes(uids: string[], name: string): string | null {
+    if (uids.length === 0) return null;
+    const uid = crypto.randomUUID();
+    if (this.#apply({ type: "groupNodes", uids, uid, name })) {
+      this.commit();
+      this.treeVersion++;
+      return uid;
+    }
+    return null;
+  }
+
+  /** Set (`op`) or clear (`null`) the live-boolean op on a group node (by uid): turn a plain `<g>`
+   *  into a live boolean, flip the operation, or flatten it back to a plain group. */
+  setNodeBoolean(uid: string, op: "union" | "subtract" | "intersect" | "exclude" | null): void {
+    if (this.#apply({ type: "setNodeBoolean", uid, op: op ?? undefined })) {
       this.commit();
       this.treeVersion++;
     }
@@ -488,6 +504,7 @@ class DocumentStore {
     const id = this.#freshId("offset");
     if (this.#apply({ type: "offsetPath", path: i, distance, id })) {
       this.commit();
+      this.treeVersion++;
       this.selectPath((this.doc?.paths.length ?? 1) - 1);
     }
   }
@@ -502,6 +519,7 @@ class DocumentStore {
     const id = this.#freshId("outline");
     if (this.#apply({ type: "outlineStroke", path: i, width, id })) {
       this.commit();
+      this.treeVersion++;
       this.selectPath((this.doc?.paths.length ?? 1) - 1);
     }
   }
@@ -512,6 +530,7 @@ class DocumentStore {
     const id = this.#freshId(op);
     if (this.#apply({ type: "booleanOp", op, paths: [...this.selectedPaths], id })) {
       this.commit();
+      this.treeVersion++;
       this.selectPath((this.doc?.paths.length ?? 1) - 1); // the appended result
     }
   }
@@ -523,6 +542,7 @@ class DocumentStore {
     const id = this.#freshId("compound");
     if (this.#apply({ type: "combinePaths", paths: [...this.selectedPaths], id })) {
       this.commit();
+      this.treeVersion++;
       this.selectPath((this.doc?.paths.length ?? 1) - 1);
     }
   }
@@ -537,6 +557,7 @@ class DocumentStore {
     const ids = Array.from({ length: n }, (_, k) => this.#freshId(`${p.id} ${k + 1}`));
     if (this.#apply({ type: "releaseCompound", path: i, ids })) {
       this.commit();
+      this.treeVersion++;
       const len = this.doc?.paths.length ?? 0;
       this.setSelectedPaths(Array.from({ length: n }, (_, k) => len - n + k));
     }
@@ -614,15 +635,17 @@ class DocumentStore {
    *  the members stay editable operands; the group renders the computed boolean, recomputed as
    *  they change). Needs ≥2 selected paths. */
   makeBooleanGroup(op: "union" | "subtract" | "intersect" | "exclude"): void {
-    const sel = [...this.selectedPaths].sort((a, b) => a - b);
-    if (sel.length < 2) return;
-    const id = crypto.randomUUID();
-    const name = this.#freshId(op);
-    if (this.#apply({ type: "booleanGroup", op, paths: sel, id, name })) {
+    const uids = [...this.selectedPaths]
+      .sort((a, b) => a - b)
+      .map((i) => this.doc?.paths[i]?.uid)
+      .filter((u): u is string => !!u);
+    if (uids.length < 2) return;
+    const uid = crypto.randomUUID();
+    // Group + mark boolean as ONE undo step (apply both, commit once).
+    if (this.#apply({ type: "groupNodes", uids, uid, name: this.#freshId(op) })) {
+      this.#apply({ type: "setNodeBoolean", uid, op });
       this.commit();
-      const start = sel[0];
-      this.selectedPaths = sel.map((_, k) => start + k); // the now-contiguous operands
-      this.#persist();
+      this.treeVersion++;
     }
   }
 
@@ -719,12 +742,14 @@ class DocumentStore {
   revert(): void {
     this.#wasm?.revert();
     this.#sync();
+    this.treeVersion++; // the restored tree may differ (a mid-gesture add) → re-fetch
   }
 
   undo(): void {
     if (this.#wasm?.undo()) {
       this.dirty = true;
       this.#sync();
+      this.treeVersion++; // undo can add/remove nodes or change structure → re-fetch the tree
       this.#persist();
     }
   }
@@ -733,6 +758,7 @@ class DocumentStore {
     if (this.#wasm?.redo()) {
       this.dirty = true;
       this.#sync();
+      this.treeVersion++;
       this.#persist();
     }
   }
@@ -872,6 +898,7 @@ class DocumentStore {
     const ref = { pathIndex, subpathIndex: 0, nodeIndex: 0 };
     this.#wasm.select(ref);
     this.#sync();
+    this.treeVersion++; // a new drawn path node → the canvas/panel must re-fetch the render tree
     return ref;
   }
 
@@ -904,6 +931,7 @@ class DocumentStore {
     const ref = { pathIndex, subpathIndex: 0, nodeIndex: 0 };
     this.#wasm.select(ref);
     this.#sync();
+    this.treeVersion++; // a new drawn shape node → re-fetch the render tree
     return ref;
   }
 
@@ -933,6 +961,7 @@ class DocumentStore {
     this.selectedPaths = [pathIndex];
     this.nodeEditIndex = null;
     this.commit();
+    this.treeVersion++; // pasted path node → re-fetch the render tree
   }
 
   duplicateSelected(): void {

@@ -18,7 +18,7 @@
 
   import { tightBounds } from "$lib/model/geometry";
   import { pathToD } from "$lib/model/path";
-  import type { Layer, NodeType, PathElement, RenderNode } from "$lib/model/types";
+  import type { NodeType, PathElement, RenderNode } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
   import { settings } from "$lib/stores/settings.svelte";
   import { tools } from "$lib/stores/tool.svelte";
@@ -163,13 +163,6 @@
     editor.commit();
   }
 
-  // The unified layers list: walk paths in array order, folding a contiguous run of same-group
-  // paths into a group row; loose paths are top-level rows. Reversed so top-of-stack shows
-  // first (later in the array = drawn on top).
-  type Row =
-    | { kind: "path"; p: PathElement; index: number }
-    | { kind: "group"; layer: Layer; items: { p: PathElement; index: number }[] };
-
   let collapsed = $state<string[]>([]);
   function toggleCollapse(id: string) {
     collapsed = collapsed.includes(id) ? collapsed.filter((x) => x !== id) : [...collapsed, id];
@@ -213,59 +206,46 @@
     return n.kind === "element" ? n.attrs.id || n.tag : "";
   }
 
-  function openTreeGroupMenu(e: MouseEvent, uid: string) {
+  // Group context menu: reorder (z), toggle/flip the live-boolean op, ungroup. Works on any tree
+  // group node (imported or drawn) — one representation.
+  function openTreeGroupMenu(e: MouseEvent, n: RenderNode) {
     e.preventDefault();
-    menu = {
-      x: e.clientX,
-      y: e.clientY,
-      items: [
-        { label: "bring forward", run: () => editor.reorderNode(uid, true) },
-        { label: "send backward", run: () => editor.reorderNode(uid, false) },
-        { label: "ungroup", run: () => editor.ungroupNode(uid) },
-      ],
-    };
+    if (n.kind !== "element") return;
+    const uid = n.uid;
+    const items: Menu["items"] = [
+      { label: "bring forward", run: () => editor.reorderNode(uid, true) },
+      { label: "send backward", run: () => editor.reorderNode(uid, false) },
+    ];
+    for (const op of ["union", "subtract", "intersect", "exclude"] as const) {
+      const mark = n.booleanOp === op ? "• " : "";
+      items.push({ label: `${mark}${op}`, run: () => editor.setNodeBoolean(uid, op) });
+    }
+    if (n.booleanOp)
+      items.push({ label: "flatten (plain group)", run: () => editor.setNodeBoolean(uid, null) });
+    items.push({ label: "ungroup", danger: false, run: () => editor.ungroupNode(uid) });
+    menu = { x: e.clientX, y: e.clientY, items };
   }
 
-  // Group the current selection: imported shapes (all have tree uids) → a nested `<g>` on the
-  // tree; otherwise fall back to the flat drawn-layer group.
+  // Count group nodes anywhere in the render tree — for a friendly incrementing group name.
+  function countGroups(nodes: RenderNode[]): number {
+    let c = 0;
+    for (const n of nodes) {
+      if (n.kind === "element") {
+        if (treeKind(n) === "group") c++;
+        c += countGroups(n.children);
+      }
+    }
+    return c;
+  }
+
+  // Group the current selection into a nested `<g>` on the tree (every path — imported or drawn —
+  // has a tree uid, so it's one path). Members must share a parent (top-level selections do).
   function groupSelected() {
     const uids = editor.selectedPaths
       .map((i) => editor.doc?.paths[i]?.uid)
       .filter((u): u is string => !!u);
-    const name = `group ${(editor.doc?.layers?.length ?? 0) + 1}`;
-    if (uids.length && uids.length === editor.selectedPaths.length) editor.groupNodes(uids, name);
-    else editor.groupSelection(name);
+    if (uids.length > 1) editor.groupNodes(uids, `group ${countGroups(panelTree) + 1}`);
   }
-
-  // Drawn (added) content only — rendered below the imported tree via the existing group/path
-  // logic (imported shapes render in the tree). Groups a contiguous added run by its layer.
-  const drawnRows = $derived.by((): Row[] => {
-    const d = doc;
-    if (!d) return [];
-    const out: Row[] = [];
-    const ps = d.paths;
-    for (let idx = 0; idx < ps.length; idx++) {
-      const p = ps[idx];
-      if (p.deleted || !p.added) continue;
-      const layer = p.layer ? d.layers?.find((l) => l.id === p.layer) : undefined;
-      if (layer) {
-        const items = [{ p, index: idx }];
-        while (
-          idx + 1 < ps.length &&
-          ps[idx + 1].added &&
-          !ps[idx + 1].deleted &&
-          ps[idx + 1].layer === p.layer
-        ) {
-          idx++;
-          items.push({ p: ps[idx], index: idx });
-        }
-        out.push({ kind: "group", layer, items });
-      } else {
-        out.push({ kind: "path", p, index: idx });
-      }
-    }
-    return out.reverse();
-  });
 
   // Right-click context menu for a row (path or group) — an action list at the cursor.
   type Menu = {
@@ -303,22 +283,6 @@
     exclude: "⊕",
   };
 
-  function openGroupMenu(e: MouseEvent, id: string, name: string) {
-    e.preventDefault();
-    const layer = doc?.layers?.find((l) => l.id === id);
-    const items: Menu["items"] = [{ label: "rename", run: () => startLayerRename(id, name) }];
-    if (layer?.booleanOp) {
-      // A live boolean group: switch the op, or flatten it back to a plain group.
-      for (const op of ["union", "subtract", "intersect", "exclude"] as const) {
-        const mark = layer.booleanOp === op ? "• " : "";
-        items.push({ label: `${mark}${op}`, run: () => editor.setLayerBoolean(id, op) });
-      }
-      items.push({ label: "flatten (plain group)", run: () => editor.setLayerBoolean(id, null) });
-    }
-    items.push({ label: "ungroup", run: () => editor.ungroup(id) });
-    menu = { x: e.clientX, y: e.clientY, items };
-  }
-
   // A path's thumbnail fill/stroke: use its hex fill if any, else outline it in the accent.
   function thumbFill(p: PathElement): string {
     const f = p.attributes?.fill ?? p.styleOverride?.fill;
@@ -326,20 +290,6 @@
   }
   function thumbStroke(p: PathElement): string {
     return thumbFill(p) === "none" ? "var(--halo-text-muted)" : "none";
-  }
-
-  let renamingLayer = $state<string | null>(null);
-  let layerRenameValue = $state("");
-
-  function startLayerRename(id: string, current: string) {
-    renamingLayer = id;
-    layerRenameValue = current;
-  }
-
-  function commitLayerRename(id: string) {
-    if (renamingLayer !== id) return;
-    editor.renameLayer(id, layerRenameValue);
-    renamingLayer = null;
   }
 
   let renaming = $state<number | null>(null);
@@ -705,13 +655,18 @@
           {@render pathRow(p, idx, depth > 0, false)}
         {/if}
       {:else if kind === "group"}
-        <li class="grouphead" oncontextmenu={(e) => openTreeGroupMenu(e, n.uid)}>
+        <li class="grouphead" oncontextmenu={(e) => openTreeGroupMenu(e, n)}>
           <button class="chev" aria-label="collapse group" onclick={() => toggleCollapse(n.uid)}>
             {#if collapsed.includes(n.uid)}<ChevronRight size={13} />{:else}<ChevronDown
                 size={13}
               />{/if}
           </button>
-          <span class="lname" title="right-click to ungroup">{treeName(n)}</span>
+          <span class="lname" title="right-click for group actions">{treeName(n)}</span>
+          {#if n.booleanOp}
+            <span class="bool-badge" title="live boolean: {n.booleanOp}"
+              >{BOOL_GLYPH[n.booleanOp]}</span
+            >
+          {/if}
           <button
             class="eye"
             title={n.hidden ? "show group" : "hide group"}
@@ -755,71 +710,11 @@
         </button>
       {/if}
     </div>
-    {#if panelTree.length || drawnRows.length}
+    {#if panelTree.length}
       <ul class="layerlist">
-        <!-- imported document structure, nested (E3); reversed so top-of-stack shows first -->
+        <!-- the whole document — imported + drawn, nested groups + booleans — as one tree;
+             reversed so top-of-stack shows first (later in document order = drawn on top) -->
         {#each [...panelTree].reverse() as n, i (i)}{@render treeRow(n, 0)}{/each}
-        <!-- in-app drawn content (added paths + their layer groups) -->
-        {#each drawnRows as row (row.kind === "group" ? `g:${row.layer.id}` : `p:${row.index}`)}
-          {#if row.kind === "group"}
-            <li
-              class="grouphead"
-              class:active={editor.activeLayer === row.layer.id}
-              oncontextmenu={(e) => openGroupMenu(e, row.layer.id, row.layer.name)}
-            >
-              <button
-                class="chev"
-                aria-label="collapse group"
-                onclick={() => toggleCollapse(row.layer.id)}
-              >
-                {#if collapsed.includes(row.layer.id)}<ChevronRight size={13} />{:else}<ChevronDown
-                    size={13}
-                  />{/if}
-              </button>
-              {#if renamingLayer === row.layer.id}
-                <input
-                  class="rename"
-                  bind:value={layerRenameValue}
-                  use:autofocus
-                  onblur={() => commitLayerRename(row.layer.id)}
-                  onkeydown={(e) => {
-                    if (e.key === "Enter") commitLayerRename(row.layer.id);
-                    else if (e.key === "Escape") renamingLayer = null;
-                  }}
-                />
-              {:else}
-                <button
-                  class="lname"
-                  onclick={() => editor.setActiveLayer(row.layer.id)}
-                  ondblclick={() => startLayerRename(row.layer.id, row.layer.name)}
-                  title="click to make active · double-click to rename · right-click for more"
-                >
-                  {row.layer.name}
-                </button>
-                {#if row.layer.booleanOp}
-                  <span class="bool-badge" title="live boolean: {row.layer.booleanOp}"
-                    >{BOOL_GLYPH[row.layer.booleanOp]}</span
-                  >
-                {/if}
-              {/if}
-              <button
-                class="eye"
-                title={row.layer.visible ? "hide group" : "show group"}
-                aria-label="toggle group visibility"
-                onclick={() => editor.setLayerVisible(row.layer.id, !row.layer.visible)}
-              >
-                {#if row.layer.visible}<Eye size={13} />{:else}<EyeOff size={13} />{/if}
-              </button>
-            </li>
-            {#if !collapsed.includes(row.layer.id)}
-              {#each row.items as it (it.index)}
-                {@render pathRow(it.p, it.index, true, true)}
-              {/each}
-            {/if}
-          {:else}
-            {@render pathRow(row.p, row.index, false, true)}
-          {/if}
-        {/each}
       </ul>
     {:else}
       <p class="empty">no shapes</p>
@@ -1089,10 +984,6 @@
     border-radius: var(--halo-radius-pill);
   }
 
-  .layerlist li.active {
-    background: var(--halo-accent-soft);
-  }
-
   /* nested path rows sit under their group header */
   .layerlist li.nested {
     padding-left: 16px;
@@ -1186,10 +1077,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  li.active .lname {
-    color: var(--halo-accent);
   }
 
   /* live-boolean badge on a group header */

@@ -24,14 +24,16 @@ test("boots the core, loads a sample, draws, and undoes without errors", async (
   // The canvas renders paths from the model (normalized `d`), so match tolerantly.
   await expect(artwork).toHaveAttribute("d", /M\s*40[\s,]+120/);
 
-  // Draw a two-node path with the pen (beginPath + appendNode ops → drawn render).
+  // Draw a two-node path with the pen (beginPath + appendNode ops). Drawn paths now live in the
+  // tree, so they render in g.artwork alongside the imported sample → assert the count grew by 1.
+  const beforeDraw = await page.locator("svg.canvas g.artwork path").count();
   await page.keyboard.press("p");
   const box = await page.locator("svg.canvas").boundingBox();
   if (!box) throw new Error("canvas has no bounding box");
   await page.mouse.click(box.x + box.width * 0.3, box.y + box.height * 0.35);
   await page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.6);
   await page.keyboard.press("Escape");
-  await expect(page.locator("svg.canvas g.drawn path")).toHaveCount(1);
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(beforeDraw + 1);
 
   // Undo the last commit (exercises the WASM history) — the app stays responsive.
   await page.keyboard.press("Meta+z");
@@ -63,8 +65,8 @@ test("draws a rectangle with the rect shape tool", async ({ page }) => {
   await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.6);
   await page.mouse.up();
 
-  // One drawn path (the rectangle), and it round-trips to a 4-corner closed `d`.
-  const rect = page.locator("svg.canvas g.drawn path");
+  // One path (the rectangle) rendered from the tree, round-tripping to a 4-corner closed `d`.
+  const rect = page.locator("svg.canvas g.artwork path");
   await expect(rect).toHaveCount(1);
   await expect(rect).toHaveAttribute("d", /Z$/);
 
@@ -266,7 +268,7 @@ test("layers: group two shapes, then hide the group", async ({ page }) => {
   await page.mouse.down();
   await page.mouse.move(box.x + box.width * 0.75, box.y + box.height * 0.75);
   await page.mouse.up();
-  await expect(page.locator("svg.canvas g.drawn path")).toHaveCount(2);
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(2);
 
   // Select both shapes in the layers list, then group them.
   await page.keyboard.press("v");
@@ -279,7 +281,7 @@ test("layers: group two shapes, then hide the group", async ({ page }) => {
 
   // Hiding the group removes its shapes from the render.
   await page.getByRole("button", { name: "toggle group visibility" }).click();
-  await expect(page.locator("svg.canvas g.drawn path")).toHaveCount(0);
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(0);
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
@@ -311,7 +313,7 @@ test("gradients: convert a shape's fill to a linear gradient", async ({ page }) 
   // Fill → linear gradient: a <linearGradient> def appears and the shape references it.
   await page.locator(".paint").filter({ hasText: "fill" }).getByRole("button", { name: "linear" }).click();
   await expect(page.locator("svg.canvas defs linearGradient")).toHaveCount(1);
-  await expect(page.locator("svg.canvas g.drawn path")).toHaveAttribute("fill", /url\(#grad-/);
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveAttribute("fill", /url\(#grad-/);
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
@@ -407,8 +409,9 @@ test("outline stroke turns a stroked line into a filled shape", async ({ page })
   await page.locator(".palette .q").fill("outline");
   await page.keyboard.press("Enter");
 
-  // The stroked line is replaced by a drawn fill shape whose fill is the old stroke colour.
-  const drawn = page.locator("svg.canvas g.drawn path");
+  // The stroked line is replaced by a fill shape whose fill is the old stroke colour (the source
+  // is soft-deleted, so only the outline paints in the tree).
+  const drawn = page.locator("svg.canvas g.artwork path");
   await expect(drawn).toHaveCount(1);
   await expect(drawn).toHaveAttribute("fill", "#ff0000");
 
@@ -439,8 +442,8 @@ test("offset path adds a second, larger path", async ({ page }) => {
   await page.keyboard.press("Meta+k");
   await page.locator(".palette .q").fill("offset path outward");
   await page.keyboard.press("Enter");
-  // The offset result is a new drawn path (source kept).
-  await expect(page.locator("svg.canvas g.drawn path")).toHaveCount(1);
+  // The offset result is a new path (source kept) → two paths in the tree render.
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(2);
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
@@ -504,7 +507,7 @@ test("combine merges two paths into one compound path", async ({ page }) => {
   await page.getByRole("button", { name: "compound path" }).click();
   // The two paths become one row whose d holds both subpaths (two M commands).
   await expect(rows).toHaveCount(1);
-  const d = await page.locator("svg.canvas g.drawn path").getAttribute("d");
+  const d = await page.locator("svg.canvas g.artwork path").getAttribute("d");
   expect((d ?? "").match(/M/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
 
   // Release splits it back into two independent, individually-styleable paths.
@@ -540,7 +543,7 @@ test("boolean union combines two shapes into one", async ({ page }) => {
   await page.mouse.down();
   await page.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.7);
   await page.mouse.up();
-  await expect(page.locator("svg.canvas g.drawn path")).toHaveCount(2);
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(2);
 
   // Select both, then union → one result path replaces them.
   await page.keyboard.press("v");
@@ -548,7 +551,7 @@ test("boolean union combines two shapes into one", async ({ page }) => {
   await rows.nth(0).click();
   await rows.nth(1).click({ modifiers: ["Shift"] });
   await page.getByRole("button", { name: "union", exact: true }).click();
-  await expect(page.locator("svg.canvas g.drawn path")).toHaveCount(1);
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(1);
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
@@ -583,9 +586,9 @@ test("live boolean keeps operands editable and recomputes the result", async ({ 
   await page.getByLabel("live (non-destructive)").check();
   await page.getByRole("button", { name: "subtract", exact: true }).click();
 
-  // The computed result renders, and BOTH operands survive (non-destructive — vs the
-  // destructive boolean above which collapses to one path).
-  const result = page.locator("svg.canvas g.booleans path");
+  // The computed result renders (in the tree, from the <g booleanOp> node), and BOTH operands
+  // survive as editable rows (non-destructive — vs the destructive boolean which collapses to one).
+  const result = page.locator("svg.canvas g.artwork path");
   await expect(result).toHaveCount(1);
   await expect(rows).toHaveCount(2);
 

@@ -21,7 +21,7 @@ pub mod ops;
 pub mod snap;
 
 use history::History;
-use model::document::{boolean_group_result, parse_svg, serialize_svg, serialize_via_tree};
+use model::document::{parse_svg, serialize_svg, serialize_via_tree, tree_boolean_results};
 use model::tree::{Tree, parse_tree};
 use model::types::{Gradient, Layer, NodeRef, PathElement, Subpath, SvgDocument};
 use ops::Op;
@@ -299,6 +299,17 @@ impl Editor {
         Ok(())
     }
 
+    /// Reconcile drawn (`added`) paths into the tree — a no-op for a current session, but migrates
+    /// one persisted before drawn content lived in the tree (its added paths had no tree node) by
+    /// appending a `<path>` node per orphan. Called once after `setDocument`/`setTree` on load.
+    #[wasm_bindgen(js_name = syncDrawn)]
+    pub fn sync_drawn(&mut self) {
+        if let Some(doc) = self.doc.as_mut() {
+            ops::ensure_drawn_in_tree(doc);
+        }
+        self.history.reset(self.snapshot());
+    }
+
     /// The document's render tree (the root `<svg>`'s children) — what the canvas draws
     /// declaratively. The frontend fetches this per source change; edits pull live geometry from
     /// `doc.paths` by uid, structural ops re-fetch it.
@@ -354,22 +365,19 @@ impl Editor {
     /// (not `Map`s) so `attributes.fill` reads work.
     pub fn state(&self) -> Result<JsValue, JsValue> {
         // Compute live-boolean group results here (not stored on the doc) so the UI can render
-        // the baked geometry while the operands stay editable in `document.paths`.
+        // the baked geometry while the operands stay editable in `document.paths`. Derived from
+        // the tree's `<g boolean_op>` nodes over the live `doc.paths` geometry, keyed by group uid.
         let boolean_results: Vec<BooleanResultDto> = self
             .doc
             .as_ref()
             .map(|doc| {
-                doc.layers
-                    .iter()
-                    .filter(|l| l.boolean_op.is_some())
-                    .filter_map(|l| {
-                        boolean_group_result(doc, l).map(|(subpaths, attributes)| {
-                            BooleanResultDto {
-                                layer: l.id.clone(),
-                                subpaths,
-                                attributes,
-                            }
-                        })
+                tree_boolean_results(doc)
+                    .into_iter()
+                    .map(|r| BooleanResultDto {
+                        uid: r.uid,
+                        subpaths: r.subpaths,
+                        attributes: r.attributes,
+                        operand_uids: r.operand_uids,
                     })
                     .collect()
             })
@@ -414,10 +422,13 @@ struct EditorState<'a> {
 /// A live-boolean group's computed render geometry + the paint it inherits (subject style).
 #[derive(Serialize)]
 struct BooleanResultDto {
-    /// The boolean group's layer id.
-    layer: String,
+    /// The boolean group node's stable uid (the canvas keys the painted result on it).
+    uid: String,
     subpaths: Vec<Subpath>,
     attributes: IndexMap<String, String>,
+    /// Uids of the group's operand paths — so the overlay can outline the editable sources.
+    #[serde(rename = "operandUids")]
+    operand_uids: Vec<String>,
 }
 
 /// The core crate version, surfaced in the UI to confirm the WASM engine is loaded.

@@ -46,24 +46,25 @@
     boxPath && !boxPath.deleted ? pathToD(toScreenSubpaths(boxPath.subpaths)) : "",
   );
 
-  // Live-boolean operand outlines: when a boolean group is "active" (a member is selected or
-  // node-edited) show *all* its operands as faint outlines, so the editable source shapes are
-  // visible behind the computed result (Pixelmator-style).
-  const booleanLayerIds = $derived(editor.booleanLayerIds);
-  const activeBoolLayers = $derived(
-    new Set(
-      (doc?.paths ?? [])
-        .map((p, i) => ({ p, i }))
-        .filter(
-          ({ p, i }) =>
-            !p.deleted &&
-            p.layer &&
-            booleanLayerIds.has(p.layer) &&
-            (editor.selectedPaths.includes(i) || editor.nodeEditIndex === i),
-        )
-        .map(({ p }) => p.layer as string),
-    ),
-  );
+  // Live-boolean operand outlines: when a boolean group is "active" (one of its operands is
+  // selected or node-edited) show *all* its operands as faint outlines, so the editable source
+  // shapes are visible behind the computed result (Pixelmator-style). Driven by the tree's
+  // boolean groups (their operand uids), not the retired flat `layer` field.
+  const activeOperandUids = $derived.by(() => {
+    const editUid = editor.nodeEditIndex != null ? doc?.paths[editor.nodeEditIndex]?.uid : null;
+    const selected = new Set(
+      [...editor.selectedPaths.map((i) => doc?.paths[i]?.uid), editUid].filter(
+        (u): u is string => !!u,
+      ),
+    );
+    // Every operand of any group with a selected/node-edited member (built from an iterable, so
+    // no post-construction mutation — the lint bars mutable Sets in reactive scope).
+    return new Set(
+      editor.booleanResults
+        .filter((r) => r.operandUids.some((u) => selected.has(u)))
+        .flatMap((r) => r.operandUids),
+    );
+  });
 </script>
 
 {#if doc}
@@ -98,7 +99,7 @@
       />
     {/if}
     {#each doc.paths as p, pi (pi)}
-      {#if p.layer && activeBoolLayers.has(p.layer) && !p.deleted}
+      {#if p.uid && activeOperandUids.has(p.uid) && !p.deleted}
         <path class="operand-outline" d={pathToD(toScreenSubpaths(p.subpaths))} />
       {/if}
     {/each}
