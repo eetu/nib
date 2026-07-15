@@ -743,6 +743,54 @@ test("declarative render keeps gradient defs functional (SVG namespace) + fill r
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("nested groups: group a selection into a <g>, then ungroup", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="0" y="0" width="20" height="20" fill="#f00"/><rect x="40" y="0" width="20" height="20" fill="#00f"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // Two shape rows in the panel (the imported rects), no group yet.
+  const rows = page.locator(".layerlist .row-btn");
+  await expect(rows).toHaveCount(2);
+  await expect(page.locator(".layerlist .grouphead")).toHaveCount(0);
+
+  // Select both, group → a nested <g> group header appears (rows stay, now nested).
+  await rows.nth(0).click();
+  await rows.nth(1).click({ modifiers: ["Shift"] });
+  await page.getByRole("button", { name: "group selection" }).click();
+  await expect(page.locator(".layerlist .grouphead")).toHaveCount(1);
+  await expect(rows).toHaveCount(2);
+
+  // Export carries the nested <g> wrapping both rects.
+  await page.getByRole("button", { name: "source" }).click();
+  const src1 = await page.locator(".sourceview textarea").inputValue();
+  expect(src1).toContain("<g id=\"group 1\">");
+  expect(src1.match(/<rect/g)?.length).toBe(2);
+
+  // Ungroup via the group header's context menu → the group dissolves.
+  await page.locator(".layerlist .grouphead").click({ button: "right" });
+  await page.getByRole("button", { name: "ungroup" }).click();
+  await expect(page.locator(".layerlist .grouphead")).toHaveCount(0);
+  const src2 = await page.locator(".sourceview textarea").inputValue();
+  expect(src2).not.toContain("<g id=\"group 1\"");
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("clicking a filled shape's interior selects it (fill hit-test)", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

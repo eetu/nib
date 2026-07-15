@@ -18,7 +18,7 @@
 
   import { tightBounds } from "$lib/model/geometry";
   import { pathToD } from "$lib/model/path";
-  import type { Layer, NodeType, PathElement } from "$lib/model/types";
+  import type { Layer, NodeType, PathElement, RenderNode } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
   import { settings } from "$lib/stores/settings.svelte";
   import { tools } from "$lib/stores/tool.svelte";
@@ -170,18 +170,88 @@
     | { kind: "path"; p: PathElement; index: number }
     | { kind: "group"; layer: Layer; items: { p: PathElement; index: number }[] };
 
-  const rows = $derived.by((): Row[] => {
+  let collapsed = $state<string[]>([]);
+  function toggleCollapse(id: string) {
+    collapsed = collapsed.includes(id) ? collapsed.filter((x) => x !== id) : [...collapsed, id];
+  }
+
+  // --- nested object tree (E3): the panel renders the imported document structure from the core
+  // render tree; drawn (added) content renders below via `drawnRows`. ---
+
+  // Elements that aren't visual layers — hidden from the panel (+ their subtrees).
+  const PANEL_SKIP = new Set(["defs", "style", "metadata", "title", "desc", "script"]);
+
+  // The render tree, fetched from the core; guarded so it re-fetches only on a new source or a
+  // structural op (treeVersion bump), not on every geometry edit / selection.
+  let panelTree = $state<RenderNode[]>([]);
+  let panelSrc: string | undefined;
+  let panelVer = -1;
+  $effect(() => {
+    const src = doc?.source;
+    const ver = editor.treeVersion;
+    if (src === panelSrc && ver === panelVer) return;
+    panelSrc = src;
+    panelVer = ver;
+    panelTree = doc ? editor.renderTree() : [];
+  });
+
+  // uid → doc.paths array index, so a tree shape row maps to its editable path.
+  const uidToIndex = $derived(
+    new Map((doc?.paths ?? []).flatMap((p, i) => (p.uid ? [[p.uid, i] as const] : []))),
+  );
+
+  // A tree element node is a *group* if it has visual element children (a `<g>`); a *shape* if it
+  // maps to an editable path; else an opaque *leaf* (text / image / use).
+  function treeKind(n: RenderNode): "group" | "shape" | "leaf" | "skip" {
+    if (n.kind !== "element" || PANEL_SKIP.has(n.tag)) return "skip";
+    const idx = uidToIndex.get(n.uid);
+    if (idx !== undefined) return doc?.paths[idx]?.deleted ? "skip" : "shape";
+    const hasKids = n.children.some((c) => c.kind === "element" && !PANEL_SKIP.has(c.tag));
+    return hasKids ? "group" : "leaf";
+  }
+  function treeName(n: RenderNode): string {
+    return n.kind === "element" ? n.attrs.id || n.tag : "";
+  }
+
+  function openTreeGroupMenu(e: MouseEvent, uid: string) {
+    e.preventDefault();
+    menu = {
+      x: e.clientX,
+      y: e.clientY,
+      items: [{ label: "ungroup", run: () => editor.ungroupNode(uid) }],
+    };
+  }
+
+  // Group the current selection: imported shapes (all have tree uids) → a nested `<g>` on the
+  // tree; otherwise fall back to the flat drawn-layer group.
+  function groupSelected() {
+    const uids = editor.selectedPaths
+      .map((i) => editor.doc?.paths[i]?.uid)
+      .filter((u): u is string => !!u);
+    const name = `group ${(editor.doc?.layers?.length ?? 0) + 1}`;
+    if (uids.length && uids.length === editor.selectedPaths.length) editor.groupNodes(uids, name);
+    else editor.groupSelection(name);
+  }
+
+  // Drawn (added) content only — rendered below the imported tree via the existing group/path
+  // logic (imported shapes render in the tree). Groups a contiguous added run by its layer.
+  const drawnRows = $derived.by((): Row[] => {
     const d = doc;
     if (!d) return [];
     const out: Row[] = [];
     const ps = d.paths;
     for (let idx = 0; idx < ps.length; idx++) {
       const p = ps[idx];
-      if (p.deleted) continue;
+      if (p.deleted || !p.added) continue;
       const layer = p.layer ? d.layers?.find((l) => l.id === p.layer) : undefined;
       if (layer) {
         const items = [{ p, index: idx }];
-        while (idx + 1 < ps.length && !ps[idx + 1].deleted && ps[idx + 1].layer === p.layer) {
+        while (
+          idx + 1 < ps.length &&
+          ps[idx + 1].added &&
+          !ps[idx + 1].deleted &&
+          ps[idx + 1].layer === p.layer
+        ) {
           idx++;
           items.push({ p: ps[idx], index: idx });
         }
@@ -192,11 +262,6 @@
     }
     return out.reverse();
   });
-
-  let collapsed = $state<string[]>([]);
-  function toggleCollapse(id: string) {
-    collapsed = collapsed.includes(id) ? collapsed.filter((x) => x !== id) : [...collapsed, id];
-  }
 
   // Right-click context menu for a row (path or group) — an action list at the cursor.
   type Menu = {
@@ -532,18 +597,20 @@
     </section>
   {/if}
 
-  {#snippet pathRow(p: PathElement, index: number, nested: boolean)}
+  {#snippet pathRow(p: PathElement, index: number, nested: boolean, drag: boolean)}
     {@const b = tightBounds(p.subpaths)}
     <li
       class="pathrow"
       class:nested
-      class:dragover={dragOver === index}
-      draggable={renaming !== index}
+      class:dragover={drag && dragOver === index}
+      draggable={drag && renaming !== index}
       ondragstart={(e) => {
+        if (!drag) return;
         dragFrom = index;
         if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
       }}
       ondragover={(e) => {
+        if (!drag) return;
         e.preventDefault();
         dragOver = index;
       }}
@@ -551,6 +618,7 @@
         if (dragOver === index) dragOver = null;
       }}
       ondrop={(e) => {
+        if (!drag) return;
         e.preventDefault();
         onDrop(index);
       }}
@@ -615,6 +683,52 @@
     </li>
   {/snippet}
 
+  {#snippet treeRow(n: RenderNode, depth: number)}
+    {#if n.kind === "element"}
+      {@const kind = treeKind(n)}
+      {#if kind === "shape"}
+        {@const idx = uidToIndex.get(n.uid)}
+        {@const p = idx !== undefined ? doc?.paths[idx] : undefined}
+        {#if p && idx !== undefined}
+          {@render pathRow(p, idx, depth > 0, false)}
+        {/if}
+      {:else if kind === "group"}
+        <li class="grouphead" oncontextmenu={(e) => openTreeGroupMenu(e, n.uid)}>
+          <button class="chev" aria-label="collapse group" onclick={() => toggleCollapse(n.uid)}>
+            {#if collapsed.includes(n.uid)}<ChevronRight size={13} />{:else}<ChevronDown
+                size={13}
+              />{/if}
+          </button>
+          <span class="lname" title="right-click to ungroup">{treeName(n)}</span>
+          <button
+            class="eye"
+            title={n.hidden ? "show group" : "hide group"}
+            aria-label="toggle group visibility"
+            onclick={() => editor.setNodeHidden(n.uid, !n.hidden)}
+          >
+            {#if n.hidden}<EyeOff size={13} />{:else}<Eye size={13} />{/if}
+          </button>
+        </li>
+        {#if !collapsed.includes(n.uid)}
+          {#each [...n.children].reverse() as c, i (i)}{@render treeRow(c, depth + 1)}{/each}
+        {/if}
+      {:else if kind === "leaf"}
+        <li class="pathrow" class:nested={depth > 0}>
+          <span class="thumb empty"></span>
+          <span class="pid">{treeName(n)}</span>
+          <button
+            class="eye"
+            title={n.hidden ? "show" : "hide"}
+            aria-label="toggle visibility"
+            onclick={() => editor.setNodeHidden(n.uid, !n.hidden)}
+          >
+            {#if n.hidden}<EyeOff size={13} />{:else}<Eye size={13} />{/if}
+          </button>
+        </li>
+      {/if}
+    {/if}
+  {/snippet}
+
   <section class="layers">
     <div class="lhead">
       <h2>layers</h2>
@@ -623,15 +737,18 @@
           class="ghost-btn"
           title="group selection"
           aria-label="group selection"
-          onclick={() => editor.groupSelection(`group ${editor.layers.length + 1}`)}
+          onclick={groupSelected}
         >
           <Group size={13} /> group
         </button>
       {/if}
     </div>
-    {#if rows.length}
+    {#if panelTree.length || drawnRows.length}
       <ul class="layerlist">
-        {#each rows as row (row.kind === "group" ? `g:${row.layer.id}` : `p:${row.index}`)}
+        <!-- imported document structure, nested (E3); reversed so top-of-stack shows first -->
+        {#each [...panelTree].reverse() as n, i (i)}{@render treeRow(n, 0)}{/each}
+        <!-- in-app drawn content (added paths + their layer groups) -->
+        {#each drawnRows as row (row.kind === "group" ? `g:${row.layer.id}` : `p:${row.index}`)}
           {#if row.kind === "group"}
             <li
               class="grouphead"
@@ -684,11 +801,11 @@
             </li>
             {#if !collapsed.includes(row.layer.id)}
               {#each row.items as it (it.index)}
-                {@render pathRow(it.p, it.index, true)}
+                {@render pathRow(it.p, it.index, true, true)}
               {/each}
             {/if}
           {:else}
-            {@render pathRow(row.p, row.index, false)}
+            {@render pathRow(row.p, row.index, false, true)}
           {/if}
         {/each}
       </ul>
