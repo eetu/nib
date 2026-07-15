@@ -74,6 +74,27 @@ Per-area detail in `frontend/CLAUDE.md`.
   aren't `<g>`-wrapped on export (they stay in their source slots), and drawn
   shapes render in a group above all imported paths — full interleaving + nesting
   needs the Phase-D object tree + stable ids.
+- **Live (non-destructive) booleans** are a *group with `Layer.boolean_op` set*
+  (union/subtract/intersect/exclude). Its member paths stay editable **operands**;
+  the doc renders + exports the *computed* boolean of them (subject = the backmost
+  member that fills), recomputed live as operands change. This is a **parametric
+  model concept SVG can't express**, so it lives in nib's model (persisted in
+  localStorage) — on **serialize it bakes to one `<g id><path/></g>`** (source =
+  export = valid SVG everywhere), and re-parsing edited source flattens it to a
+  plain group (lossy but graceful; SourceView flags this). The computed geometry is
+  *not stored on the doc* — the core recomputes it in `state()` and hands the UI
+  `EditorState.booleanResults` (`{layer, subpaths, attributes}` per group). Ops:
+  `BooleanGroup {op,paths,id,name}` (create; shares `group_paths_into` with
+  `GroupPaths`) + `SetLayerBoolean {layer,op?}` (switch op / flatten). Frontend:
+  `EditorCanvas` renders `booleanResults` in `<g class="drawn/booleans">` and drops
+  the operands' own fills; operands stay **hit-testable via model geometry** (so you
+  click/drag/node-edit them normally → live re-cut) and show as faint dashed
+  outlines in the Overlay when the group is active. UI: a "live (non-destructive)"
+  toggle on the multi-select boolean buttons + palette entries + a group-header
+  badge/context-menu. Distinct from the **destructive** `BooleanOp` (bakes + deletes
+  inputs immediately). **MVP caveats:** operands should be *drawn* paths (imported
+  operands compute but double-export / aren't slot-suppressed); the result renders
+  above all drawn paths (not interleaved at the group's z-slot) — both Phase-D.
 - **Two coordinate systems in the canvas.** Artwork is drawn in a scaled `<g>`
   (document units); the editing overlay is drawn in screen space so handles stay
   a constant pixel size at any zoom. `viewport.toScreen/toDoc` bridge them.
@@ -190,8 +211,10 @@ client-side pro pillars, all running on the core):
   Pixelmator model, one level — z-order/drag-reorder, show/hide, thumbnails, group/
   ungroup via `<g>`, active layer, right-click context menus); multi-select +
   marquee + align/distribute; **rotate** (box centre) + **skew** (numeric);
-  **path craft** — boolean ops (union/subtract/intersect/exclude via `i_overlay`),
-  **simplify** (RDP), **outline-stroke** + **offset-path** (kurbo stroke ⊕ i_overlay);
+  **path craft** — boolean ops (union/subtract/intersect/exclude via `i_overlay`,
+  both **destructive** *and* **live/non-destructive** boolean groups),
+  **compound paths** (combine/release), **simplify** (RDP), **outline-stroke** +
+  **offset-path** (kurbo stroke ⊕ i_overlay);
   smart guides; **gradients** (linear/radial, draggable stops, radial cx/cy/r);
   command palette (⌘K); plus workflow polish (New/Save-As, copy-style, source
   prettify + reveal, double-click node editing, friendly path names, content-aware
