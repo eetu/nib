@@ -121,6 +121,7 @@ export type RenderNode =
       tag: string;
       attrs: Record<string, string>;
       children: RenderNode[];
+      hidden: boolean;
     }
   | { kind: "text"; text: string };
 

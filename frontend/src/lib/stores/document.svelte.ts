@@ -84,6 +84,9 @@ class DocumentStore {
   nodeEditIndex = $state<number | null>(null);
   /** Computed render geometry of each live-boolean group (mirrored from the core snapshot). */
   booleanResults = $state<BooleanResult[]>([]);
+  /** Bumped by structural tree ops (hide/group/ungroup/reorder) — the canvas keys its cached
+   *  `renderTree()` on it, since those change the tree without changing `source`. */
+  treeVersion = $state(0);
   #canUndo = $state(false);
   #canRedo = $state(false);
   /** Unsaved changes since the last load/save — owned here (not mirrored) so a rehydrated
@@ -281,10 +284,20 @@ class DocumentStore {
     return this.#wasm?.toSvg() ?? "";
   }
 
-  /** The canvas render tree (root `<svg>`'s children) — constant per source; the canvas draws it
-   *  declaratively, pulling live geometry for editable shapes from `doc.paths` by uid. */
+  /** The canvas render tree (root `<svg>`'s children) — the canvas draws it declaratively,
+   *  pulling live geometry for editable shapes from `doc.paths` by uid. Re-fetched on source
+   *  change + whenever `treeVersion` bumps (a structural op mutated the tree). */
   renderTree(): RenderNode[] {
     return (this.#wasm?.renderTree() as RenderNode[]) ?? [];
+  }
+
+  /** Show/hide any node in the document tree by its stable uid — a group, opaque element, or
+   *  shape, at any depth (structural op). */
+  setNodeHidden(uid: string, hidden: boolean): void {
+    if (this.#apply({ type: "setNodeHidden", uid, hidden })) {
+      this.commit();
+      this.treeVersion++;
+    }
   }
 
   markSaved(): void {

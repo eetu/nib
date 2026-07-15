@@ -35,19 +35,25 @@
   // order, and edited primitives no longer jump above their neighbours.
   let renderTree = $state<RenderNode[]>([]);
   let renderedSource: string | undefined;
+  let renderedVersion = -1;
   let pendingFit = $state<ViewBox | null>(null);
   $effect(() => {
     const doc = editor.doc;
-    if (doc?.source === renderedSource) return;
+    const version = editor.treeVersion;
+    // Re-fetch on a new source *or* a structural op (treeVersion bump); a plain re-render (a
+    // geometry edit) leaves both unchanged, so the tree isn't re-marshalled per frame.
+    if (doc?.source === renderedSource && version === renderedVersion) return;
+    const fresh = doc?.source !== renderedSource;
     renderedSource = doc?.source;
+    renderedVersion = version;
     if (!doc) {
       renderTree = [];
       pendingFit = null;
       return;
     }
     renderTree = editor.renderTree();
-    // Frame the artboard + any content beyond it, so a reload never lands off-screen.
-    pendingFit = loadViewBox();
+    // Frame the artboard + any content beyond it (only on a fresh load, not a structural edit).
+    if (fresh) pendingFit = loadViewBox();
   });
 
   // Keep the viewport's pixel size current, and fit a freshly-loaded document once the canvas
@@ -337,7 +343,7 @@
     {#snippet renderNode(n: RenderNode)}
       {#if n.kind === "text"}
         {n.text}
-      {:else}
+      {:else if !n.hidden}
         {@const p = pathByUid.get(n.uid)}
         {#if p}
           <!-- editable shape: drawn from the model (live geometry) in true z-order, keeping the

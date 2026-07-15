@@ -309,6 +309,10 @@ pub enum Node {
         original_close: String,
         children: Vec<Node>,
         edited: bool,
+        /// Show/hide this node + its subtree (structural op `SetNodeHidden`) → `display="none"`
+        /// on export, skipped in the render.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
     },
     /// Verbatim text (incl. whitespace between elements + element text content).
     Text(String),
@@ -372,6 +376,7 @@ fn build(node: roxmltree::Node, source: &str, next_uid: &mut usize) -> Node {
             original_close: String::new(),
             children: Vec::new(),
             edited: false,
+            hidden: false,
         };
     }
 
@@ -399,6 +404,7 @@ fn build(node: roxmltree::Node, source: &str, next_uid: &mut usize) -> Node {
         original_close,
         children,
         edited: false,
+        hidden: false,
     }
 }
 
@@ -433,6 +439,26 @@ fn regen_open(tag: &str, attrs: &[(String, String)], self_closing: bool) -> Stri
     }
 }
 
+/// Insert `display="none"` into an open tag (before its closing `>` / `/>`), unless it already
+/// carries a `display`. Keeps the rest of the tag verbatim.
+fn with_display_none(open: &str) -> String {
+    if open.contains("display=") {
+        return open.to_string();
+    }
+    let cut = if let Some(i) = open.rfind("/>") {
+        i
+    } else if let Some(i) = open.rfind('>') {
+        i
+    } else {
+        return open.to_string();
+    };
+    format!(
+        "{} display=\"none\"{}",
+        open[..cut].trim_end(),
+        &open[cut..]
+    )
+}
+
 fn emit(node: &Node, out: &mut String) {
     match node {
         Node::Text(s) | Node::Comment(s) | Node::Other(s) => out.push_str(s),
@@ -443,13 +469,19 @@ fn emit(node: &Node, out: &mut String) {
             original_close,
             children,
             edited,
+            hidden,
             uid: _,
         } => {
-            if *edited {
-                out.push_str(&regen_open(tag, attrs, original_close.is_empty()));
+            let open = if *edited {
+                regen_open(tag, attrs, original_close.is_empty())
             } else {
-                out.push_str(original_open);
-            }
+                original_open.clone()
+            };
+            out.push_str(&if *hidden {
+                with_display_none(&open)
+            } else {
+                open
+            });
             for c in children {
                 emit(c, out);
             }
@@ -553,6 +585,7 @@ fn reconcile_node(node: &mut Node, by_uid: &HashMap<&str, &PathElement>, precisi
         original_close,
         children,
         edited,
+        ..
     } = node
     else {
         return;
@@ -634,6 +667,14 @@ impl Tree {
             .collect();
         reconcile_node(&mut self.root, &by_uid, precision);
     }
+
+    /// Show/hide the element with stable id `uid` (structural op). Returns whether it was found.
+    pub fn set_hidden(&mut self, uid: &str, hidden: bool) -> bool {
+        self.root
+            .find_by_uid_mut(uid)
+            .map(|n| n.set_hidden(hidden))
+            .unwrap_or(false)
+    }
 }
 
 /// A UI-facing render node — the tree the canvas draws declaratively. Elements carry their tag +
@@ -648,6 +689,7 @@ pub enum RenderNode {
         tag: String,
         attrs: IndexMap<String, String>,
         children: Vec<RenderNode>,
+        hidden: bool,
     },
     Text {
         text: String,
@@ -661,12 +703,14 @@ fn to_render(node: &Node) -> Option<RenderNode> {
             tag,
             attrs,
             children,
+            hidden,
             ..
         } => Some(RenderNode::Element {
             uid: uid.clone(),
             tag: tag.clone(),
             attrs: attrs.iter().cloned().collect(),
             children: children.iter().filter_map(to_render).collect(),
+            hidden: *hidden,
         }),
         Node::Text(s) => Some(RenderNode::Text { text: s.clone() }),
         Node::Comment(_) | Node::Other(_) => None,
@@ -694,6 +738,16 @@ impl Node {
         match self {
             Node::Element { uid, .. } => Some(uid),
             _ => None,
+        }
+    }
+
+    /// Show/hide this element (structural op). Returns false for non-element nodes.
+    pub fn set_hidden(&mut self, value: bool) -> bool {
+        if let Node::Element { hidden, .. } = self {
+            *hidden = value;
+            true
+        } else {
+            false
         }
     }
 
@@ -797,6 +851,57 @@ mod tests {
             !serialize_tree(&tree).contains("n0"),
             "uid leaked into output"
         );
+    }
+
+    #[test]
+    fn set_hidden_hides_a_node_on_export_and_in_render() {
+        let mut tree = parse_tree(CORPUS[1]).unwrap(); // icon-group: <g id="toolbar"> with 3 paths
+        let uid = tree
+            .root
+            .find_by_id_mut("toolbar")
+            .and_then(|n| n.uid().map(str::to_string))
+            .unwrap();
+        assert!(tree.set_hidden(&uid, true));
+
+        let out = serialize_tree(&tree);
+        assert!(
+            out.contains("<g id=\"toolbar\""),
+            "group still there: {out}"
+        );
+        assert!(
+            out.contains("display=\"none\""),
+            "group hidden on export: {out}"
+        );
+        assert!(
+            out.contains(r#"<path d="M 3 6 L 21 6"/>"#),
+            "children verbatim: {out}"
+        );
+
+        // The render node carries the hidden flag so the canvas can skip the subtree.
+        fn find<'a>(nodes: &'a [RenderNode], uid: &str) -> Option<bool> {
+            for n in nodes {
+                if let RenderNode::Element {
+                    uid: u,
+                    hidden,
+                    children,
+                    ..
+                } = n
+                {
+                    if u == uid {
+                        return Some(*hidden);
+                    }
+                    if let Some(h) = find(children, uid) {
+                        return Some(h);
+                    }
+                }
+            }
+            None
+        }
+        assert_eq!(find(&tree.render_children(), &uid), Some(true));
+
+        // Unhiding restores byte-for-byte.
+        assert!(tree.set_hidden(&uid, false));
+        assert_eq!(serialize_tree(&tree), CORPUS[1]);
     }
 
     #[test]

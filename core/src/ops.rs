@@ -195,6 +195,11 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         op: Option<String>,
     },
+    /// Show/hide any node in the document **tree** by its stable `uid` — a group, an opaque
+    /// element, or a shape, at any depth (structural op). Exports as `display="none"`, skipped in
+    /// the render. (The tree is the structural model; this is the tree-addressed sibling of
+    /// `SetPathHidden`/`SetLayerVisible`, which act on the flat layers model.)
+    SetNodeHidden { uid: String, hidden: bool },
 
     /// Set (`value: Some`) or clear (`value: None`) one presentation attribute. Added paths
     /// edit their own `attributes`; imported paths accumulate a `style_override`.
@@ -614,6 +619,11 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             }
             None => false,
         },
+        Op::SetNodeHidden { uid, hidden } => doc
+            .tree
+            .as_mut()
+            .map(|t| t.set_hidden(uid, *hidden))
+            .unwrap_or(false),
         Op::SetStyle { path, key, value } => {
             let Some(p) = doc.paths.get_mut(*path) else {
                 return false;
