@@ -301,8 +301,8 @@ export const selectTool: Tool = {
     }
     if (hit.kind === "segment" || hit.kind === "fill") {
       const pi = hit.pathIndex;
-      // Shift-click toggles a shape in/out of the selection (no drag).
-      if (ctx.event.shiftKey) {
+      // Shift- or ⌘-click toggles a shape in/out of the multi-selection (no drag).
+      if (ctx.event.shiftKey || ctx.event.metaKey) {
         editor.togglePath(pi);
         return null;
       }

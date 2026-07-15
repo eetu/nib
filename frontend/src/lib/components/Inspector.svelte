@@ -562,9 +562,10 @@
         <button
           class="row-btn"
           class:active={editor.selectedPaths.includes(index)}
-          onclick={(e) => (e.shiftKey ? editor.togglePath(index) : editor.selectPath(index))}
+          onclick={(e) =>
+            e.shiftKey || e.metaKey ? editor.togglePath(index) : editor.selectPath(index)}
           ondblclick={() => startRename(index, p.id)}
-          title="click to select · shift-click multi · double-click to rename · right-click for more"
+          title="click to select · shift/⌘-click multi · double-click to rename · right-click for more"
         >
           <span class="pid">{p.id}</span>
         </button>
