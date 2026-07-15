@@ -7,3 +7,6 @@ Thumbs.db
 # consumed by the frontend via a link: dependency; never commit it.
 /target/
 core/pkg/
+
+# The backend's runtime document folder (`just backend`) — user .svg files, not source.
+/docs/

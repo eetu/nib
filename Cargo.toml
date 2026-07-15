@@ -1,8 +1,9 @@
 # nib Rust workspace. `core/` (nib-core) is the document/geometry/op engine — it
-# compiles to WASM for the browser editor and native for the (later) backend + tests.
+# compiles to WASM for the browser editor and native for the backend + tests. `backend/`
+# (nib-backend, Phase C) is the rust-axum server that links the SAME core natively.
 # See CLAUDE.md / the roadmap: the model, op vocabulary, and geometry live here.
 [workspace]
-members = ["core"]
+members = ["core", "backend"]
 resolver = "3"
 
 [profile.release]

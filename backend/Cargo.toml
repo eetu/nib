@@ -1,0 +1,14 @@
+[package]
+name = "nib-backend"
+version = "0.0.0"
+edition = "2024"
+description = "nib's rust-axum backend (Phase C): serves the SPA + owns the .svg files, links nib-core natively."
+publish = false
+
+[dependencies]
+axum = { version = "0.8.9", features = ["ws"] }
+nib-core = { path = "../core" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["full"] }
+tower-http = { version = "0.7.0", features = ["fs", "cors"] }

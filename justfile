@@ -27,6 +27,10 @@ opt-core: build-core
 test-core:
     cargo test -p nib-core
 
+# Backend tests (native — the axum server links nib-core directly).
+test-backend:
+    cargo test -p nib-backend
+
 # Install frontend deps. Builds the core first so the link: dep resolves.
 install: build-core
     cd frontend && node .yarn/releases/yarn-*.cjs install
@@ -38,6 +42,11 @@ dev: build-core
 # Production build → frontend/dist (size-optimized core .wasm).
 build: opt-core
     cd frontend && node .yarn/releases/yarn-*.cjs build
+
+# Phase C backend (:4321): build the SPA, then serve it + the .svg documents API. Links
+# nib-core natively — the same engine the browser drives via WASM. NIB_PORT/NIB_DOCS override.
+backend: build
+    NIB_DIST=frontend/dist NIB_DOCS=docs cargo run -p nib-backend
 
 # Typecheck + lint + format check.
 validate:
