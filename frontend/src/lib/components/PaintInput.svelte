@@ -51,9 +51,16 @@
     anyGrad ? anyGrad.kind : value === "none" || value === "" ? "none" : "solid",
   );
 
-  const stopsCss = $derived(
-    anyGrad ? anyGrad.stops.map((s) => `${s.color} ${Math.round(s.offset * 100)}%`).join(", ") : "",
-  );
+  // A stop as a CSS gradient colour-stop, honouring per-stop opacity (a color→transparent fade
+  // reads as solid otherwise). `color-mix` applies alpha to any colour format (hex/named/rgb).
+  function stopCss(s: { color: string; offset: number; opacity?: number }): string {
+    const c =
+      s.opacity != null && s.opacity < 1
+        ? `color-mix(in srgb, ${s.color} ${Math.round(s.opacity * 100)}%, transparent)`
+        : s.color;
+    return `${c} ${Math.round(s.offset * 100)}%`;
+  }
+  const stopsCss = $derived(anyGrad ? anyGrad.stops.map(stopCss).join(", ") : "");
   const previewBg = $derived(
     anyGrad
       ? anyGrad.kind === "radial"
@@ -71,7 +78,11 @@
     const id = `grad-${crypto.randomUUID().slice(0, 8)}`;
     // Adopt an imported gradient's stops into an editable model gradient; else a fresh two-stop.
     const stops = importedGrad
-      ? importedGrad.stops.map((s) => ({ offset: s.offset, color: s.color }))
+      ? importedGrad.stops.map((s) => ({
+          offset: s.offset,
+          color: s.color,
+          ...(s.opacity != null ? { opacity: s.opacity } : {}),
+        }))
       : [
           { offset: 0, color: value.startsWith("#") ? value : "#4b7bec" },
           { offset: 1, color: "#ffffff" },

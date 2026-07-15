@@ -323,16 +323,26 @@ class DocumentStore {
   importedGradients = $derived.by(() => {
     void this.treeVersion; // deps: re-parse when the tree changes
     void this.doc?.source;
-    type Info = { kind: "linear" | "radial"; stops: { offset: number; color: string }[] };
+    type Info = {
+      kind: "linear" | "radial";
+      stops: { offset: number; color: string; opacity?: number }[];
+    };
     const num = (s: string | undefined): number => {
       if (!s) return 0;
       const t = s.trim();
       return t.endsWith("%") ? Number(t.slice(0, -1)) / 100 : Number(t);
     };
+    // Read a presentation value from the `stop-*` attr or an inline `style` fallback.
+    const prop = (attrs: Record<string, string>, key: string): string | undefined =>
+      attrs[key] ?? attrs.style?.match(new RegExp(`${key}:\\s*([^;]+)`))?.[1]?.trim();
     const stopOf = (attrs: Record<string, string>) => {
-      let color: string | undefined = attrs["stop-color"];
-      if (!color && attrs.style) color = attrs.style.match(/stop-color:\s*([^;]+)/)?.[1]?.trim();
-      return { offset: num(attrs.offset), color: color ?? "#000000" };
+      const op = prop(attrs, "stop-opacity");
+      return {
+        offset: num(attrs.offset),
+        color: prop(attrs, "stop-color") ?? "#000000",
+        // Carry opacity when explicit (a color→transparent fade) so the preview + adopt keep it.
+        ...(op != null && op !== "" ? { opacity: Number(op) } : {}),
+      };
     };
     const entries: [string, Info][] = [];
     const walk = (nodes: RenderNode[]): void => {
