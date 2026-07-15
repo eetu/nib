@@ -9,9 +9,15 @@
 //! tag. Element types nib doesn't model deeply still round-trip as structured-but-opaque nodes.
 //!
 //! Built + proven in isolation here (parse→serialize is byte-for-byte on the round-trip corpus);
-//! **wiring it into the `Editor`/frontend — projecting `paths`, migrating ops — is a later E1
-//! step.** Byte-for-byte holds *by construction*: the source is partitioned into slices along
-//! child boundaries, each owned by exactly one node, so concatenating the slices reproduces it.
+//! **wiring it into the `Editor`/frontend — projecting `paths`, migrating ops — is in progress
+//! (see `project_paths`).** Byte-for-byte holds *by construction*: the source is partitioned into
+//! slices along child boundaries, each owned by exactly one node, so concatenating reproduces it.
+
+use indexmap::IndexMap;
+
+use super::document::STYLE_KEYS;
+use super::path::parse_path_d;
+use super::types::PathElement;
 
 /// One node in the document tree.
 #[derive(Debug, Clone, PartialEq)]
@@ -188,6 +194,71 @@ pub fn serialize_tree(tree: &Tree) -> String {
     out
 }
 
+fn attr<'a>(attrs: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    attrs
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+}
+
+fn collect_paths(node: &Node, out: &mut Vec<PathElement>) {
+    let Node::Element {
+        tag,
+        attrs,
+        original_open,
+        children,
+        ..
+    } = node
+    else {
+        return;
+    };
+    if tag == "path" {
+        let index = out.len();
+        let d = attr(attrs, "d").unwrap_or("").to_string();
+        let id = attr(attrs, "id")
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("path-{index}"));
+        let mut style = IndexMap::new();
+        for key in STYLE_KEYS {
+            if let Some(v) = attr(attrs, key) {
+                style.insert(key.to_string(), v.to_string());
+            }
+        }
+        out.push(PathElement {
+            id,
+            index,
+            subpaths: parse_path_d(&d),
+            attributes: Some(style),
+            original_tag: Some(original_open.clone()),
+            original_d: d,
+            edited: false,
+            added: false,
+            style_override: None,
+            deleted: false,
+            renamed: false,
+            layer: None,
+            hidden: false,
+        });
+    }
+    for c in children {
+        collect_paths(c, out);
+    }
+}
+
+impl Tree {
+    /// Project the flat `<path>` view the current editor/frontend runs on out of the tree, in
+    /// document order — the bridge that lets the `Editor` become tree-backed while the paths-based
+    /// UI keeps working unchanged. Mirrors `parse_svg`'s path extraction, sourced from tree nodes.
+    /// (Non-path elements + `<g>` structure carry richer identity on the tree; they flow into the
+    /// paths view as E2/E3 land.)
+    pub fn project_paths(&self) -> Vec<PathElement> {
+        let mut out = Vec::new();
+        collect_paths(&self.root, &mut out);
+        out
+    }
+}
+
 impl Node {
     /// Set (or add) an attribute and mark the element edited so it regenerates on emit. Returns
     /// false for non-element nodes.
@@ -324,6 +395,20 @@ mod tests {
         assert!(node.set_attr("data-x", "1"));
         assert!(serialize_tree(&tree).contains("data-x=\"1\""));
         assert!(tree.root.find_by_uid_mut("nonexistent").is_none());
+    }
+
+    #[test]
+    fn project_paths_matches_the_flat_parser_across_the_corpus() {
+        // The tree can reproduce the exact flat `paths` view the current editor/frontend runs on
+        // — the bridge for flipping the Editor to tree-backed without changing the paths UI.
+        for (i, src) in CORPUS.iter().enumerate() {
+            let projected = parse_tree(src).unwrap().project_paths();
+            let flat = crate::model::document::parse_svg(src).unwrap().paths;
+            assert_eq!(
+                projected, flat,
+                "fixture {i}: projected paths != flat parser"
+            );
+        }
     }
 
     #[test]
