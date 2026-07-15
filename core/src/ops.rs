@@ -186,6 +186,11 @@ pub enum Op {
         paths: Vec<usize>,
         id: String,
     },
+    /// Merge paths into one **compound path** (`id`) holding all their subpaths in draw order —
+    /// the inputs are soft-deleted. Unlike `BooleanOp` this keeps the subpaths distinct (no
+    /// geometry merge), so a line + a detached dome become one editable element. Inherits the
+    /// lowest-index subject's style + group.
+    CombinePaths { paths: Vec<usize>, id: String },
     /// Reduce a path's node count (Ramer–Douglas–Peucker) within `tolerance` document units.
     SimplifyPath { path: usize, tolerance: f64 },
     /// Expand a path's stroke (`width`) into a filled outline: the source is soft-deleted and a
@@ -669,6 +674,53 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 }
             };
             // The result inherits the subject's (lowest-index) effective style + group.
+            let first = &doc.paths[idxs[0]];
+            let mut attributes = first.attributes.clone().unwrap_or_default();
+            if let Some(so) = &first.style_override {
+                for (k, v) in so {
+                    attributes.insert(k.clone(), v.clone());
+                }
+            }
+            let layer = first.layer.clone();
+            for &i in &idxs {
+                doc.paths[i].deleted = true;
+            }
+            let index = doc.paths.len();
+            doc.paths.push(PathElement {
+                id: id.clone(),
+                index,
+                original_d: String::new(),
+                subpaths,
+                edited: true,
+                added: true,
+                attributes: Some(attributes),
+                style_override: None,
+                original_tag: None,
+                deleted: false,
+                renamed: false,
+                layer,
+                hidden: false,
+            });
+            true
+        }
+        Op::CombinePaths { paths, id } => {
+            let mut idxs: Vec<usize> = paths
+                .iter()
+                .copied()
+                .filter(|&i| doc.paths.get(i).is_some_and(|p| !p.deleted))
+                .collect();
+            idxs.sort_unstable();
+            idxs.dedup();
+            if idxs.len() < 2 {
+                return false;
+            }
+            let mut subpaths = Vec::new();
+            for &i in &idxs {
+                subpaths.extend(doc.paths[i].subpaths.iter().cloned());
+            }
+            if subpaths.is_empty() {
+                return false;
+            }
             let first = &doc.paths[idxs[0]];
             let mut attributes = first.attributes.clone().unwrap_or_default();
             if let Some(so) = &first.style_override {
@@ -1217,6 +1269,31 @@ mod tests {
         let cross =
             (hout.x - n.point.x) * (n.point.y - hin.y) - (hout.y - n.point.y) * (n.point.x - hin.x);
         assert!(cross.abs() < 1e-6, "handles should be collinear: {cross}");
+    }
+
+    #[test]
+    fn combine_merges_subpaths_into_a_compound_path() {
+        let mut doc = doc_from("M 0 0 L 10 0", false); // line
+        apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "dome".into(),
+                subpaths: parse_path_d("M 3 -2 Q 5 -6 7 -2"),
+                attributes: IndexMap::new(),
+            },
+        );
+        assert!(apply(
+            &mut doc,
+            &Op::CombinePaths {
+                paths: vec![0, 1],
+                id: "compound".into(),
+            }
+        ));
+        assert!(doc.paths[0].deleted && doc.paths[1].deleted);
+        let compound = doc.paths.last().unwrap();
+        assert_eq!(compound.id, "compound");
+        assert_eq!(compound.subpaths.len(), 2); // line + dome, kept distinct
+        assert!(compound.added && !compound.deleted);
     }
 
     #[test]

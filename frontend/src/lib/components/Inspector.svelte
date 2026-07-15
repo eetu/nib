@@ -316,6 +316,11 @@
         >
         <button title="exclude overlap" onclick={() => editor.booleanOp("exclude")}>exclude</button>
       </div>
+      <button
+        class="combine-all"
+        title="make compound path — one element, subpaths kept distinct"
+        onclick={() => editor.combinePaths()}>compound path</button
+      >
     </section>
   {/if}
 
@@ -1059,6 +1064,22 @@
   }
 
   .combine button:hover {
+    border-color: var(--halo-accent);
+    color: var(--halo-accent);
+  }
+
+  .combine-all {
+    width: 100%;
+    margin-top: 4px;
+    padding: 4px 0;
+    border: 1px solid var(--halo-border);
+    border-radius: var(--halo-radius-pill);
+    background: var(--halo-bg-main);
+    color: var(--halo-text-muted);
+    font-size: 11px;
+  }
+
+  .combine-all:hover {
     border-color: var(--halo-accent);
     color: var(--halo-accent);
   }

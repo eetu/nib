@@ -443,6 +443,17 @@ class DocumentStore {
     }
   }
 
+  /** Merge the selected paths into one compound path (subpaths kept distinct — no geometry
+   *  merge), e.g. a line + a detached dome as a single element. */
+  combinePaths(): void {
+    if (this.selectedPaths.length < 2) return;
+    const id = this.#freshId("compound");
+    if (this.#apply({ type: "combinePaths", paths: [...this.selectedPaths], id })) {
+      this.commit();
+      this.selectPath((this.doc?.paths.length ?? 1) - 1);
+    }
+  }
+
   /** Soft-delete every selected path (soft-delete keeps indices stable, so no reindexing). */
   deleteSelectedPaths(): void {
     if (this.selectedPaths.length === 0) return;

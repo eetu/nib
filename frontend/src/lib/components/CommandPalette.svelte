@@ -46,6 +46,11 @@
       enabled: () => editor.selectedPaths.length >= 2,
     })),
     {
+      label: "Make compound path",
+      run: () => editor.combinePaths(),
+      enabled: () => editor.selectedPaths.length >= 2,
+    },
+    {
       label: "Simplify path",
       run: () => editor.simplifyPath(),
       enabled: () => editor.selectedPathIndex !== null,

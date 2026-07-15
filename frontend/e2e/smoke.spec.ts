@@ -426,6 +426,40 @@ test("skew shears the selected path", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("combine merges two paths into one compound path", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  // a line + a detached dome (two separate paths)
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 40"><path d="M0 30 L100 30" fill="none" stroke="#000"/><path d="M35 30 Q50 5 65 30" fill="none" stroke="#000"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const rows = page.locator(".layerlist .row-btn");
+  await expect(rows).toHaveCount(2);
+  await rows.nth(0).click();
+  await rows.nth(1).click({ modifiers: ["Shift"] });
+  await page.getByRole("button", { name: "compound path" }).click();
+  // The two paths become one row whose d holds both subpaths (two M commands).
+  await expect(rows).toHaveCount(1);
+  const d = await page.locator("svg.canvas g.drawn path").getAttribute("d");
+  expect((d ?? "").match(/M/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("boolean union combines two shapes into one", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
