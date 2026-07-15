@@ -19,6 +19,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("style-block", include_str!("fixtures/style-block.svg")),
     ("transforms", include_str!("fixtures/transforms.svg")),
     ("prolog", include_str!("fixtures/prolog.svg")),
+    ("shapes", include_str!("fixtures/shapes.svg")),
 ];
 
 /// An unedited document must serialize back to its exact source — nib touches only what the

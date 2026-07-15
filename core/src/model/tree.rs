@@ -538,6 +538,7 @@ mod tests {
         include_str!("../../tests/fixtures/style-block.svg"),
         include_str!("../../tests/fixtures/transforms.svg"),
         include_str!("../../tests/fixtures/prolog.svg"),
+        include_str!("../../tests/fixtures/shapes.svg"),
     ];
 
     #[test]
@@ -607,10 +608,10 @@ mod tests {
     #[test]
     fn project_paths_matches_the_flat_parser_for_path_only_docs() {
         // For path-only fixtures the projection reproduces the flat parser exactly (regression
-        // guard). Only the new `uid` differs, so compare with uid cleared. mixed-elements (index
-        // 3) has shapes → checked in the next test.
+        // guard). Only the new `uid` differs, so compare with uid cleared. Fixtures with
+        // primitives (mixed-elements #3, shapes #7) project extra editable paths → checked below.
         for (i, src) in CORPUS.iter().enumerate() {
-            if i == 3 {
+            if i == 3 || i == 7 {
                 continue;
             }
             let projected: Vec<_> = parse_tree(src)
@@ -628,6 +629,31 @@ mod tests {
                 "fixture {i}: projected paths != flat parser"
             );
         }
+    }
+
+    #[test]
+    fn shapes_sample_projects_every_primitive_as_editable() {
+        // The samples/shapes.svg test file: one of each primitive + a path — all seven project
+        // as editable paths (confirms the file users open is fully editable).
+        let paths = parse_tree(CORPUS[7]).unwrap().project_paths();
+        let ids: Vec<&str> = paths.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "rect-0",
+                "circle-1",
+                "ellipse-2",
+                "line-3",
+                "polygon-4",
+                "polyline-5",
+                "path-6"
+            ]
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|p| !p.subpaths.is_empty() && !p.uid.is_empty())
+        );
     }
 
     #[test]
