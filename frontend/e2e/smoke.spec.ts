@@ -190,6 +190,55 @@ test("shift-selecting two paths enables align", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("multi-select shows group transform handles and scales all shapes together", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M10 10 H40 V40 H10 Z" fill="#f00"/><path d="M60 60 H90 V90 H60 Z" fill="#00f"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // Multi-select both shapes via the layers list.
+  const rows = page.locator(".layerlist .row-btn");
+  await expect(rows).toHaveCount(2);
+  await rows.nth(0).click();
+  await rows.nth(1).click({ modifiers: ["Shift"] });
+
+  // The union box now carries the 8 resize handles (multi-select used to be move-only).
+  await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
+  const handles = page.locator("svg.canvas g.overlay rect.xf-handle");
+  await expect(handles).toHaveCount(8);
+
+  // Drag the SE corner (handlePoints index 4) outward → BOTH shapes scale as one group.
+  const paths = page.locator("svg.canvas g.artwork path");
+  const before0 = await paths.nth(0).getAttribute("d");
+  const before1 = await paths.nth(1).getAttribute("d");
+  const se = await handles.nth(4).boundingBox();
+  if (!se) throw new Error("no SE handle");
+  await page.mouse.move(se.x + se.width / 2, se.y + se.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(se.x + 60, se.y + 60);
+  await page.mouse.up();
+  await expect(paths.nth(0)).not.toHaveAttribute("d", before0 ?? "");
+  await expect(paths.nth(1)).not.toHaveAttribute("d", before1 ?? "");
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("layers: group two shapes, then hide the group", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

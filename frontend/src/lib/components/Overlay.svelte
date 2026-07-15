@@ -6,7 +6,13 @@
   import { interaction } from "$lib/stores/interaction.svelte";
   import { tools } from "$lib/stores/tool.svelte";
   import { viewport } from "$lib/stores/viewport.svelte";
-  import { handlePoints, padBounds, ROTATE_KNOB_PX, SELECT_PAD_PX } from "$lib/tools/transform";
+  import {
+    type Bounds,
+    handlePoints,
+    padBounds,
+    ROTATE_KNOB_PX,
+    SELECT_PAD_PX,
+  } from "$lib/tools/transform";
 
   const doc = $derived(editor.doc);
   // Anchors show only while node-editing — any non-select tool, or the select tool in
@@ -78,25 +84,28 @@
       <path class="sel-outline-casing" d={outlineD} />
       <path class="sel-outline" d={outlineD} />
     {/if}
+    {#snippet transformBox(raw: Bounds)}
+      <!-- dashed box + rotate knob + 8 resize handles, around the padded bounds. Shared by
+           single-object selection and the multi-select group (both scale/rotate as one). -->
+      {@const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX))}
+      {@const tl = viewport.toScreen({ x: bb.minX, y: bb.minY })}
+      {@const br = viewport.toScreen({ x: bb.maxX, y: bb.maxY })}
+      <rect class="sel-box" x={tl.x} y={tl.y} width={br.x - tl.x} height={br.y - tl.y} />
+      {@const top = viewport.toScreen({ x: (bb.minX + bb.maxX) / 2, y: bb.minY })}
+      <line class="rotate-stem" x1={top.x} y1={top.y} x2={top.x} y2={top.y - ROTATE_KNOB_PX} />
+      <circle class="rotate-knob" cx={top.x} cy={top.y - ROTATE_KNOB_PX} r="4.5" />
+      {#each handlePoints(bb) as h (h.handle)}
+        {@const hp = viewport.toScreen(h.point)}
+        <rect class="xf-handle" x={hp.x - 4} y={hp.y - 4} width="8" height="8" />
+      {/each}
+    {/snippet}
     {#if boxPath && !boxPath.deleted}
       {@const raw = tightBounds(boxPath.subpaths)}
-      {#if raw}
-        {@const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX))}
-        {@const tl = viewport.toScreen({ x: bb.minX, y: bb.minY })}
-        {@const br = viewport.toScreen({ x: bb.maxX, y: bb.maxY })}
-        <rect class="sel-box" x={tl.x} y={tl.y} width={br.x - tl.x} height={br.y - tl.y} />
-        {@const top = viewport.toScreen({ x: (bb.minX + bb.maxX) / 2, y: bb.minY })}
-        <line class="rotate-stem" x1={top.x} y1={top.y} x2={top.x} y2={top.y - ROTATE_KNOB_PX} />
-        <circle class="rotate-knob" cx={top.x} cy={top.y - ROTATE_KNOB_PX} r="4.5" />
-        {#each handlePoints(bb) as h (h.handle)}
-          {@const hp = viewport.toScreen(h.point)}
-          <rect class="xf-handle" x={hp.x - 4} y={hp.y - 4} width="8" height="8" />
-        {/each}
-      {/if}
+      {#if raw}{@render transformBox(raw)}{/if}
     {/if}
     {#if editor.multiSelected}
       <!-- outline every selected path (accent centerline) so it's clear which are in the
-           multi-selection, plus the union box for the group transform. -->
+           multi-selection, plus the union transform box for the group. -->
       {#each editor.selectedPaths as pi (pi)}
         {@const mp = doc.paths[pi]}
         {#if mp && !mp.deleted}
@@ -106,12 +115,7 @@
         {/if}
       {/each}
       {@const raw = editor.selectionBounds}
-      {#if raw}
-        {@const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX))}
-        {@const tl = viewport.toScreen({ x: bb.minX, y: bb.minY })}
-        {@const br = viewport.toScreen({ x: bb.maxX, y: bb.maxY })}
-        <rect class="sel-box" x={tl.x} y={tl.y} width={br.x - tl.x} height={br.y - tl.y} />
-      {/if}
+      {#if raw}{@render transformBox(raw)}{/if}
     {/if}
     {#if nodeEditing}
       {#each doc.paths as path, pi (pi)}

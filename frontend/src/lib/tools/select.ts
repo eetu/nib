@@ -203,12 +203,28 @@ function marqueeDrag(start: Point): DragSession {
   };
 }
 
-/** Rotate the selected path by dragging the knob above the box. Rotation is about the box
- *  centre, relative to the geometry at drag start; shift snaps to 15° steps. */
-function rotateDrag(pathIndex: number, start: Point): DragSession {
-  const path = editor.doc?.paths[pathIndex];
-  const ref = path ? (JSON.parse(JSON.stringify(path.subpaths)) as Subpath[]) : [];
-  const bb = tightBounds(ref);
+/** Deep-clone the subpaths of every selected path — the reference geometry a transform drag
+ *  scales/rotates from (stable across the whole gesture). One shape or a whole group; both
+ *  transform about the union box, so a multi-selection scales/rotates as one (Pixelmator-style). */
+function snapshotTargets(): { pi: number; ref: Subpath[] }[] {
+  const doc = editor.doc;
+  if (!doc) return [];
+  return editor.selectedPaths
+    .map((pi) => {
+      const p = doc.paths[pi];
+      return p && !p.deleted
+        ? { pi, ref: JSON.parse(JSON.stringify(p.subpaths)) as Subpath[] }
+        : null;
+    })
+    .filter((t): t is { pi: number; ref: Subpath[] } => t !== null);
+}
+
+/** Rotate the object selection (one shape or a multi-select group) by dragging the knob above
+ *  the box. Rotation is about the union box centre, relative to the geometry at drag start;
+ *  shift snaps to 15° steps. */
+function rotateDrag(start: Point): DragSession {
+  const targets = snapshotTargets();
+  const bb = editor.selectionBounds;
   const center = bb ? boxCenter(bb) : { x: 0, y: 0 };
   const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
   let moved = false;
@@ -220,7 +236,7 @@ function rotateDrag(pathIndex: number, start: Point): DragSession {
         const step = Math.PI / 12; // 15°
         delta = Math.round(delta / step) * step;
       }
-      editor.setSubpaths(pathIndex, rotateSubpaths(ref, center, delta));
+      for (const t of targets) editor.setSubpaths(t.pi, rotateSubpaths(t.ref, center, delta));
       moved = true;
     },
     up() {
@@ -232,12 +248,11 @@ function rotateDrag(pathIndex: number, start: Point): DragSession {
   };
 }
 
-/** Scale the selected path by dragging a bounding-box handle. Scaling is
- *  relative to the geometry at drag start; shift keeps the aspect ratio. */
-function scaleDrag(pathIndex: number, handle: TransformHandle): DragSession {
-  const path = editor.doc?.paths[pathIndex];
-  const ref = path ? (JSON.parse(JSON.stringify(path.subpaths)) as Subpath[]) : [];
-  const bb = tightBounds(ref);
+/** Scale the object selection (one shape or a multi-select group) by dragging a bounding-box
+ *  handle, about the opposite anchor of the union box; shift keeps the aspect ratio. */
+function scaleDrag(handle: TransformHandle): DragSession {
+  const targets = snapshotTargets();
+  const bb = editor.selectionBounds;
   let moved = false;
   return {
     move(cursor, event) {
@@ -258,7 +273,7 @@ function scaleDrag(pathIndex: number, handle: TransformHandle): DragSession {
         sx = sx < 0 ? -m : m;
         sy = sy < 0 ? -m : m;
       }
-      editor.setSubpaths(pathIndex, scaleSubpaths(ref, g.anchor, sx, sy));
+      for (const t of targets) editor.setSubpaths(t.pi, scaleSubpaths(t.ref, g.anchor, sx, sy));
       moved = true;
     },
     up() {
@@ -282,12 +297,10 @@ export const selectTool: Tool = {
   begin(ctx) {
     const { hit } = ctx;
     if (hit.kind === "transform") {
-      const pi = editor.selectedPathIndex;
-      return pi !== null ? scaleDrag(pi, hit.handle) : null;
+      return editor.selectedPaths.length ? scaleDrag(hit.handle) : null;
     }
     if (hit.kind === "rotate") {
-      const pi = editor.selectedPathIndex;
-      return pi !== null ? rotateDrag(pi, ctx.docPoint) : null;
+      return editor.selectedPaths.length ? rotateDrag(ctx.docPoint) : null;
     }
     if (hit.kind === "handle") {
       editor.select(hit.ref);

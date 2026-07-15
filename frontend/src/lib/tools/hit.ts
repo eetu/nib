@@ -1,4 +1,4 @@
-import { cubicAt, distance, tightBounds } from "$lib/model/geometry";
+import { cubicAt, distance } from "$lib/model/geometry";
 import { nearestOnSubpath, segmentControlPoints } from "$lib/model/path";
 import type { NodeRef, Point, Subpath } from "$lib/model/types";
 import { editor } from "$lib/stores/document.svelte";
@@ -99,22 +99,20 @@ export function hitTest(screen: Point): Hit {
     if (bestAnchor) return { kind: "anchor", ref: (bestAnchor as { ref: NodeRef }).ref };
   }
 
-  // 3. Transform handles — only for an object (whole-path) selection, at
-  //    corners/edges not occupied by a node.
-  if (editor.objectSelected && editor.selectedPathIndex !== null) {
-    const p = doc.paths[editor.selectedPathIndex];
-    if (p && !p.deleted) {
-      const raw = tightBounds(p.subpaths);
-      if (raw) {
-        const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX));
-        // Rotate knob, above the box's top-centre.
-        const top = viewport.toScreen({ x: (bb.minX + bb.maxX) / 2, y: bb.minY });
-        if (distance({ x: top.x, y: top.y - ROTATE_KNOB_PX }, screen) <= HANDLE_HIT_PX) {
-          return { kind: "rotate" };
-        }
-        for (const { handle, point } of handlePoints(bb)) {
-          if (screenDist(point, screen) <= HANDLE_HIT_PX) return { kind: "transform", handle };
-        }
+  // 3. Transform handles — for an object (whole-path) selection *or* a multi-select group,
+  //    at corners/edges of the union box not occupied by a node. Both use selectionBounds so
+  //    a group scales/rotates as one (Pixelmator-style).
+  if (editor.objectSelected || editor.multiSelected) {
+    const raw = editor.selectionBounds;
+    if (raw) {
+      const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX));
+      // Rotate knob, above the box's top-centre.
+      const top = viewport.toScreen({ x: (bb.minX + bb.maxX) / 2, y: bb.minY });
+      if (distance({ x: top.x, y: top.y - ROTATE_KNOB_PX }, screen) <= HANDLE_HIT_PX) {
+        return { kind: "rotate" };
+      }
+      for (const { handle, point } of handlePoints(bb)) {
+        if (screenDist(point, screen) <= HANDLE_HIT_PX) return { kind: "transform", handle };
       }
     }
   }
