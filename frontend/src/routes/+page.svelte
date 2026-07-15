@@ -77,10 +77,12 @@
       return;
     }
 
-    // Escape → leave node-edit mode, back to the select tool (finishing any pen path).
+    // Escape cancels the current context but keeps the active tool (familiar editor
+    // behaviour): finish an in-progress pen path → else leave node-edit mode → else deselect.
     if (e.key === "Escape") {
-      editor.exitNodeEdit(); // exit node editing even when already on the select tool
-      tools.set("select"); // switching away finishes the pen via its onDeactivate
+      if (interaction.penDrawing) finishPen();
+      else if (editor.nodeEditIndex !== null) editor.exitNodeEdit();
+      else editor.deselect();
       return;
     }
     if (e.key === "Enter" && tools.active === "pen") {
