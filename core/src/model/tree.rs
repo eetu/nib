@@ -17,7 +17,118 @@ use indexmap::IndexMap;
 
 use super::document::STYLE_KEYS;
 use super::path::{parse_path_d, path_to_d_prec};
-use super::types::PathElement;
+use super::shapes::{ellipse_nodes, line_nodes, rect_nodes};
+use super::types::{PathElement, PathNode, Point, Subpath};
+
+/// Element tags nib can turn into editable anchor-node geometry (subpaths). `<path>` parses its
+/// `d`; the primitives convert to the same shape builders drawn shapes use. Anything else stays
+/// a structured-but-opaque node (E4/E5 promote text/image/use/defs).
+pub const SHAPE_TAGS: [&str; 7] = [
+    "path", "rect", "circle", "ellipse", "line", "polygon", "polyline",
+];
+
+/// Parse a numeric attribute (SVG geometry values are plain numbers, optionally with a unit
+/// suffix like `px` — take the leading number, mirroring JS `parseFloat`).
+fn num(attrs: &[(String, String)], key: &str, default: f64) -> f64 {
+    let Some(s) = attr(attrs, key) else {
+        return default;
+    };
+    let t = s.trim_start();
+    let end = t
+        .find(|c: char| !(c.is_ascii_digit() || matches!(c, '+' | '-' | '.' | 'e' | 'E')))
+        .unwrap_or(t.len());
+    t[..end].parse::<f64>().unwrap_or(default)
+}
+
+/// Parse a `points` list ("x,y x,y" / "x y x y") into corner nodes.
+fn parse_points(s: &str) -> Vec<PathNode> {
+    let nums: Vec<f64> = s
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|t| !t.is_empty())
+        .filter_map(|t| t.parse::<f64>().ok())
+        .collect();
+    nums.chunks_exact(2)
+        .map(|p| PathNode::corner(Point::new(p[0], p[1])))
+        .collect()
+}
+
+/// Convert a shape element (tag + attrs) into editable anchor-node subpaths — the bridge that
+/// lets imported primitives be edited like drawn shapes. `None` if the tag isn't a shape or its
+/// geometry is degenerate/unparseable (→ it stays a structured-but-opaque node, never editable).
+pub fn shape_subpaths(tag: &str, attrs: &[(String, String)]) -> Option<Vec<Subpath>> {
+    let closed = |nodes: Vec<PathNode>| {
+        Some(vec![Subpath {
+            nodes,
+            closed: true,
+        }])
+    };
+    let open = |nodes: Vec<PathNode>| {
+        Some(vec![Subpath {
+            nodes,
+            closed: false,
+        }])
+    };
+    match tag {
+        "path" => {
+            let sp = parse_path_d(attr(attrs, "d")?);
+            (!sp.is_empty()).then_some(sp)
+        }
+        "rect" => {
+            let (x, y, w, h) = (
+                num(attrs, "x", 0.0),
+                num(attrs, "y", 0.0),
+                num(attrs, "width", 0.0),
+                num(attrs, "height", 0.0),
+            );
+            if w <= 0.0 || h <= 0.0 {
+                return None;
+            }
+            closed(rect_nodes(x, y, x + w, y + h))
+        }
+        "circle" => {
+            let r = num(attrs, "r", 0.0);
+            if r <= 0.0 {
+                return None;
+            }
+            closed(ellipse_nodes(
+                num(attrs, "cx", 0.0),
+                num(attrs, "cy", 0.0),
+                r,
+                r,
+            ))
+        }
+        "ellipse" => {
+            let (rx, ry) = (num(attrs, "rx", 0.0), num(attrs, "ry", 0.0));
+            if rx <= 0.0 || ry <= 0.0 {
+                return None;
+            }
+            closed(ellipse_nodes(
+                num(attrs, "cx", 0.0),
+                num(attrs, "cy", 0.0),
+                rx,
+                ry,
+            ))
+        }
+        "line" => open(line_nodes(
+            num(attrs, "x1", 0.0),
+            num(attrs, "y1", 0.0),
+            num(attrs, "x2", 0.0),
+            num(attrs, "y2", 0.0),
+        )),
+        "polygon" | "polyline" => {
+            let nodes = parse_points(attr(attrs, "points")?);
+            if nodes.len() < 2 {
+                return None;
+            }
+            if tag == "polygon" {
+                closed(nodes)
+            } else {
+                open(nodes)
+            }
+        }
+        _ => None,
+    }
+}
 
 /// One node in the document tree.
 #[derive(Debug, Clone, PartialEq)]
@@ -488,6 +599,52 @@ mod tests {
             CORPUS[0],
             "unedited reconcile stays verbatim"
         );
+    }
+
+    #[test]
+    fn shape_subpaths_converts_every_primitive_to_editable_geometry() {
+        let a = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        // rect → 4 closed corners
+        let rect = shape_subpaths(
+            "rect",
+            &a(&[("x", "10"), ("y", "20"), ("width", "30"), ("height", "40")]),
+        )
+        .unwrap();
+        assert_eq!(rect.len(), 1);
+        assert!(rect[0].closed);
+        assert_eq!(rect[0].nodes.len(), 4);
+        // circle / ellipse → closed 4-node bezier
+        assert!(
+            shape_subpaths("circle", &a(&[("cx", "5"), ("cy", "5"), ("r", "5")])).unwrap()[0]
+                .closed
+        );
+        assert!(
+            shape_subpaths(
+                "ellipse",
+                &a(&[("cx", "5"), ("cy", "5"), ("rx", "5"), ("ry", "3")])
+            )
+            .unwrap()[0]
+                .closed
+        );
+        // line → open 2 nodes; polygon closed, polyline open
+        let line = shape_subpaths(
+            "line",
+            &a(&[("x1", "0"), ("y1", "0"), ("x2", "9"), ("y2", "9")]),
+        )
+        .unwrap();
+        assert!(!line[0].closed && line[0].nodes.len() == 2);
+        assert!(shape_subpaths("polygon", &a(&[("points", "0,0 10,0 5,8")])).unwrap()[0].closed);
+        assert!(!shape_subpaths("polyline", &a(&[("points", "0,0 10,0 5,8")])).unwrap()[0].closed);
+        // degenerate / unknown → None (stays opaque, never editable)
+        assert!(shape_subpaths("rect", &a(&[("width", "0"), ("height", "10")])).is_none());
+        assert!(shape_subpaths("text", &a(&[("x", "0")])).is_none());
+        // px units tolerated
+        assert!(shape_subpaths("rect", &a(&[("width", "30px"), ("height", "40px")])).is_some());
     }
 
     #[test]
