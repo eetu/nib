@@ -111,6 +111,19 @@ export type Gradient = {
   r: number;
 };
 
+/** A node in the canvas's declarative render tree (the root `<svg>`'s children). Elements carry
+ *  tag + attrs + children + `uid`; editable shapes (uid matches a `doc.paths` entry) are redrawn
+ *  from the model as `<path>`, everything else renders verbatim. Matches the Rust `RenderNode`. */
+export type RenderNode =
+  | {
+      kind: "element";
+      uid: string;
+      tag: string;
+      attrs: Record<string, string>;
+      children: RenderNode[];
+    }
+  | { kind: "text"; text: string };
+
 export type SvgDocument = {
   /** Original SVG text, kept so unedited markup exports byte-for-byte. */
   source: string;

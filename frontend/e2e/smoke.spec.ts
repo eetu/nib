@@ -21,7 +21,8 @@ test("boots the core, loads a sample, draws, and undoes without errors", async (
   await page.getByRole("button", { name: "load sample" }).click();
   const artwork = page.locator("svg.canvas g.artwork path").first();
   await expect(artwork).toBeAttached();
-  await expect(artwork).toHaveAttribute("d", /M40 120/);
+  // The canvas renders paths from the model (normalized `d`), so match tolerantly.
+  await expect(artwork).toHaveAttribute("d", /M\s*40[\s,]+120/);
 
   // Draw a two-node path with the pen (beginPath + appendNode ops → drawn render).
   await page.keyboard.press("p");
@@ -656,12 +657,14 @@ test("an imported <rect> is editable and stays a <rect> when moved", async ({ pa
   const rows = page.locator(".layerlist .row-btn");
   await expect(rows).toHaveCount(1);
 
-  // Select + nudge → the whole rect moves. It repaints declaratively as a <path> on the canvas
-  // (its source <rect> hides), but a form-preserving move keeps it a <rect> on export (re-fit).
+  // The whole document renders declaratively from the tree, so the rect draws as a <path> in the
+  // artwork (from the model) — no <rect> DOM node on the canvas.
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(1);
+  await expect(page.locator("svg.canvas g.artwork rect")).toHaveCount(0);
+
+  // Select + nudge → the whole rect moves; a form-preserving move keeps it a <rect> on export.
   await rows.nth(0).click();
   for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowRight");
-  await expect(page.locator("svg.canvas g.drawn path")).toHaveCount(1);
-  await expect(page.locator("svg.canvas g.artwork rect")).toHaveAttribute("display", "none");
 
   // Source (= export) still has a <rect> (moved), not a <path> — clean markup preserved.
   await page.getByRole("button", { name: "source" }).click();
@@ -669,6 +672,38 @@ test("an imported <rect> is editable and stays a <rect> when moved", async ({ pa
   expect(src).toContain("<rect");
   expect(src).toContain('x="23"'); // nudged +3
   expect(src).not.toContain("<path");
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
+test("declarative render draws shapes as paths and opaque elements (text) verbatim", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><rect x="10" y="10" width="40" height="40" fill="#3b82f6"/><text x="20" y="90" font-size="12">hi</text></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+
+  // The whole document is rendered declaratively from the tree: the editable rect draws as a
+  // <path> (from the model), while the opaque <text> renders verbatim (the fidelity path).
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(1);
+  const text = page.locator("svg.canvas g.artwork text");
+  await expect(text).toHaveCount(1);
+  await expect(text).toHaveText("hi");
+  await expect(text).toHaveAttribute("x", "20");
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });

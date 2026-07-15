@@ -10,6 +10,7 @@ import type {
   PathElement,
   PathNode,
   Point,
+  RenderNode,
   ShapeSpec,
   Subpath,
   SvgDocument,
@@ -278,6 +279,12 @@ class DocumentStore {
   /** Current document serialized back to SVG (unedited markup preserved byte-for-byte). */
   toSvg(): string {
     return this.#wasm?.toSvg() ?? "";
+  }
+
+  /** The canvas render tree (root `<svg>`'s children) — constant per source; the canvas draws it
+   *  declaratively, pulling live geometry for editable shapes from `doc.paths` by uid. */
+  renderTree(): RenderNode[] {
+    return (this.#wasm?.renderTree() as RenderNode[]) ?? [];
   }
 
   markSaved(): void {

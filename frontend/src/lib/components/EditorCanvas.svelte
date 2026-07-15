@@ -1,7 +1,6 @@
 <script lang="ts">
-  import { STYLE_KEYS } from "$lib/model/document";
   import { pathToD } from "$lib/model/path";
-  import type { Point, ViewBox } from "$lib/model/types";
+  import type { PathElement, Point, RenderNode, ViewBox } from "$lib/model/types";
   import { canvas } from "$lib/stores/canvas.svelte";
   import { editor } from "$lib/stores/document.svelte";
   import { interaction } from "$lib/stores/interaction.svelte";
@@ -15,11 +14,6 @@
 
   let wrap: HTMLDivElement;
   let svgEl: SVGSVGElement;
-  let artworkGroup: SVGGElement;
-  // Reactive so the d-update effect below re-runs after a (re-)import — matters
-  // when the document is already present at mount (rehydrated from persistence),
-  // where the import may land after the update effect's first run.
-  let livePaths = $state<SVGPathElement[]>([]);
   let pxW = $state(0);
   let pxH = $state(0);
   let hoverCursor = $state("default");
@@ -28,28 +22,56 @@
   const cursor = $derived(
     canvas.panning || canvas.dragging || interaction.spaceHeld ? "grabbing" : hoverCursor,
   );
-  // Ids of hidden layers — their paths drop from render (+ export stamps display:none).
+  // Ids of hidden layers — their paths drop from render.
   const hiddenLayers = $derived(
     new Set((editor.doc?.layers ?? []).filter((l) => !l.visible).map((l) => l.id)),
   );
-  // Live boolean groups: their members are operands, so we render the *computed* result
-  // (editor.booleanResults) instead of the members' own fills.
+  // Live boolean groups: members are operands → the computed result paints instead.
   const booleanLayers = $derived(editor.booleanLayerIds);
-  // Is this an imported *primitive* (rect/circle/…) rather than a `<path>`? A `<path>` DOM node
-  // updates its geometry in place; a primitive can't (it has no `d`), so an edited one is hidden
-  // and re-painted declaratively as a `<path>`.
-  function isPrimitive(p: { originalTag?: string }): boolean {
-    const t = p.originalTag?.trimStart() ?? "";
-    return t !== "" && !t.startsWith("<path");
-  }
 
-  // Elements rendered declaratively from the model: drawn (added) paths + any *edited imported
-  // primitive* (now a `<path>`; its source node is hidden below). Edited `<path>`s stay in the
-  // artwork DOM (updated in place — no z-order change). Draw order = z-order; skip hidden + operands.
-  const renderPaths = $derived(
+  // The document renders declaratively from the tree (the root <svg>'s children), fetched once
+  // per source change; editable shapes within pull live geometry from doc.paths by uid so edits
+  // reflect reactively. This retires the old imperative import — z-order is now true document
+  // order, and edited primitives no longer jump above their neighbours.
+  let renderTree = $state<RenderNode[]>([]);
+  let renderedSource: string | undefined;
+  let pendingFit = $state<ViewBox | null>(null);
+  $effect(() => {
+    const doc = editor.doc;
+    if (doc?.source === renderedSource) return;
+    renderedSource = doc?.source;
+    if (!doc) {
+      renderTree = [];
+      pendingFit = null;
+      return;
+    }
+    renderTree = editor.renderTree();
+    // Frame the artboard + any content beyond it, so a reload never lands off-screen.
+    pendingFit = loadViewBox();
+  });
+
+  // Keep the viewport's pixel size current, and fit a freshly-loaded document once the canvas
+  // has real pixels (zoom/pan change scale/tx/ty, not these, so they never re-fit).
+  $effect(() => {
+    viewport.setSize(pxW, pxH);
+    if (pendingFit && pxW > 0 && pxH > 0) {
+      viewport.fitDocument(pendingFit);
+      pendingFit = null;
+    }
+  });
+
+  // Live geometry for editable shapes, keyed by their stable uid (edited or not).
+  const pathByUid = $derived(
+    new Map(
+      (editor.doc?.paths ?? []).filter((p) => p.uid).map((p) => [p.uid as string, p] as const),
+    ),
+  );
+
+  // Drawn (added) paths render on top of the imported tree (they have no source node).
+  const addedPaths = $derived(
     editor.doc?.paths.filter(
       (p) =>
-        (p.added || (p.edited && isPrimitive(p))) &&
+        p.added &&
         !p.deleted &&
         !p.hidden &&
         !(p.layer && hiddenLayers.has(p.layer)) &&
@@ -57,10 +79,19 @@
     ) ?? [],
   );
 
-  // A path's effective style: drawn paths keep their whole `attributes`; imported paths merge any
-  // `styleOverride` over the parsed attributes.
+  // A path's effective style (drawn: attributes; imported: attributes ⊕ styleOverride).
   function eff(p: { attributes?: Record<string, string>; styleOverride?: Record<string, string> }) {
     return { ...(p.attributes ?? {}), ...(p.styleOverride ?? {}) };
+  }
+
+  // Whether an editable shape node paints (skips deleted/hidden/hidden-layer/boolean-operand).
+  function shapeVisible(p: PathElement): boolean {
+    return (
+      !p.deleted &&
+      !p.hidden &&
+      !(p.layer && hiddenLayers.has(p.layer)) &&
+      !(p.layer && booleanLayers.has(p.layer))
+    );
   }
 
   // WebKit-only trackpad gesture event (Safari); not in the standard DOM lib.
@@ -70,111 +101,6 @@
     const r = svgEl.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
-
-  // Re-import the artwork only when the document *source* changes (a new load) —
-  // guarded so a spurious re-run (e.g. a viewport change) neither re-imports nor
-  // re-fits. Editing mutates the model in place (applied to the live elements by
-  // the effect below), so `source` is stable across edits. A fresh import
-  // requests a one-shot fit via `pendingFit`.
-  let importedSource: string | undefined;
-  let pendingFit = $state<ViewBox | null>(null);
-  $effect(() => {
-    const doc = editor.doc;
-    if (!artworkGroup) return;
-    if (doc?.source === importedSource) return;
-    importedSource = doc?.source;
-    // This <g> is left empty in the template — nib owns its children (the
-    // imported foreign SVG), so Svelte never diffs against them and imperative
-    // DOM here is safe. Same rationale for the setAttribute update below.
-    // eslint-disable-next-line svelte/no-dom-manipulating
-    artworkGroup.replaceChildren();
-    livePaths = [];
-    if (!doc) {
-      pendingFit = null;
-      return;
-    }
-    const parsed = new DOMParser().parseFromString(doc.source, "image/svg+xml");
-    const src = parsed.querySelector("svg");
-    if (!src) return;
-    for (const child of Array.from(src.childNodes)) {
-      // eslint-disable-next-line svelte/no-dom-manipulating
-      artworkGroup.appendChild(document.importNode(child, true));
-    }
-    livePaths = Array.from(
-      artworkGroup.querySelectorAll("path,rect,circle,ellipse,line,polygon,polyline"),
-    );
-    // Frame the artboard *plus* any content drawn outside it, so a reload never lands on a
-    // view where shapes beyond the viewBox are off-screen.
-    pendingFit = loadViewBox();
-  });
-
-  // Keep the viewport's pixel size current, and fit a freshly-loaded document
-  // once the canvas has real pixels. Depends only on the size + the pending-fit
-  // request, so zoom/pan (which change scale/tx/ty, not these) never re-fit.
-  $effect(() => {
-    viewport.setSize(pxW, pxH);
-    if (pendingFit && pxW > 0 && pxH > 0) {
-      viewport.fitDocument(pendingFit);
-      pendingFit = null;
-    }
-  });
-
-  // Reflect the model onto the live (imported) elements. An *unedited* imported path/shape keeps
-  // its source node, showing + restyled here (geometry stays as authored). An *edited* one — or a
-  // hidden/deleted/operand one — is hidden, because it now paints declaratively from the model
-  // (renderPaths) as a <path> (edited primitives change tag, which the source node can't). Drawn
-  // (added) paths have no live element and are skipped.
-  $effect(() => {
-    const doc = editor.doc;
-    if (!doc) return;
-    for (const p of doc.paths) {
-      if (p.added) continue;
-      const el = livePaths[p.index];
-      if (!el) continue;
-      const isPath = el.tagName.toLowerCase() === "path";
-      const hidden =
-        p.deleted ||
-        p.hidden ||
-        (p.edited && !isPath) || // edited primitive → repaints declaratively as a <path>
-        (p.layer && hiddenLayers.has(p.layer)) ||
-        (p.layer && booleanLayers.has(p.layer));
-      if (hidden) {
-        el.setAttribute("display", "none");
-        continue;
-      }
-      el.removeAttribute("display");
-      // A `<path>` updates its geometry in place (keeps its z-order); primitives keep their
-      // authored geometry until edited (then they're hidden above).
-      if (isPath) el.setAttribute("d", p.edited ? pathToD(p.subpaths) : p.originalD);
-      const style = eff(p);
-      for (const key of STYLE_KEYS) {
-        const v = style[key];
-        if (v == null) el.removeAttribute(key);
-        else el.setAttribute(key, v);
-      }
-    }
-  });
-
-  // Draw imported paths in the model's order so the PATHS list (drag-drop reorder) controls
-  // their z-order. appendChild moves each imported <path> to the end in array order; non-path
-  // siblings (e.g. a background <rect>) keep their place, so reordered paths render above them.
-  // Gated on the order signature so it only touches the DOM when the draw order actually
-  // changes (reordering the DOM on every selection would reset the browser's dblclick count).
-  let lastOrder = "";
-  $effect(() => {
-    const doc = editor.doc;
-    if (!doc || !artworkGroup) return;
-    const imported = doc.paths.filter((p) => !p.added);
-    const order = imported.map((p) => p.index).join(",");
-    if (order === lastOrder) return;
-    lastOrder = order;
-    for (const p of imported) {
-      if (p.deleted) continue;
-      const el = livePaths[p.index];
-      // eslint-disable-next-line svelte/no-dom-manipulating
-      if (el && el.parentNode === artworkGroup) artworkGroup.appendChild(el);
-    }
-  });
 
   // Space to pan, Escape to cancel a drag.
   $effect(() => {
@@ -380,15 +306,33 @@
         {/each}
       </defs>
     {/if}
+    {#snippet renderNode(n: RenderNode)}
+      {#if n.kind === "text"}
+        {n.text}
+      {:else}
+        {@const p = pathByUid.get(n.uid)}
+        {#if p}
+          <!-- editable shape: drawn from the model (live geometry), in true document z-order -->
+          {#if shapeVisible(p)}<path {...eff(p)} d={pathToD(p.subpaths)} />{/if}
+        {:else}
+          <!-- opaque element (g / defs / text / image / …): rendered verbatim from the tree -->
+          <svelte:element this={n.tag} {...n.attrs}>
+            {#each n.children as c, i (i)}{@render renderNode(c)}{/each}
+          </svelte:element>
+        {/if}
+      {/if}
+    {/snippet}
     <g
       class="scene"
       transform={`translate(${viewport.tx} ${viewport.ty}) scale(${viewport.scale})`}
     >
-      <!-- imported artwork: nib fills this imperatively (see the effect) -->
-      <g bind:this={artworkGroup} class="artwork"></g>
-      <!-- drawn paths + edited imported paths/shapes: Svelte-managed, straight from the model -->
+      <!-- imported document: rendered declaratively from the tree in document order -->
+      <g class="artwork">
+        {#each renderTree as n, i (i)}{@render renderNode(n)}{/each}
+      </g>
+      <!-- in-app drawn paths: Svelte-managed, straight from the model (on top) -->
       <g class="drawn">
-        {#each renderPaths as p (p.id)}
+        {#each addedPaths as p (p.id)}
           <path {...eff(p)} d={pathToD(p.subpaths)} />
         {/each}
       </g>

@@ -275,6 +275,20 @@ impl Editor {
     }
 
     /// Current document serialized back to SVG (unedited markup preserved byte-for-byte).
+    /// The document's render tree (the root `<svg>`'s children) — what the canvas draws
+    /// declaratively. Constant per source (edits live in `doc.paths`, pulled reactively), so the
+    /// frontend fetches this once per load, not per mutation.
+    #[wasm_bindgen(js_name = renderTree)]
+    pub fn render_tree(&self) -> Result<JsValue, JsValue> {
+        let nodes = self
+            .tree
+            .as_ref()
+            .map(|t| t.render_children())
+            .unwrap_or_default();
+        let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+        nodes.serialize(&serializer).map_err(Into::into)
+    }
+
     #[wasm_bindgen(js_name = toSvg)]
     pub fn to_svg(&self) -> String {
         match (&self.doc, &self.tree) {

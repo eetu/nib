@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
+use serde::Serialize;
 
 use super::document::STYLE_KEYS;
 use super::path::{parse_path_d, path_to_d_prec};
@@ -600,6 +601,15 @@ fn reconcile_node(node: &mut Node, by_uid: &HashMap<&str, &PathElement>, precisi
 }
 
 impl Tree {
+    /// The root `<svg>`'s children as UI render nodes — what the canvas draws declaratively (the
+    /// svg element itself is the canvas's own viewport, so only its children are rendered).
+    pub fn render_children(&self) -> Vec<RenderNode> {
+        match &self.root {
+            Node::Element { children, .. } => children.iter().filter_map(to_render).collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Project the flat `<path>` view the editor/frontend runs on out of the tree, in document
     /// order — the bridge that lets the `Editor` be tree-backed while the paths UI keeps working.
     /// Every editable shape element (`path`/`rect`/`circle`/… via `shape_subpaths`) becomes a
@@ -622,6 +632,43 @@ impl Tree {
             .map(|p| (p.uid.as_str(), p))
             .collect();
         reconcile_node(&mut self.root, &by_uid, precision);
+    }
+}
+
+/// A UI-facing render node — the tree the canvas draws declaratively. Elements carry their tag +
+/// attrs (as an object) + children + `uid`; text carries its content. Comments / PIs are dropped
+/// (they don't paint). Editable shape elements (matched by `uid` to the live `doc.paths`) are
+/// re-drawn from the model as `<path>`; everything else renders verbatim from these attrs.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum RenderNode {
+    Element {
+        uid: String,
+        tag: String,
+        attrs: IndexMap<String, String>,
+        children: Vec<RenderNode>,
+    },
+    Text {
+        text: String,
+    },
+}
+
+fn to_render(node: &Node) -> Option<RenderNode> {
+    match node {
+        Node::Element {
+            uid,
+            tag,
+            attrs,
+            children,
+            ..
+        } => Some(RenderNode::Element {
+            uid: uid.clone(),
+            tag: tag.clone(),
+            attrs: attrs.iter().cloned().collect(),
+            children: children.iter().filter_map(to_render).collect(),
+        }),
+        Node::Text(s) => Some(RenderNode::Text { text: s.clone() }),
+        Node::Comment(_) | Node::Other(_) => None,
     }
 }
 
