@@ -19,6 +19,10 @@ pub enum Node {
     /// An element: its parsed tag name + attributes (for editing), plus the verbatim open/close
     /// tag text so an unedited node re-emits byte-for-byte. `edited` flips emit to regenerate.
     Element {
+        /// Stable in-memory identity — the address human clicks *and* LLM/MCP ops both use, so
+        /// they hit the same node under concurrent edits (positional paths desync; ids don't).
+        /// Assigned at parse in walk order; never re-derived; not emitted to SVG (pure handle).
+        uid: String,
         tag: String,
         attrs: Vec<(String, String)>,
         original_open: String,
@@ -51,8 +55,9 @@ fn escape_attr(s: &str) -> String {
 
 /// Build a node from a roxmltree node, slicing verbatim spans out of `source`. Children are
 /// walked with gap-filling so any inter-child text (whitespace roxmltree may omit as nodes) is
-/// captured — guaranteeing the slices cover every byte of the element's span.
-fn build(node: roxmltree::Node, source: &str) -> Node {
+/// captured — guaranteeing the slices cover every byte of the element's span. `next_uid` hands
+/// out a fresh stable id per element in walk order.
+fn build(node: roxmltree::Node, source: &str, next_uid: &mut usize) -> Node {
     if node.is_comment() {
         let r = node.range();
         return Node::Comment(source[r].to_string());
@@ -66,6 +71,8 @@ fn build(node: roxmltree::Node, source: &str) -> Node {
         return Node::Other(source[r].to_string());
     }
 
+    let uid = format!("n{}", *next_uid);
+    *next_uid += 1;
     let r = node.range();
     let tag = node.tag_name().name().to_string();
     let attrs: Vec<(String, String)> = node
@@ -78,6 +85,7 @@ fn build(node: roxmltree::Node, source: &str) -> Node {
         // Self-closing (`<path/>`) or empty (`<g></g>`): the whole span is the "open" text and
         // there is no separate close — emitting `original_open` reproduces it exactly.
         return Node::Element {
+            uid,
             tag,
             attrs,
             original_open: source[r.clone()].to_string(),
@@ -99,11 +107,12 @@ fn build(node: roxmltree::Node, source: &str) -> Node {
         if kr.start > cursor {
             children.push(Node::Text(source[cursor..kr.start].to_string())); // gap = whitespace
         }
-        children.push(build(k, source));
+        children.push(build(k, source, next_uid));
         cursor = kr.end;
     }
 
     Node::Element {
+        uid,
         tag,
         attrs,
         original_open,
@@ -123,9 +132,10 @@ pub fn parse_tree(source: &str) -> Result<Tree, String> {
         return Err("no <svg> root element found".to_string());
     }
     let r = root_el.range();
+    let mut next_uid = 0;
     Ok(Tree {
         prolog: source[..r.start].to_string(),
-        root: build(root_el, source),
+        root: build(root_el, source, &mut next_uid),
         epilog: source[r.end..].to_string(),
     })
 }
@@ -153,6 +163,7 @@ fn emit(node: &Node, out: &mut String) {
             original_close,
             children,
             edited,
+            uid: _,
         } => {
             if *edited {
                 out.push_str(&regen_open(tag, attrs, original_close.is_empty()));
@@ -191,6 +202,31 @@ impl Node {
         } else {
             false
         }
+    }
+
+    /// This element's stable uid (`None` for non-element nodes).
+    pub fn uid(&self) -> Option<&str> {
+        match self {
+            Node::Element { uid, .. } => Some(uid),
+            _ => None,
+        }
+    }
+
+    /// Depth-first search for the element with stable id `uid` — the addressing primitive tree
+    /// ops (and the MCP surface) resolve a target through.
+    pub fn find_by_uid_mut(&mut self, uid: &str) -> Option<&mut Node> {
+        let is_match = matches!(self, Node::Element { uid: u, .. } if u == uid);
+        if is_match {
+            return Some(self);
+        }
+        if let Node::Element { children, .. } = self {
+            for c in children {
+                if let Some(found) = c.find_by_uid_mut(uid) {
+                    return Some(found);
+                }
+            }
+        }
+        None
     }
 
     /// Depth-first search for the first element with `id`.
@@ -250,6 +286,44 @@ mod tests {
             })
             .collect();
         assert_eq!(tags, ["rect", "circle", "path", "text"]);
+    }
+
+    #[test]
+    fn every_element_gets_a_unique_stable_uid_not_leaked_to_output() {
+        let src = CORPUS[1]; // icon-group: nested <g> + 3 paths
+        let tree = parse_tree(src).unwrap();
+        // collect all element uids
+        fn walk<'a>(n: &'a Node, out: &mut Vec<&'a str>) {
+            if let Node::Element { uid, children, .. } = n {
+                out.push(uid);
+                for c in children {
+                    walk(c, out);
+                }
+            }
+        }
+        let mut uids = Vec::new();
+        walk(&tree.root, &mut uids);
+        assert!(uids.len() >= 5, "svg + g + 3 paths: {uids:?}");
+        let unique: std::collections::HashSet<_> = uids.iter().collect();
+        assert_eq!(unique.len(), uids.len(), "uids must be unique: {uids:?}");
+        // uids are a pure in-memory handle — never written to the SVG.
+        assert!(
+            !serialize_tree(&tree).contains("n0"),
+            "uid leaked into output"
+        );
+    }
+
+    #[test]
+    fn find_by_uid_resolves_and_edits_the_addressed_node() {
+        let mut tree = parse_tree(CORPUS[1]).unwrap();
+        let uid = tree.root.uid().unwrap().to_string(); // the <svg> root
+        let node = tree
+            .root
+            .find_by_uid_mut(&uid)
+            .expect("resolve root by uid");
+        assert!(node.set_attr("data-x", "1"));
+        assert!(serialize_tree(&tree).contains("data-x=\"1\""));
+        assert!(tree.root.find_by_uid_mut("nonexistent").is_none());
     }
 
     #[test]
