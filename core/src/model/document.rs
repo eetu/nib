@@ -210,6 +210,8 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
         layers: Vec::new(),
         active_layer: None,
         gradients: Vec::new(),
+        // The structural model — parsed from the same source (never fails if the doc parsed).
+        tree: super::tree::parse_tree(source).ok(),
     })
 }
 

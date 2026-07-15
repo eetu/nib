@@ -37,6 +37,9 @@ struct Snapshot {
     layers: Vec<Layer>,
     active_layer: Option<String>,
     gradients: Vec<Gradient>,
+    /// The structural tree — captured so undo/redo restore structural edits (group/reorder/…),
+    /// not just geometry.
+    tree: Option<Tree>,
     selection: Option<NodeRef>,
     selected_path: Option<usize>,
 }
@@ -45,10 +48,6 @@ struct Snapshot {
 #[wasm_bindgen]
 pub struct Editor {
     doc: Option<SvgDocument>,
-    /// The document's full-element tree, parsed once from the source — the **constant base** for
-    /// serialization. Edits live in `doc.paths` (the working model); `to_svg` reconciles them onto
-    /// a clone of this tree, so non-`<path>` structure + edited primitives export correctly.
-    tree: Option<Tree>,
     selection: Option<NodeRef>,
     selected_path: Option<usize>,
     dirty: bool,
@@ -64,6 +63,7 @@ impl Editor {
             layers: doc.map(|d| d.layers.clone()).unwrap_or_default(),
             active_layer: doc.and_then(|d| d.active_layer.clone()),
             gradients: doc.map(|d| d.gradients.clone()).unwrap_or_default(),
+            tree: doc.and_then(|d| d.tree.clone()),
             selection: self.selection,
             selected_path: self.selected_path,
         }
@@ -75,6 +75,7 @@ impl Editor {
             doc.layers = snap.layers.clone();
             doc.active_layer = snap.active_layer.clone();
             doc.gradients = snap.gradients.clone();
+            doc.tree = snap.tree.clone();
         }
         self.selection = snap.selection;
         self.selected_path = snap.selected_path;
@@ -84,12 +85,12 @@ impl Editor {
     /// so a failed edit in the SOURCE drawer leaves the current doc intact.
     pub fn load_source(&mut self, source: &str) -> Result<(), String> {
         let mut doc = parse_svg(source)?;
-        let tree = parse_tree(source)?;
         // The model's paths come from the tree projection — so imported primitives (rect/circle/
         // …) are editable paths, and each carries the `uid` linking it back to its tree node.
-        doc.paths = tree.project_paths();
+        if let Some(tree) = &doc.tree {
+            doc.paths = tree.project_paths();
+        }
         self.doc = Some(doc);
-        self.tree = Some(tree);
         self.selection = None;
         self.selected_path = None;
         self.dirty = false;
@@ -146,7 +147,6 @@ impl Editor {
     pub fn new() -> Editor {
         Editor {
             doc: None,
-            tree: None,
             selection: None,
             selected_path: None,
             dirty: false,
@@ -170,7 +170,6 @@ impl Editor {
 
     pub fn clear(&mut self) {
         self.doc = None;
-        self.tree = None;
         self.selection = None;
         self.selected_path = None;
         self.dirty = false;
@@ -179,6 +178,7 @@ impl Editor {
             layers: Vec::new(),
             active_layer: None,
             gradients: Vec::new(),
+            tree: None,
             selection: None,
             selected_path: None,
         });
@@ -188,10 +188,12 @@ impl Editor {
     /// persisted session, which stores the *edited* model, not just the source string.
     #[wasm_bindgen(js_name = setDocument)]
     pub fn set_document(&mut self, doc: JsValue) -> Result<(), JsValue> {
-        let doc: SvgDocument = serde_wasm_bindgen::from_value(doc)?;
-        // Rebuild the constant base tree from the persisted source — its uids match the persisted
-        // paths' uids (walk order is deterministic), so reconcile on export lines up.
-        self.tree = parse_tree(&doc.source).ok();
+        let mut doc: SvgDocument = serde_wasm_bindgen::from_value(doc)?;
+        // A persisted session carries its structural tree; an older one (or a doc set without a
+        // tree) rebuilds it from the source — deterministic uids line the projection back up.
+        if doc.tree.is_none() {
+            doc.tree = parse_tree(&doc.source).ok();
+        }
         self.doc = Some(doc);
         self.selection = None;
         self.selected_path = None;
@@ -274,30 +276,33 @@ impl Editor {
         self.dirty = false;
     }
 
-    /// Current document serialized back to SVG (unedited markup preserved byte-for-byte).
     /// The document's render tree (the root `<svg>`'s children) — what the canvas draws
-    /// declaratively. Constant per source (edits live in `doc.paths`, pulled reactively), so the
-    /// frontend fetches this once per load, not per mutation.
+    /// declaratively. The frontend fetches this per source change; edits pull live geometry from
+    /// `doc.paths` by uid, structural ops re-fetch it.
     #[wasm_bindgen(js_name = renderTree)]
     pub fn render_tree(&self) -> Result<JsValue, JsValue> {
         let nodes = self
-            .tree
+            .doc
             .as_ref()
+            .and_then(|d| d.tree.as_ref())
             .map(|t| t.render_children())
             .unwrap_or_default();
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
         nodes.serialize(&serializer).map_err(Into::into)
     }
 
+    /// Current document serialized back to SVG (unedited markup preserved byte-for-byte).
     #[wasm_bindgen(js_name = toSvg)]
     pub fn to_svg(&self) -> String {
-        match (&self.doc, &self.tree) {
-            // Tree-backed serialize (Phase E): reconcile edits onto the parsed tree — preserves
-            // non-path structure + exports edited primitives as `<path>`.
-            (Some(doc), Some(tree)) => serialize_via_tree(doc, tree, 3),
-            // Fallback (no tree, e.g. a doc set without source): the flat splice serializer.
-            (Some(doc), None) => serialize_svg(doc),
-            _ => String::new(),
+        match &self.doc {
+            Some(doc) => match &doc.tree {
+                // Tree-backed serialize (Phase E): reconcile edits onto the structural tree —
+                // preserves non-path structure + exports edited primitives as `<path>`.
+                Some(tree) => serialize_via_tree(doc, tree, 3),
+                // Fallback (no tree, e.g. a doc set without source): the flat splice serializer.
+                None => serialize_svg(doc),
+            },
+            None => String::new(),
         }
     }
 

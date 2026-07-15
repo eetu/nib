@@ -1102,6 +1102,7 @@ mod tests {
             layers: Vec::new(),
             active_layer: None,
             gradients: Vec::new(),
+            tree: None,
         }
     }
 

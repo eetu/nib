@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::document::STYLE_KEYS;
 use super::path::{parse_path_d, path_to_d_prec};
@@ -292,8 +292,9 @@ fn refit(tag: &str, subpaths: &[Subpath], precision: usize) -> Option<Vec<(Strin
     }
 }
 
-/// One node in the document tree.
-#[derive(Debug, Clone, PartialEq)]
+/// One node in the document tree. Serde round-trips it for persistence (localStorage) + the
+/// undo Snapshot — the tree is the mutable structural model, not a derived view.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Node {
     /// An element: its parsed tag name + attributes (for editing), plus the verbatim open/close
     /// tag text so an unedited node re-emits byte-for-byte. `edited` flips emit to regenerate.
@@ -319,7 +320,7 @@ pub enum Node {
 
 /// A parsed document: the root `<svg>` element plus the exact text around it (XML declaration,
 /// doctype, comments, trailing whitespace) so the whole file round-trips, not just the root.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tree {
     pub prolog: String,
     pub root: Node,

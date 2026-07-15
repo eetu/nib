@@ -217,6 +217,14 @@ pub struct SvgDocument {
     /// Gradient paints, injected into a `<defs>` on export (empty = none).
     #[serde(default)]
     pub gradients: Vec<Gradient>,
+    /// The full-document node tree (Phase E): the **mutable structural model** — nesting, order,
+    /// groups, and every element (editable shapes reference `paths` by `uid`). Serialization +
+    /// the canvas render tree derive from it; structural ops mutate it. In-memory only for now
+    /// (`skip`): it stays off the per-frame `state()` payload, and rebuilds from `source` on load
+    /// — fine until structural ops make it diverge from the source (then it needs real
+    /// persistence). Held live through the undo Snapshot regardless.
+    #[serde(skip)]
+    pub tree: Option<crate::model::tree::Tree>,
 }
 
 /// Addresses one anchor node inside the document — the unit of selection and the identity a
