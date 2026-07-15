@@ -189,7 +189,8 @@ pub enum Op {
     /// Merge paths into one **compound path** (`id`) holding all their subpaths in draw order —
     /// the inputs are soft-deleted. Unlike `BooleanOp` this keeps the subpaths distinct (no
     /// geometry merge), so a line + a detached dome become one editable element. Inherits the
-    /// lowest-index subject's style + group.
+    /// style + group of the backmost member that actually fills (so a filled shape + a
+    /// stroke-only one keeps the fill, not the stroke-only member's `fill="none"`).
     CombinePaths { paths: Vec<usize>, id: String },
     /// Release a compound path: soft-delete it and add one path per subpath (`ids`, one per
     /// subpath) so each becomes independently styleable. Inherits the source's style + group.
@@ -724,7 +725,26 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             if subpaths.is_empty() {
                 return false;
             }
-            let first = &doc.paths[idxs[0]];
+            // Base the compound's paint on the backmost member that actually fills — so
+            // combining a filled shape with a stroke-only one (fill="none") keeps the fill
+            // instead of inheriting the stroke-only member's no-fill. Falls back to backmost.
+            let base = idxs
+                .iter()
+                .copied()
+                .find(|&i| {
+                    let p = &doc.paths[i];
+                    let fill = p
+                        .style_override
+                        .as_ref()
+                        .and_then(|s| s.get("fill"))
+                        .or_else(|| p.attributes.as_ref().and_then(|a| a.get("fill")));
+                    match fill {
+                        Some(f) => f.as_str() != "none",
+                        None => true, // no fill attr → SVG default is filled
+                    }
+                })
+                .unwrap_or(idxs[0]);
+            let first = &doc.paths[base];
             let mut attributes = first.attributes.clone().unwrap_or_default();
             if let Some(so) = &first.style_override {
                 for (k, v) in so {
@@ -1339,6 +1359,49 @@ mod tests {
         assert_eq!(compound.id, "compound");
         assert_eq!(compound.subpaths.len(), 2); // line + dome, kept distinct
         assert!(compound.added && !compound.deleted);
+    }
+
+    #[test]
+    fn combine_inherits_fill_from_a_filled_member_not_a_stroke_only_one() {
+        let mut doc = doc_from("M 0 0 L 10 0", false);
+        let mut rim_attrs = IndexMap::new();
+        rim_attrs.insert("fill".to_string(), "none".to_string()); // stroke-only (backmost)
+        rim_attrs.insert("stroke".to_string(), "#000".to_string());
+        apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "rim".into(),
+                subpaths: parse_path_d("M 0 5 Q 5 8 10 5"),
+                attributes: rim_attrs,
+            },
+        );
+        let mut dome_attrs = IndexMap::new();
+        dome_attrs.insert("fill".to_string(), "#808000".to_string()); // filled (front)
+        apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "dome".into(),
+                subpaths: parse_path_d("M 0 0 L 10 0 L 10 10 Z"),
+                attributes: dome_attrs,
+            },
+        );
+        // rim (index 1) is backmost but fill="none"; dome (index 2) fills → compound keeps the fill.
+        assert!(apply(
+            &mut doc,
+            &Op::CombinePaths {
+                paths: vec![1, 2],
+                id: "compound".into(),
+            }
+        ));
+        let compound = doc.paths.last().unwrap();
+        assert_eq!(
+            compound
+                .attributes
+                .as_ref()
+                .and_then(|a| a.get("fill"))
+                .map(|s| s.as_str()),
+            Some("#808000"),
+        );
     }
 
     #[test]
