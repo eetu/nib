@@ -15,6 +15,9 @@
   let ta = $state<HTMLTextAreaElement>();
 
   const source = $derived(editor.hasDocument ? editor.toSvg() : "");
+  // SVG can't express a live boolean, so the source shows it baked to a static <path>. Editing
+  // + applying re-parses (flattening any live booleans to plain groups) — flag that.
+  const hasLiveBooleans = $derived(editor.booleanResults.length > 0);
 
   // Mirror the live source into the editor until the user starts typing; once
   // dirty, their draft is preserved until they apply or revert.
@@ -127,6 +130,11 @@
   {#if expanded}
     <textarea class="src" bind:this={ta} value={draft} oninput={onInput} spellcheck="false"
     ></textarea>
+    {#if hasLiveBooleans}
+      <p class="note" class:warn={dirty}>
+        live booleans are baked to static paths here — applying edited source flattens them.
+      </p>
+    {/if}
     {#if error}<p class="error">{error}</p>{/if}
   {/if}
 </div>
@@ -213,5 +221,17 @@
     background: var(--halo-accent-soft);
     color: var(--halo-error);
     font-size: 12px;
+  }
+
+  .note {
+    margin: 0;
+    padding: 6px 12px;
+    color: var(--halo-text-muted);
+    font-size: 11px;
+  }
+
+  .note.warn {
+    background: var(--halo-accent-soft);
+    color: var(--halo-accent);
   }
 </style>

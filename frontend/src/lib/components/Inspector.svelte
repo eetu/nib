@@ -215,16 +215,27 @@
     };
   }
 
+  const BOOL_GLYPH: Record<string, string> = {
+    union: "∪",
+    subtract: "−",
+    intersect: "∩",
+    exclude: "⊕",
+  };
+
   function openGroupMenu(e: MouseEvent, id: string, name: string) {
     e.preventDefault();
-    menu = {
-      x: e.clientX,
-      y: e.clientY,
-      items: [
-        { label: "rename", run: () => startLayerRename(id, name) },
-        { label: "ungroup", run: () => editor.ungroup(id) },
-      ],
-    };
+    const layer = doc?.layers?.find((l) => l.id === id);
+    const items: Menu["items"] = [{ label: "rename", run: () => startLayerRename(id, name) }];
+    if (layer?.booleanOp) {
+      // A live boolean group: switch the op, or flatten it back to a plain group.
+      for (const op of ["union", "subtract", "intersect", "exclude"] as const) {
+        const mark = layer.booleanOp === op ? "• " : "";
+        items.push({ label: `${mark}${op}`, run: () => editor.setLayerBoolean(id, op) });
+      }
+      items.push({ label: "flatten (plain group)", run: () => editor.setLayerBoolean(id, null) });
+    }
+    items.push({ label: "ungroup", run: () => editor.ungroup(id) });
+    menu = { x: e.clientX, y: e.clientY, items };
   }
 
   // A path's thumbnail fill/stroke: use its hex fill if any, else outline it in the accent.
@@ -650,6 +661,11 @@
                 >
                   {row.layer.name}
                 </button>
+                {#if row.layer.booleanOp}
+                  <span class="bool-badge" title="live boolean: {row.layer.booleanOp}"
+                    >{BOOL_GLYPH[row.layer.booleanOp]}</span
+                  >
+                {/if}
               {/if}
               <button
                 class="eye"
@@ -1039,6 +1055,21 @@
 
   li.active .lname {
     color: var(--halo-accent);
+  }
+
+  /* live-boolean badge on a group header */
+  .bool-badge {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: var(--halo-radius);
+    background: var(--halo-accent-soft);
+    color: var(--halo-accent);
+    font-size: 11px;
+    line-height: 1;
   }
 
   /* align / distribute icon buttons */
