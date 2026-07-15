@@ -23,7 +23,7 @@ pub mod snap;
 use history::History;
 use model::document::{parse_svg, serialize_svg, serialize_via_tree, tree_boolean_results};
 use model::tree::{Tree, parse_tree};
-use model::types::{Gradient, Layer, NodeRef, PathElement, Subpath, SvgDocument};
+use model::types::{Gradient, NodeRef, PathElement, Subpath, SvgDocument};
 use ops::Op;
 
 const BLANK_SVG: &str =
@@ -34,8 +34,6 @@ const BLANK_SVG: &str =
 #[derive(Clone)]
 struct Snapshot {
     paths: Vec<PathElement>,
-    layers: Vec<Layer>,
-    active_layer: Option<String>,
     gradients: Vec<Gradient>,
     /// The structural tree — captured so undo/redo restore structural edits (group/reorder/…),
     /// not just geometry.
@@ -60,8 +58,6 @@ impl Editor {
         let doc = self.doc.as_ref();
         Snapshot {
             paths: doc.map(|d| d.paths.clone()).unwrap_or_default(),
-            layers: doc.map(|d| d.layers.clone()).unwrap_or_default(),
-            active_layer: doc.and_then(|d| d.active_layer.clone()),
             gradients: doc.map(|d| d.gradients.clone()).unwrap_or_default(),
             tree: doc.and_then(|d| d.tree.clone()),
             selection: self.selection,
@@ -72,8 +68,6 @@ impl Editor {
     fn restore(&mut self, snap: &Snapshot) {
         if let Some(doc) = self.doc.as_mut() {
             doc.paths = snap.paths.clone();
-            doc.layers = snap.layers.clone();
-            doc.active_layer = snap.active_layer.clone();
             doc.gradients = snap.gradients.clone();
             doc.tree = snap.tree.clone();
         }
@@ -175,8 +169,6 @@ impl Editor {
         self.dirty = false;
         self.history.reset(Snapshot {
             paths: Vec::new(),
-            layers: Vec::new(),
-            active_layer: None,
             gradients: Vec::new(),
             tree: None,
             selection: None,

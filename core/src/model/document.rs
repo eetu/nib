@@ -10,7 +10,7 @@ use kurbo::{BezPath, Shape};
 
 use super::path::{parse_path_d, path_to_d_prec};
 use super::tree::{Node, Tree, serialize_tree_prec};
-use super::types::{Gradient, Layer, PathElement, Subpath, SvgDocument, ViewBox};
+use super::types::{Gradient, PathElement, Subpath, SvgDocument, ViewBox};
 
 const DEFAULT_VIEWBOX: ViewBox = ViewBox {
     min_x: 0.0,
@@ -196,7 +196,6 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
                 style_override: None,
                 deleted: false,
                 renamed: false,
-                layer: None,
                 hidden: false,
             }
         })
@@ -207,8 +206,6 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
         source: source.to_string(),
         view_box,
         paths,
-        layers: Vec::new(),
-        active_layer: None,
         gradients: Vec::new(),
         // The structural model — parsed from the same source (never fails if the doc parsed).
         tree: super::tree::parse_tree(source).ok(),
@@ -312,18 +309,6 @@ fn insert_attr(tag: &str, key: &str, value: &str) -> String {
     out
 }
 
-fn attrs_to_string(attrs: Option<&IndexMap<String, String>>) -> String {
-    match attrs {
-        None => String::new(),
-        Some(m) => m.iter().map(|(k, v)| format!(" {k}=\"{v}\"")).collect(),
-    }
-}
-
-/// A drawn path is exportable if it has real geometry.
-fn is_exportable_drawn(p: &PathElement) -> bool {
-    p.added && !p.deleted && p.subpaths.iter().any(|sp| sp.nodes.len() >= 2)
-}
-
 /// A path element's effective style — its `attributes` with any `style_override` merged over.
 pub fn effective_style(p: &PathElement) -> IndexMap<String, String> {
     let mut m = p.attributes.clone().unwrap_or_default();
@@ -353,30 +338,6 @@ fn boolean_subject<'a>(members: &[&'a PathElement]) -> Option<&'a PathElement> {
         })
         .or_else(|| members.first())
         .copied()
-}
-
-/// Live members (operands) of a boolean group, in draw (array) order — excludes deleted paths.
-pub fn boolean_members<'a>(doc: &'a SvgDocument, layer_id: &str) -> Vec<&'a PathElement> {
-    doc.paths
-        .iter()
-        .filter(|p| !p.deleted && p.layer.as_deref() == Some(layer_id))
-        .collect()
-}
-
-/// Compute a live boolean group's result: `(computed subpaths, subject effective style)`.
-/// `None` if the layer isn't a boolean group or the boolean can't be formed (< 2 operands /
-/// empty geometry) — callers then fall back to rendering/exporting the members directly.
-pub fn boolean_group_result(
-    doc: &SvgDocument,
-    layer: &Layer,
-) -> Option<(Vec<Subpath>, IndexMap<String, String>)> {
-    let op = layer.boolean_op.as_deref()?;
-    let members = boolean_members(doc, &layer.id);
-    let subpaths = crate::model::booleans::boolean(op, &members)?;
-    let style = boolean_subject(&members)
-        .map(effective_style)
-        .unwrap_or_default();
-    Some((subpaths, style))
 }
 
 /// Every live-boolean group's rendered result, computed from the **live** `doc.paths` geometry:
@@ -451,109 +412,17 @@ fn collect_boolean_results(
     }
 }
 
-/// Serialize one drawn `<path …>` (indented). `indent` is the leading whitespace.
-fn drawn_path_tag(p: &PathElement, precision: usize, indent: &str) -> String {
-    let id = if p.renamed {
-        format!(" id=\"{}\"", p.id)
-    } else {
-        String::new()
-    };
-    let hidden = if p.hidden { " display=\"none\"" } else { "" };
-    format!(
-        "{}<path{}{} d=\"{}\"{} />",
-        indent,
-        id,
-        hidden,
-        path_to_d_prec(&p.subpaths, precision),
-        attrs_to_string(p.attributes.as_ref())
-    )
+/// A path is hidden (exports `display="none"`) if its per-path toggle is set. Group visibility now
+/// lives on the tree (`Node.hidden`), so the flat splice only needs the per-path flag.
+fn path_hidden(p: &PathElement) -> bool {
+    p.hidden
 }
 
-/// Escape a string for use inside a double-quoted XML attribute value.
+/// Escape a string for use inside a double-quoted XML attribute value (gradient defs injection).
 fn escape_attr(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('"', "&quot;")
-}
-
-/// Insert in-app-drawn paths (no source location) just before the closing `</svg>`, in draw
-/// (array) order — so the PATHS/layers panel z-order matches the export. A contiguous run of
-/// paths sharing a group id is wrapped in `<g id="name">` (a hidden group's `<g>` carries
-/// `display="none"`); loose paths emit bare. Members are kept contiguous by GroupPaths.
-fn append_drawn_paths(out: &str, doc: &SvgDocument, precision: usize) -> String {
-    let drawn: Vec<&PathElement> = doc
-        .paths
-        .iter()
-        .filter(|p| is_exportable_drawn(p))
-        .collect();
-    let mut parts: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < drawn.len() {
-        let group = drawn[i]
-            .layer
-            .as_deref()
-            .and_then(|id| doc.layers.iter().find(|l| l.id == id));
-        if let Some(layer) = group {
-            let start = i;
-            while i < drawn.len() && drawn[i].layer.as_deref() == Some(layer.id.as_str()) {
-                i += 1;
-            }
-            let hidden = if layer.visible {
-                ""
-            } else {
-                " display=\"none\""
-            };
-            // A live boolean group bakes to ONE computed <path> (operands aren't emitted) —
-            // SVG can't express the live op, so export renders correctly everywhere; the
-            // liveness lives in nib's model. A plain group emits its members.
-            let inner = match boolean_group_result(doc, layer) {
-                Some((subpaths, style)) => {
-                    let attrs: String =
-                        style.iter().map(|(k, v)| format!(" {k}=\"{v}\"")).collect();
-                    format!(
-                        "    <path d=\"{}\"{} />",
-                        path_to_d_prec(&subpaths, precision),
-                        attrs
-                    )
-                }
-                None => drawn[start..i]
-                    .iter()
-                    .map(|p| drawn_path_tag(p, precision, "    "))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            };
-            parts.push(format!(
-                "  <g id=\"{}\"{}>\n{}\n  </g>",
-                escape_attr(&layer.name),
-                hidden,
-                inner
-            ));
-        } else {
-            parts.push(drawn_path_tag(drawn[i], precision, "  "));
-            i += 1;
-        }
-    }
-    let block = parts.join("\n");
-    if block.is_empty() {
-        return out.to_string();
-    }
-    match out.rfind("</svg>") {
-        Some(close) => format!("{}{}\n{}", &out[..close], block, &out[close..]),
-        None => format!("{out}\n{block}"),
-    }
-}
-
-/// Whether an imported path sits on a hidden layer (so it exports with `display="none"`).
-fn on_hidden_layer(doc: &SvgDocument, p: &PathElement) -> bool {
-    p.layer
-        .as_deref()
-        .and_then(|id| doc.layers.iter().find(|l| l.id == id))
-        .is_some_and(|l| !l.visible)
-}
-
-/// A path is hidden if toggled off directly or its group is hidden.
-fn path_hidden(doc: &SvgDocument, p: &PathElement) -> bool {
-    p.hidden || on_hidden_layer(doc, p)
 }
 
 /// One gradient as a `<linearGradient>` / `<radialGradient>` element.
@@ -732,14 +601,13 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
         if !slot.deleted && oi < ordered.len() {
             let p = ordered[oi];
             oi += 1;
-            out.push_str(&edited_tag(p, precision, path_hidden(doc, p)));
+            out.push_str(&edited_tag(p, precision, path_hidden(p)));
         }
         // a deleted slot drops its tag (emits only the preceding span)
         cursor = end;
     }
     out.push_str(&src[cursor..]);
-    let with_drawn = append_drawn_paths(&out, doc, precision);
-    let with_defs = inject_defs(&with_drawn, doc);
+    let with_defs = inject_defs(&out, doc);
     let evb = export_view_box(doc);
     if evb != doc.view_box {
         rewrite_svg_viewbox(&with_defs, evb)
@@ -773,9 +641,9 @@ pub fn serialize_via_tree(doc: &SvgDocument, base: &Tree, precision: usize) -> S
 mod tests {
     use super::*;
     use crate::model::path::parse_path_d;
-    use crate::model::types::{Layer, Point};
+    use crate::model::types::Point;
 
-    fn drawn_on_layer(id: &str, layer: &str) -> PathElement {
+    fn drawn(id: &str) -> PathElement {
         PathElement {
             id: id.to_string(),
             uid: String::new(),
@@ -789,7 +657,6 @@ mod tests {
             original_tag: None,
             deleted: false,
             renamed: false,
-            layer: Some(layer.to_string()),
             hidden: false,
         }
     }
@@ -904,103 +771,6 @@ mod tests {
     }
 
     #[test]
-    fn drawn_paths_group_into_layer_g_elements_and_honor_visibility() {
-        let mut doc =
-            parse_svg("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n</svg>")
-                .unwrap();
-        doc.layers.push(Layer {
-            id: "L1".into(),
-            name: "outline".into(),
-            visible: true,
-            boolean_op: None,
-        });
-        doc.paths.push(drawn_on_layer("s1", "L1"));
-        let out = serialize_svg(&doc);
-        assert!(out.contains(r#"<g id="outline">"#), "grouped: {out}");
-        assert!(out.contains("<path"));
-        assert!(out.contains("</g>"));
-
-        // Hiding the layer stamps display:none on its group.
-        doc.layers[0].visible = false;
-        let out2 = serialize_svg(&doc);
-        assert!(
-            out2.contains(r#"<g id="outline" display="none">"#),
-            "hidden: {out2}"
-        );
-    }
-
-    #[test]
-    fn live_boolean_group_bakes_to_one_computed_path_on_export() {
-        let mut doc =
-            parse_svg("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n</svg>")
-                .unwrap();
-        doc.layers.push(Layer {
-            id: "B1".into(),
-            name: "cut".into(),
-            visible: true,
-            boolean_op: Some("subtract".into()),
-        });
-        // Two overlapping filled squares as operands (subject minus cutter).
-        let mut subject = drawn_on_layer("subject", "B1");
-        subject.subpaths = parse_path_d("M 0 0 L 60 0 L 60 60 L 0 60 Z");
-        let mut fill = IndexMap::new();
-        fill.insert("fill".to_string(), "#3b82f6".to_string());
-        subject.attributes = Some(fill);
-        let mut cutter = drawn_on_layer("cutter", "B1");
-        cutter.subpaths = parse_path_d("M 40 40 L 100 40 L 100 100 L 40 100 Z");
-        doc.paths.push(subject);
-        doc.paths.push(cutter);
-
-        let out = serialize_svg(&doc);
-        assert!(out.contains(r#"<g id="cut">"#), "grouped: {out}");
-        // Exactly one baked path inside the group (operands are not emitted), carrying the
-        // subject's fill.
-        assert_eq!(out.matches("<path").count(), 1, "one baked path: {out}");
-        assert!(
-            out.contains(r##"fill="#3b82f6""##),
-            "subject fill kept: {out}"
-        );
-
-        // The computed result exists (subtract of two 60×60 squares overlapping in a corner).
-        let (subpaths, _) = boolean_group_result(&doc, &doc.layers[0]).expect("result");
-        assert!(!subpaths.is_empty());
-    }
-
-    #[test]
-    fn boolean_group_with_one_operand_falls_back_to_emitting_members() {
-        let mut doc =
-            parse_svg("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n</svg>")
-                .unwrap();
-        doc.layers.push(Layer {
-            id: "B1".into(),
-            name: "cut".into(),
-            visible: true,
-            boolean_op: Some("subtract".into()),
-        });
-        doc.paths.push(drawn_on_layer("only", "B1")); // < 2 operands → no boolean
-        assert!(boolean_group_result(&doc, &doc.layers[0]).is_none());
-        let out = serialize_svg(&doc);
-        assert!(out.contains(r#"<g id="cut">"#), "still a group: {out}");
-        assert_eq!(out.matches("<path").count(), 1); // the lone member emitted directly
-    }
-
-    #[test]
-    fn imported_path_on_a_hidden_layer_gets_display_none() {
-        let mut doc = parse_svg(SAMPLE).unwrap();
-        doc.layers.push(Layer {
-            id: "L1".into(),
-            name: "hidden".into(),
-            visible: false,
-            boolean_op: None,
-        });
-        doc.paths[0].layer = Some("L1".into());
-        let out = serialize_svg(&doc);
-        assert!(out.contains("display=\"none\""), "{out}");
-        // The other path (no layer) is untouched.
-        assert!(out.contains(r#"<path d="M 20 20 L 80 80" stroke="red"/>"#));
-    }
-
-    #[test]
     fn reordering_imported_paths_swaps_their_export_positions() {
         let mut doc = parse_svg(SAMPLE).unwrap();
         // No reorder → byte-for-byte.
@@ -1022,8 +792,7 @@ mod tests {
         let mut doc =
             parse_svg("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n</svg>")
                 .unwrap();
-        let mut p = drawn_on_layer("s1", "x");
-        p.layer = None;
+        let mut p = drawn("s1");
         p.subpaths = parse_path_d("M 120 120 L 180 120 L 180 180 Z");
         doc.paths.push(p);
         let out = serialize_svg(&doc);
@@ -1031,13 +800,6 @@ mod tests {
         // content within the viewBox leaves it byte-for-byte
         let within = parse_svg(SAMPLE).unwrap();
         assert!(serialize_svg(&within).contains(r#"viewBox="0 0 100 100""#));
-    }
-
-    #[test]
-    fn empty_layers_keep_byte_for_byte_preservation() {
-        let doc = parse_svg(SAMPLE).unwrap();
-        assert!(doc.layers.is_empty());
-        assert_eq!(serialize_svg(&doc), SAMPLE);
     }
 
     #[test]

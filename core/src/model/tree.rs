@@ -509,7 +509,6 @@ fn node_operands(children: &[Node]) -> Vec<PathElement> {
                 original_tag: None,
                 deleted: false,
                 renamed: false,
-                layer: None,
                 hidden: false,
             }),
             _ => None,
@@ -689,7 +688,6 @@ fn collect_paths(node: &Node, out: &mut Vec<PathElement>) {
             style_override: None,
             deleted: false,
             renamed: false,
-            layer: None,
             hidden: false,
         });
     }

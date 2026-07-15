@@ -142,7 +142,6 @@ mod tests {
             original_tag: None,
             deleted: false,
             renamed: false,
-            layer: None,
             hidden: false,
         }
     }

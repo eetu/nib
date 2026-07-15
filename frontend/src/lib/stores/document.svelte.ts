@@ -4,7 +4,6 @@ import { tightBounds } from "$lib/model/geometry";
 import type {
   BooleanResult,
   Gradient,
-  Layer,
   NodeRef,
   NodeType,
   PathElement,
@@ -572,64 +571,7 @@ class DocumentStore {
     this.commit();
   }
 
-  // --- layers ------------------------------------------------------------
-
-  get layers(): Layer[] {
-    return this.doc?.layers ?? [];
-  }
-  get activeLayer(): string | null {
-    return this.doc?.activeLayer ?? null;
-  }
-
-  /** Create a layer (auto-id) and make it active. */
-  addLayer(name: string): void {
-    const id = crypto.randomUUID();
-    if (this.#apply({ type: "addLayer", id, name })) this.commit();
-  }
-  renameLayer(id: string, name: string): void {
-    if (this.#apply({ type: "renameLayer", id, name })) this.commit();
-  }
-  deleteLayer(id: string): void {
-    if (this.#apply({ type: "deleteLayer", id })) this.commit();
-  }
-  setLayerVisible(id: string, visible: boolean): void {
-    if (this.#apply({ type: "setLayerVisible", id, visible })) this.commit();
-  }
-  reorderLayer(id: string, to: number): void {
-    if (this.#apply({ type: "reorderLayer", id, to })) this.commit();
-  }
-  setActiveLayer(id: string | null): void {
-    if (this.#apply({ type: "setActiveLayer", id: id ?? undefined })) this.commit();
-  }
-  /** Assign a path (or the whole current object selection) to a layer (`null` = unassign). */
-  setPathLayer(pathIndex: number, layer: string | null): void {
-    if (this.#apply({ type: "setPathLayer", path: pathIndex, layer: layer ?? undefined }))
-      this.commit();
-  }
-
-  /** Group the current object selection into a new named group (a `<g>`), pulled contiguous. */
-  groupSelection(name: string): void {
-    const sel = [...this.selectedPaths].sort((a, b) => a - b);
-    if (sel.length === 0) return;
-    const id = crypto.randomUUID();
-    if (this.#apply({ type: "groupPaths", paths: sel, id, name })) {
-      this.commit();
-      const start = sel[0];
-      this.selectedPaths = sel.map((_, k) => start + k); // the now-contiguous block
-      this.#persist();
-    }
-  }
-
-  /** Dissolve a group — its paths become top level (the geometry is untouched). */
-  ungroup(layerId: string): void {
-    this.deleteLayer(layerId);
-  }
-
-  /** Layer ids that are live boolean groups — their members are operands (the canvas renders
-   *  the computed result instead of the members' own fills). */
-  get booleanLayerIds(): Set<string> {
-    return new Set((this.doc?.layers ?? []).filter((l) => l.booleanOp).map((l) => l.id));
-  }
+  // --- groups + live booleans -------------------------------------------
 
   /** Wrap the current object selection into a new **live boolean** group (non-destructive:
    *  the members stay editable operands; the group renders the computed boolean, recomputed as
@@ -649,24 +591,9 @@ class DocumentStore {
     }
   }
 
-  /** Change (or clear, `null`) the live-boolean op on an existing group — flip union↔subtract,
-   *  or flatten a boolean back to a plain group. */
-  setLayerBoolean(layer: string, op: "union" | "subtract" | "intersect" | "exclude" | null): void {
-    if (this.#apply({ type: "setLayerBoolean", layer, op: op ?? undefined })) this.commit();
-  }
-
   /** Show/hide a single path. */
   setPathHidden(pathIndex: number, hidden: boolean): void {
     if (this.#apply({ type: "setPathHidden", path: pathIndex, hidden })) this.commit();
-  }
-  /** Move every selected path onto a layer (one undo step). */
-  assignSelectionToLayer(layer: string | null): void {
-    if (this.selectedPaths.length === 0) return;
-    let changed = false;
-    for (const i of this.selectedPaths)
-      changed =
-        this.#apply({ type: "setPathLayer", path: i, layer: layer ?? undefined }) || changed;
-    if (changed) this.commit();
   }
 
   // --- gradients ---------------------------------------------------------

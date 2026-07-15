@@ -17,7 +17,7 @@ use crate::model::geometry::{distance, normalize};
 use crate::model::path::{close_subpath, insert_node_at, reversed_subpath};
 use crate::model::shapes::{ellipse_nodes, line_nodes, polygon_nodes, rect_nodes, star_nodes};
 use crate::model::types::{
-    Gradient, Layer, NodeRef, NodeType, PathElement, PathNode, Point, Subpath, SvgDocument,
+    Gradient, NodeRef, NodeType, PathElement, PathNode, Point, Subpath, SvgDocument,
 };
 
 /// Which control handle of a node an op targets.
@@ -172,33 +172,9 @@ pub enum Op {
     ReorderPath { from: usize, to: usize },
     /// Show/hide a single path.
     SetPathHidden { path: usize, hidden: bool },
-    /// Group paths into a new named group (a `<g>`): create the group (active), assign the
-    /// given paths to it, and pull them into a contiguous block at the lowest member's slot.
-    GroupPaths {
-        paths: Vec<usize>,
-        id: String,
-        name: String,
-    },
-    /// Wrap paths into a new **live boolean** group (`op` = union/subtract/intersect/exclude):
-    /// like `GroupPaths` but the group renders/exports the *computed* boolean of its members
-    /// (which stay editable operands), recomputed live as they change. Non-destructive.
-    BooleanGroup {
-        op: String,
-        paths: Vec<usize>,
-        id: String,
-        name: String,
-    },
-    /// Set (`Some`) or clear (`None`) the live-boolean op on an existing group — turning a plain
-    /// group into a live boolean, changing the operation, or flattening it back to a plain group.
-    SetLayerBoolean {
-        layer: String,
-        #[serde(skip_serializing_if = "Option::is_none", default)]
-        op: Option<String>,
-    },
     /// Show/hide any node in the document **tree** by its stable `uid` — a group, an opaque
     /// element, or a shape, at any depth (structural op). Exports as `display="none"`, skipped in
-    /// the render. (The tree is the structural model; this is the tree-addressed sibling of
-    /// `SetPathHidden`/`SetLayerVisible`, which act on the flat layers model.)
+    /// the render. The tree is the structural model; `SetPathHidden` is the per-path sibling.
     SetNodeHidden { uid: String, hidden: bool },
     /// Wrap tree nodes (`uids`, which must share one parent) in a new `<g uid id="name">` at the
     /// first member's slot — the nested-group op on the object tree. `uid` = the new group's
@@ -228,28 +204,6 @@ pub enum Op {
         path: usize,
         key: String,
         value: Option<String>,
-    },
-
-    /// Create a new layer (client supplies the id) and make it the active layer.
-    AddLayer { id: String, name: String },
-    /// Rename a layer.
-    RenameLayer { id: String, name: String },
-    /// Remove a layer; its paths become unassigned (the layer's contents are not deleted).
-    DeleteLayer { id: String },
-    /// Show or hide a layer (hidden layers omit their paths from render + export).
-    SetLayerVisible { id: String, visible: bool },
-    /// Move a layer to a new z-index in the ordered layers list.
-    ReorderLayer { id: String, to: usize },
-    /// Set (or clear, with `None`) the active layer new shapes are added to.
-    SetActiveLayer {
-        #[serde(skip_serializing_if = "Option::is_none", default)]
-        id: Option<String>,
-    },
-    /// Assign a path to a layer (`None` = unassign).
-    SetPathLayer {
-        path: usize,
-        #[serde(skip_serializing_if = "Option::is_none", default)]
-        layer: Option<String>,
     },
 
     /// Upsert a gradient paint (matched by id) into the document's defs.
@@ -288,48 +242,6 @@ pub enum Op {
     },
 }
 
-/// Shared by `GroupPaths` (boolean_op = None) and `BooleanGroup` (Some(op)): create the group
-/// (active), assign the paths to it, and pull them into a contiguous block at the lowest
-/// member's slot. Returns false if the selection is empty or the id already exists.
-fn group_paths_into(
-    doc: &mut SvgDocument,
-    paths: &[usize],
-    id: &str,
-    name: &str,
-    boolean_op: Option<String>,
-) -> bool {
-    let mut idxs: Vec<usize> = paths
-        .iter()
-        .copied()
-        .filter(|&i| i < doc.paths.len())
-        .collect();
-    idxs.sort_unstable();
-    idxs.dedup();
-    if idxs.is_empty() || doc.layers.iter().any(|l| l.id == id) {
-        return false;
-    }
-    doc.layers.push(Layer {
-        id: id.to_string(),
-        name: name.to_string(),
-        visible: true,
-        boolean_op,
-    });
-    doc.active_layer = Some(id.to_string());
-    for &i in &idxs {
-        if let Some(p) = doc.paths.get_mut(i) {
-            p.layer = Some(id.to_string());
-        }
-    }
-    // Pull the members into a contiguous block at the lowest member's position.
-    let at = idxs[0];
-    let mut block: Vec<PathElement> = idxs.iter().rev().map(|&i| doc.paths.remove(i)).collect();
-    block.reverse();
-    for (k, p) in block.into_iter().enumerate() {
-        doc.paths.insert(at + k, p);
-    }
-    true
-}
-
 /// A fresh in-app-drawn `PathElement` (its `uid`/`index` are filled in by [`add_drawn`]). The
 /// standard shape for every added path — pen/shape/paste plus boolean/outline/offset results.
 fn drawn_path(id: String, subpaths: Vec<Subpath>, attributes: IndexMap<String, String>) -> PathElement {
@@ -346,7 +258,6 @@ fn drawn_path(id: String, subpaths: Vec<Subpath>, attributes: IndexMap<String, S
         original_tag: None,
         deleted: false,
         renamed: false,
-        layer: None,
         hidden: false,
     }
 }
@@ -433,7 +344,6 @@ fn reproject_paths(doc: &mut SvgDocument) {
             p.renamed = o.renamed;
             p.deleted = o.deleted;
             p.hidden = o.hidden;
-            p.layer = o.layer.clone();
         }
     }
     fresh.extend(added);
@@ -712,20 +622,6 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             p.hidden = *hidden;
             true
         }
-        Op::GroupPaths { paths, id, name } => group_paths_into(doc, paths, id, name, None),
-        Op::BooleanGroup {
-            op,
-            paths,
-            id,
-            name,
-        } => group_paths_into(doc, paths, id, name, Some(op.clone())),
-        Op::SetLayerBoolean { layer, op } => match doc.layers.iter_mut().find(|l| &l.id == layer) {
-            Some(l) => {
-                l.boolean_op = op.clone();
-                true
-            }
-            None => false,
-        },
         Op::SetNodeHidden { uid, hidden } => doc
             .tree
             .as_mut()
@@ -782,96 +678,6 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                     map.shift_remove(key);
                 }
             }
-            true
-        }
-
-        Op::AddLayer { id, name } => {
-            if doc.layers.iter().any(|l| &l.id == id) {
-                return false;
-            }
-            doc.layers.push(Layer {
-                id: id.clone(),
-                name: name.clone(),
-                visible: true,
-                boolean_op: None,
-            });
-            doc.active_layer = Some(id.clone());
-            true
-        }
-        Op::RenameLayer { id, name } => {
-            let trimmed = name.trim();
-            if trimmed.is_empty() {
-                return false;
-            }
-            let Some(l) = doc.layers.iter_mut().find(|l| &l.id == id) else {
-                return false;
-            };
-            l.name = trimmed.to_string();
-            true
-        }
-        Op::DeleteLayer { id } => {
-            let before = doc.layers.len();
-            doc.layers.retain(|l| &l.id != id);
-            if doc.layers.len() == before {
-                return false;
-            }
-            for p in doc.paths.iter_mut() {
-                if p.layer.as_deref() == Some(id.as_str()) {
-                    p.layer = None;
-                }
-            }
-            if doc.active_layer.as_deref() == Some(id.as_str()) {
-                doc.active_layer = None;
-            }
-            true
-        }
-        Op::SetLayerVisible { id, visible } => {
-            let Some(l) = doc.layers.iter_mut().find(|l| &l.id == id) else {
-                return false;
-            };
-            if l.visible == *visible {
-                return false;
-            }
-            l.visible = *visible;
-            true
-        }
-        Op::ReorderLayer { id, to } => {
-            let Some(from) = doc.layers.iter().position(|l| &l.id == id) else {
-                return false;
-            };
-            let to = (*to).min(doc.layers.len().saturating_sub(1));
-            if from == to {
-                return false;
-            }
-            let l = doc.layers.remove(from);
-            doc.layers.insert(to, l);
-            true
-        }
-        Op::SetActiveLayer { id } => {
-            if let Some(id) = id
-                && !doc.layers.iter().any(|l| &l.id == id)
-            {
-                return false;
-            }
-            if doc.active_layer == *id {
-                return false;
-            }
-            doc.active_layer = id.clone();
-            true
-        }
-        Op::SetPathLayer { path, layer } => {
-            if let Some(id) = layer
-                && !doc.layers.iter().any(|l| &l.id == id)
-            {
-                return false;
-            }
-            let Some(p) = doc.paths.get_mut(*path) else {
-                return false;
-            };
-            if p.layer == *layer {
-                return false;
-            }
-            p.layer = layer.clone();
             true
         }
 
@@ -1165,11 +971,8 @@ mod tests {
                 original_tag: None,
                 deleted: false,
                 renamed: false,
-                layer: None,
                 hidden: false,
             }],
-            layers: Vec::new(),
-            active_layer: None,
             gradients: Vec::new(),
             tree: None,
         }
@@ -1350,7 +1153,6 @@ mod tests {
         assert_eq!(p.id, "drawn-1");
         assert_eq!(p.index, 1);
         assert!(p.added && p.edited);
-        assert_eq!(p.layer, None); // no active layer → unassigned
     }
 
     #[test]
@@ -1378,37 +1180,6 @@ mod tests {
         assert_eq!(ids, ["c", "p0", "b"]);
         // a no-op move returns false
         assert!(!apply(&mut doc, &Op::ReorderPath { from: 1, to: 1 }));
-    }
-
-    #[test]
-    fn group_paths_creates_a_contiguous_active_group() {
-        let mut doc = doc_from("M 0 0 L 1 1", true); // p0
-        for id in ["b", "c", "d"] {
-            apply(
-                &mut doc,
-                &Op::AddPath {
-                    id: id.into(),
-                    subpaths: parse_path_d("M 0 0 L 2 2"),
-                    attributes: IndexMap::new(),
-                },
-            );
-        }
-        // paths p0,b,c,d → group the non-adjacent b (1) + d (3)
-        assert!(apply(
-            &mut doc,
-            &Op::GroupPaths {
-                paths: vec![1, 3],
-                id: "g1".into(),
-                name: "grp".into(),
-            }
-        ));
-        assert_eq!(doc.active_layer.as_deref(), Some("g1"));
-        // members pulled contiguous at the lowest slot, in ascending order
-        let ids: Vec<&str> = doc.paths.iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(ids, ["p0", "b", "d", "c"]);
-        assert_eq!(doc.paths[1].layer.as_deref(), Some("g1"));
-        assert_eq!(doc.paths[2].layer.as_deref(), Some("g1"));
-        assert_eq!(doc.paths[3].layer, None);
     }
 
     #[test]
@@ -1574,61 +1345,6 @@ mod tests {
     }
 
     #[test]
-    fn boolean_group_creates_a_live_boolean_layer() {
-        let mut doc = doc_from("M 0 0 L 60 0 L 60 60 L 0 60 Z", true); // p0 (subject)
-        apply(
-            &mut doc,
-            &Op::AddPath {
-                id: "cutter".into(),
-                subpaths: parse_path_d("M 40 40 L 100 40 L 100 100 L 40 100 Z"),
-                attributes: IndexMap::new(),
-            },
-        );
-        assert!(apply(
-            &mut doc,
-            &Op::BooleanGroup {
-                op: "subtract".into(),
-                paths: vec![0, 1],
-                id: "b1".into(),
-                name: "cut".into(),
-            }
-        ));
-        let layer = doc.layers.iter().find(|l| l.id == "b1").unwrap();
-        assert_eq!(layer.boolean_op.as_deref(), Some("subtract"));
-        assert_eq!(doc.paths[0].layer.as_deref(), Some("b1")); // operands still present + editable
-        assert_eq!(doc.paths[1].layer.as_deref(), Some("b1"));
-
-        // SetLayerBoolean can change the op and flatten it back to a plain group.
-        assert!(apply(
-            &mut doc,
-            &Op::SetLayerBoolean {
-                layer: "b1".into(),
-                op: Some("union".into()),
-            }
-        ));
-        assert_eq!(
-            doc.layers
-                .iter()
-                .find(|l| l.id == "b1")
-                .unwrap()
-                .boolean_op
-                .as_deref(),
-            Some("union")
-        );
-        assert!(apply(
-            &mut doc,
-            &Op::SetLayerBoolean {
-                layer: "b1".into(),
-                op: None,
-            }
-        ));
-        assert_eq!(
-            doc.layers.iter().find(|l| l.id == "b1").unwrap().boolean_op,
-            None
-        );
-    }
-
-    #[test]
     fn set_path_hidden_toggles() {
         let mut doc = doc_from("M 0 0 L 1 1", true);
         assert!(apply(
@@ -1779,30 +1495,6 @@ mod tests {
                 ids: vec!["x".into()],
             }
         ));
-    }
-
-    #[test]
-    fn reorder_layer_moves_within_the_z_order() {
-        let mut doc = doc_from("M 0 0 L 10 0", false);
-        for id in ["a", "b", "c"] {
-            apply(
-                &mut doc,
-                &Op::AddLayer {
-                    id: id.into(),
-                    name: id.into(),
-                },
-            );
-        }
-        // a,b,c → move c to front (index 0)
-        assert!(apply(
-            &mut doc,
-            &Op::ReorderLayer {
-                id: "c".into(),
-                to: 0
-            }
-        ));
-        let order: Vec<&str> = doc.layers.iter().map(|l| l.id.as_str()).collect();
-        assert_eq!(order, ["c", "a", "b"]);
     }
 
     #[test]

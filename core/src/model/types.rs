@@ -72,27 +72,6 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
-fn default_true() -> bool {
-    true
-}
-
-/// A named layer — a flat, ordered organizational grouping over paths. New shapes land on the
-/// active layer; layers give z-order + show/hide, and export as top-level `<g>` wrappers. An
-/// LLM organizes generated shapes onto layers far more cleanly than into a flat path list.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Layer {
-    pub id: String,
-    pub name: String,
-    #[serde(default = "default_true")]
-    pub visible: bool,
-    /// When set ("union"/"subtract"/"intersect"/"exclude") the group is a **live boolean**: its
-    /// member paths are editable operands and the document renders/exports the *computed* boolean
-    /// of them (subject = the first member) instead of the members themselves. `None` = a plain
-    /// organizational group. Non-destructive — reshaping an operand re-cuts the result live.
-    #[serde(rename = "booleanOp", skip_serializing_if = "Option::is_none", default)]
-    pub boolean_op: Option<String>,
-}
-
 fn zero() -> f64 {
     0.0
 }
@@ -188,9 +167,6 @@ pub struct PathElement {
     /// The user renamed this path — write its `id` into the exported markup.
     #[serde(skip_serializing_if = "is_false", default)]
     pub renamed: bool,
-    /// Id of the group this path belongs to (`None` = top level / ungrouped).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub layer: Option<String>,
     /// Per-path visibility toggle (hidden = omitted from render + `display="none"` on export).
     #[serde(skip_serializing_if = "is_false", default)]
     pub hidden: bool,
@@ -203,17 +179,6 @@ pub struct SvgDocument {
     #[serde(rename = "viewBox")]
     pub view_box: ViewBox,
     pub paths: Vec<PathElement>,
-    /// Named layers, in z-order (bottom → top). Empty = no explicit layers → the document
-    /// exports via the byte-preserving splice; once populated, drawn paths group into `<g>`s.
-    #[serde(default)]
-    pub layers: Vec<Layer>,
-    /// The layer new shapes are added to (`None` = unassigned).
-    #[serde(
-        rename = "activeLayer",
-        skip_serializing_if = "Option::is_none",
-        default
-    )]
-    pub active_layer: Option<String>,
     /// Gradient paints, injected into a `<defs>` on export (empty = none).
     #[serde(default)]
     pub gradients: Vec<Gradient>,

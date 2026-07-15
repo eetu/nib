@@ -60,8 +60,6 @@ export type PathElement = {
   deleted?: boolean;
   /** The user renamed this path — write its `id` into the exported markup. */
   renamed?: boolean;
-  /** Id of the group this path belongs to (absent = top level / ungrouped). */
-  layer?: string;
   /** Per-path visibility toggle (hidden = dropped from render + display:none on export). */
   hidden?: boolean;
 };
@@ -71,18 +69,6 @@ export type ViewBox = {
   minY: number;
   width: number;
   height: number;
-};
-
-/** A named layer — a flat, ordered grouping over paths (z-order + show/hide + active-target
- *  for new shapes). Exports as a top-level `<g>`. Matches the Rust `Layer`. */
-export type Layer = {
-  id: string;
-  name: string;
-  visible: boolean;
-  /** When set the group is a **live boolean**: its members are editable operands and the
-   *  document renders the *computed* boolean of them (see `BooleanResult`) instead of the
-   *  members. Absent = a plain organizational group. */
-  booleanOp?: "union" | "subtract" | "intersect" | "exclude";
 };
 
 /** A live boolean group's computed render geometry + the paint it inherits (subject style).
@@ -135,10 +121,6 @@ export type SvgDocument = {
   source: string;
   viewBox: ViewBox;
   paths: PathElement[];
-  /** Named layers in z-order (bottom → top); empty = no explicit layers. */
-  layers?: Layer[];
-  /** The layer new shapes are added to. */
-  activeLayer?: string;
   /** Gradient paints, injected into a `<defs>` on export. */
   gradients?: Gradient[];
 };
