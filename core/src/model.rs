@@ -9,4 +9,5 @@ pub mod document;
 pub mod geometry;
 pub mod path;
 pub mod shapes;
+pub mod tree;
 pub mod types;

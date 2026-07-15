@@ -12,7 +12,10 @@ const CORPUS: &[(&str, &str)] = &[
     ("minimal", include_str!("fixtures/minimal.svg")),
     ("icon-group", include_str!("fixtures/icon-group.svg")),
     ("gradient", include_str!("fixtures/gradient.svg")),
-    ("mixed-elements", include_str!("fixtures/mixed-elements.svg")),
+    (
+        "mixed-elements",
+        include_str!("fixtures/mixed-elements.svg"),
+    ),
     ("style-block", include_str!("fixtures/style-block.svg")),
     ("transforms", include_str!("fixtures/transforms.svg")),
     ("prolog", include_str!("fixtures/prolog.svg")),
