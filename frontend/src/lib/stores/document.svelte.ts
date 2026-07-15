@@ -315,6 +315,46 @@ class DocumentStore {
     return (this.#wasm?.renderTree() as RenderNode[]) ?? [];
   }
 
+  /** Gradients defined in the imported source `<defs>` — parsed from the render tree, keyed by
+   *  id. These are NOT nib's editable `doc.gradients` (which it injects on export); they render
+   *  verbatim from the tree, so a `url(#id)` fill can display its actual stops even though the
+   *  gradient isn't in the model. Read-only for now (editing needs defs modeling — E5).
+   *  Recomputed only on a source change or structural op (its reactive deps). */
+  importedGradients = $derived.by(() => {
+    void this.treeVersion; // deps: re-parse when the tree changes
+    void this.doc?.source;
+    type Info = { kind: "linear" | "radial"; stops: { offset: number; color: string }[] };
+    const num = (s: string | undefined): number => {
+      if (!s) return 0;
+      const t = s.trim();
+      return t.endsWith("%") ? Number(t.slice(0, -1)) / 100 : Number(t);
+    };
+    const stopOf = (attrs: Record<string, string>) => {
+      let color: string | undefined = attrs["stop-color"];
+      if (!color && attrs.style) color = attrs.style.match(/stop-color:\s*([^;]+)/)?.[1]?.trim();
+      return { offset: num(attrs.offset), color: color ?? "#000000" };
+    };
+    const entries: [string, Info][] = [];
+    const walk = (nodes: RenderNode[]): void => {
+      for (const n of nodes) {
+        if (n.kind !== "element") continue;
+        if ((n.tag === "linearGradient" || n.tag === "radialGradient") && n.attrs.id) {
+          const stops = n.children
+            .filter((c) => c.kind === "element" && c.tag === "stop")
+            .map((c) => stopOf((c as { attrs: Record<string, string> }).attrs));
+          if (stops.length)
+            entries.push([
+              n.attrs.id,
+              { kind: n.tag === "radialGradient" ? "radial" : "linear", stops },
+            ]);
+        }
+        walk(n.children);
+      }
+    };
+    if (this.doc) walk(this.renderTree());
+    return new Map(entries);
+  });
+
   /** Show/hide any node in the document tree by its stable uid — a group, opaque element, or
    *  shape, at any depth (structural op). */
   setNodeHidden(uid: string, hidden: boolean): void {

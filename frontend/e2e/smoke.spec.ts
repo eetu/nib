@@ -746,6 +746,44 @@ test("declarative render keeps gradient defs functional (SVG namespace) + fill r
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("a source-defined gradient fill (url(#id)) shows its stops, not the raw url", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><linearGradient id="a"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs><rect x="10" y="10" width="80" height="80" fill="url(#a)"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+  await page.locator(".layerlist .row-btn").first().click();
+
+  // The fill paint resolves the imported gradient: its "linear" mode is active + a read-only
+  // preview bar shows (instead of a solid ColorInput holding the literal "url(#a)" string).
+  const fill = page.locator(".paint").filter({ hasText: "fill" });
+  await expect(fill.getByRole("button", { name: "linear", exact: true })).toHaveClass(/active/);
+  await expect(fill.locator(".bar.readonly")).toBeVisible();
+
+  // Adopting it (pick linear) seeds an editable model gradient from the imported stops → the
+  // fill repoints to a nib `grad-…` id and the editable stop bar appears.
+  await fill.getByRole("button", { name: "linear", exact: true }).click();
+  await expect(page.locator('svg.canvas g.artwork path[fill^="url(#grad-"]')).toHaveCount(1);
+  await expect(fill.locator(".marker")).toHaveCount(2);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("nested groups: group a selection into a <g>, then ungroup", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

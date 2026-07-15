@@ -39,16 +39,24 @@
 
   const gradId = $derived(value.startsWith("url(#") ? value.slice(5, -1) : null);
   const grad = $derived(gradId ? editor.gradientById(gradId) : null);
+  // A gradient referenced by the fill but defined in the imported source `<defs>` (not nib's
+  // editable model) — resolved from the render tree so we show its actual stops, not the raw
+  // `url(#id)` string. Read-only; switching mode adopts its stops into an editable gradient.
+  const importedGrad = $derived(
+    gradId && !grad ? (editor.importedGradients.get(gradId) ?? null) : null,
+  );
+  // Whichever gradient backs the current value (editable model first, else imported source).
+  const anyGrad = $derived(grad ?? importedGrad);
   const mode = $derived<"none" | "solid" | "linear" | "radial">(
-    grad ? (grad.kind as "linear" | "radial") : value === "none" || value === "" ? "none" : "solid",
+    anyGrad ? anyGrad.kind : value === "none" || value === "" ? "none" : "solid",
   );
 
   const stopsCss = $derived(
-    grad ? grad.stops.map((s) => `${s.color} ${Math.round(s.offset * 100)}%`).join(", ") : "",
+    anyGrad ? anyGrad.stops.map((s) => `${s.color} ${Math.round(s.offset * 100)}%`).join(", ") : "",
   );
   const previewBg = $derived(
-    grad
-      ? grad.kind === "radial"
+    anyGrad
+      ? anyGrad.kind === "radial"
         ? `radial-gradient(circle, ${stopsCss})`
         : `linear-gradient(90deg, ${stopsCss})`
       : "",
@@ -57,18 +65,21 @@
   function setMode(m: "none" | "solid" | "linear" | "radial") {
     if (m === "none") return setPaint("none");
     if (m === "solid") {
-      return setPaint(grad?.stops[0]?.color ?? (value.startsWith("#") ? value : "#000000"));
+      return setPaint(anyGrad?.stops[0]?.color ?? (value.startsWith("#") ? value : "#000000"));
     }
     if (grad) return editor.setGradient({ ...grad, kind: m });
-    const base = value.startsWith("#") ? value : "#4b7bec";
     const id = `grad-${crypto.randomUUID().slice(0, 8)}`;
+    // Adopt an imported gradient's stops into an editable model gradient; else a fresh two-stop.
+    const stops = importedGrad
+      ? importedGrad.stops.map((s) => ({ offset: s.offset, color: s.color }))
+      : [
+          { offset: 0, color: value.startsWith("#") ? value : "#4b7bec" },
+          { offset: 1, color: "#ffffff" },
+        ];
     editor.setGradient({
       id,
       kind: m,
-      stops: [
-        { offset: 0, color: base },
-        { offset: 1, color: "#ffffff" },
-      ],
+      stops,
       x1: 0,
       y1: 0.5,
       x2: 1,
@@ -242,6 +253,15 @@
         >
       </div>
     {/if}
+  {:else if importedGrad}
+    <!-- gradient defined in the imported source <defs>: show its actual stops (read-only);
+         pick linear/radial above to adopt it into an editable gradient -->
+    <div
+      class="bar readonly"
+      style:background={previewBg}
+      title="imported gradient #{gradId}"
+    ></div>
+    <p class="imported-note">imported gradient · pick a mode above to make it editable</p>
   {/if}
 </div>
 
@@ -292,6 +312,18 @@
     margin: 2px 2px 12px;
     border: 1px solid var(--halo-border);
     border-radius: var(--halo-radius-pill);
+  }
+
+  .bar.readonly {
+    margin-bottom: 4px;
+    cursor: default;
+  }
+
+  .imported-note {
+    margin: 0 2px 6px;
+    font-size: 11px;
+    font-style: italic;
+    color: var(--halo-text-muted);
   }
 
   .marker {
