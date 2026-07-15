@@ -95,6 +95,16 @@
       {/if}
     {/if}
     {#if editor.multiSelected}
+      <!-- outline every selected path (accent centerline) so it's clear which are in the
+           multi-selection, plus the union box for the group transform. -->
+      {#each editor.selectedPaths as pi (pi)}
+        {@const mp = doc.paths[pi]}
+        {#if mp && !mp.deleted}
+          {@const md = pathToD(toScreenSubpaths(mp.subpaths))}
+          <path class="sel-outline-casing" d={md} />
+          <path class="sel-outline" d={md} />
+        {/if}
+      {/each}
       {@const raw = editor.selectionBounds}
       {#if raw}
         {@const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX))}
