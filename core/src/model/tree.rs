@@ -675,6 +675,76 @@ impl Tree {
             .map(|n| n.set_hidden(hidden))
             .unwrap_or(false)
     }
+
+    /// Wrap the elements `uids` (which must share one parent) in a new `<g uid id="name">` at the
+    /// first member's position. Returns false if they aren't all siblings under one node.
+    pub fn group(&mut self, uids: &[String], new_uid: &str, name: &str) -> bool {
+        group_in(&mut self.root, uids, new_uid, name)
+    }
+
+    /// Dissolve the group `uid`, splicing its children into its parent in place. Returns false if
+    /// the uid isn't an element with children.
+    pub fn ungroup(&mut self, uid: &str) -> bool {
+        ungroup_in(&mut self.root, uid)
+    }
+}
+
+fn group_in(node: &mut Node, uids: &[String], new_uid: &str, name: &str) -> bool {
+    if let Node::Element { children, .. } = node {
+        let positions: Vec<usize> = children
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.uid().is_some_and(|u| uids.iter().any(|x| x == u)))
+            .map(|(i, _)| i)
+            .collect();
+        // All uids are direct children here → group them at the first's slot.
+        if !uids.is_empty() && positions.len() == uids.len() {
+            let at = positions[0];
+            let mut grabbed: Vec<Node> = positions
+                .iter()
+                .rev()
+                .map(|&i| children.remove(i))
+                .collect();
+            grabbed.reverse();
+            let g = Node::Element {
+                uid: new_uid.to_string(),
+                tag: "g".to_string(),
+                attrs: vec![("id".to_string(), name.to_string())],
+                original_open: format!("<g id=\"{}\">", escape_attr(name)),
+                original_close: "</g>".to_string(),
+                children: grabbed,
+                edited: false,
+                hidden: false,
+            };
+            children.insert(at.min(children.len()), g);
+            return true;
+        }
+        for c in children.iter_mut() {
+            if group_in(c, uids, new_uid, name) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn ungroup_in(node: &mut Node, uid: &str) -> bool {
+    if let Node::Element { children, .. } = node {
+        if let Some(i) = children.iter().position(|c| c.uid() == Some(uid)) {
+            let inner = match &children[i] {
+                Node::Element { children: gc, .. } => gc.clone(),
+                _ => return false,
+            };
+            children.splice(i..=i, inner);
+            return true;
+        }
+        for c in children.iter_mut() {
+            if ungroup_in(c, uid) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// A UI-facing render node — the tree the canvas draws declaratively. Elements carry their tag +

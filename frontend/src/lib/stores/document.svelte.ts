@@ -300,6 +300,23 @@ class DocumentStore {
     }
   }
 
+  /** Wrap tree nodes (`uids`, sharing one parent) in a new nested `<g id="name">`. */
+  groupNodes(uids: string[], name: string): void {
+    if (uids.length === 0) return;
+    if (this.#apply({ type: "groupNodes", uids, uid: crypto.randomUUID(), name })) {
+      this.commit();
+      this.treeVersion++;
+    }
+  }
+
+  /** Dissolve a group node (by uid) in the tree, splicing its children into the parent. */
+  ungroupNode(uid: string): void {
+    if (this.#apply({ type: "ungroupNode", uid })) {
+      this.commit();
+      this.treeVersion++;
+    }
+  }
+
   markSaved(): void {
     this.dirty = false;
     this.#persist();

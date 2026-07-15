@@ -200,6 +200,16 @@ pub enum Op {
     /// the render. (The tree is the structural model; this is the tree-addressed sibling of
     /// `SetPathHidden`/`SetLayerVisible`, which act on the flat layers model.)
     SetNodeHidden { uid: String, hidden: bool },
+    /// Wrap tree nodes (`uids`, which must share one parent) in a new `<g uid id="name">` at the
+    /// first member's slot — the nested-group op on the object tree. `uid` = the new group's
+    /// stable id; `name` = its `id` attribute. Re-projects the paths view (order may change).
+    GroupNodes {
+        uids: Vec<String>,
+        uid: String,
+        name: String,
+    },
+    /// Dissolve a group node (`uid`) in the tree, splicing its children into its parent in place.
+    UngroupNode { uid: String },
 
     /// Set (`value: Some`) or clear (`value: None`) one presentation attribute. Added paths
     /// edit their own `attributes`; imported paths accumulate a `style_override`.
@@ -307,6 +317,49 @@ fn group_paths_into(
         doc.paths.insert(at + k, p);
     }
     true
+}
+
+/// Re-project the flat `paths` view from the (structurally-mutated) tree, **preserving edits**:
+/// a structural op (group/ungroup/reorder) can change shape document order, so paths are rebuilt
+/// from the tree, then each path's geometry/style/rename/hidden/delete/layer is carried over from
+/// the old paths by `uid`. In-app drawn paths (no uid, not in the tree) are re-appended. Indices
+/// are renumbered to array position. Keeps `doc.paths` consistent with the tree after structure
+/// edits without discarding the user's geometry work.
+fn reproject_paths(doc: &mut SvgDocument) {
+    let Some(tree) = &doc.tree else {
+        return;
+    };
+    let old: std::collections::HashMap<String, PathElement> = doc
+        .paths
+        .iter()
+        .filter(|p| !p.uid.is_empty())
+        .map(|p| (p.uid.clone(), p.clone()))
+        .collect();
+    let added: Vec<PathElement> = doc
+        .paths
+        .iter()
+        .filter(|p| p.uid.is_empty())
+        .cloned()
+        .collect();
+    let mut fresh = tree.project_paths();
+    for p in fresh.iter_mut() {
+        if let Some(o) = old.get(&p.uid) {
+            p.subpaths = o.subpaths.clone();
+            p.edited = o.edited;
+            p.attributes = o.attributes.clone();
+            p.style_override = o.style_override.clone();
+            p.id = o.id.clone();
+            p.renamed = o.renamed;
+            p.deleted = o.deleted;
+            p.hidden = o.hidden;
+            p.layer = o.layer.clone();
+        }
+    }
+    fresh.extend(added);
+    for (i, p) in fresh.iter_mut().enumerate() {
+        p.index = i;
+    }
+    doc.paths = fresh;
 }
 
 /// Apply an op to the document in place. Returns `true` if it found its target and mutated,
@@ -624,6 +677,24 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             .as_mut()
             .map(|t| t.set_hidden(uid, *hidden))
             .unwrap_or(false),
+        Op::GroupNodes { uids, uid, name } => {
+            let ok = doc
+                .tree
+                .as_mut()
+                .map(|t| t.group(uids, uid, name))
+                .unwrap_or(false);
+            if ok {
+                reproject_paths(doc); // wrapping may reorder shapes → refresh the paths view
+            }
+            ok
+        }
+        Op::UngroupNode { uid } => {
+            let ok = doc.tree.as_mut().map(|t| t.ungroup(uid)).unwrap_or(false);
+            if ok {
+                reproject_paths(doc);
+            }
+            ok
+        }
         Op::SetStyle { path, key, value } => {
             let Some(p) = doc.paths.get_mut(*path) else {
                 return false;
@@ -1405,6 +1476,50 @@ mod tests {
         assert_eq!(doc.paths[1].layer.as_deref(), Some("g1"));
         assert_eq!(doc.paths[2].layer.as_deref(), Some("g1"));
         assert_eq!(doc.paths[3].layer, None);
+    }
+
+    #[test]
+    fn group_nodes_wraps_siblings_then_ungroup_dissolves() {
+        use crate::model::document::{parse_svg, serialize_via_tree};
+        let mut doc = parse_svg(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="0" y="0" width="10" height="10"/><rect x="20" y="0" width="10" height="10"/></svg>"#,
+        )
+        .unwrap();
+        // Mimic the Editor's load: the projected paths (incl. primitives) are the working model.
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        let (u0, u1) = (doc.paths[0].uid.clone(), doc.paths[1].uid.clone());
+        assert!(!u0.is_empty());
+
+        // Group the two rects into <g id="grp">.
+        assert!(apply(
+            &mut doc,
+            &Op::GroupNodes {
+                uids: vec![u0.clone(), u1.clone()],
+                uid: "grp-uid".into(),
+                name: "grp".into(),
+            }
+        ));
+        let tree = doc.tree.as_ref().unwrap();
+        let out = serialize_via_tree(&doc, tree, 2);
+        assert!(out.contains("<g id=\"grp\">"), "grouped: {out}");
+        assert!(out.matches("<rect").count() == 2, "both rects kept: {out}");
+        // paths view still has both, addressable by the same uids
+        assert_eq!(doc.paths.len(), 2);
+        assert!(doc.paths.iter().any(|p| p.uid == u0) && doc.paths.iter().any(|p| p.uid == u1));
+
+        // Ungroup dissolves the <g>, rects back at top level.
+        assert!(apply(
+            &mut doc,
+            &Op::UngroupNode {
+                uid: "grp-uid".into()
+            }
+        ));
+        let out2 = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(!out2.contains("<g id=\"grp\""), "ungrouped: {out2}");
+        assert!(
+            out2.matches("<rect").count() == 2,
+            "rects still there: {out2}"
+        );
     }
 
     #[test]
