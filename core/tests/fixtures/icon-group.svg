@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- toolbar icon -->
+  <g id="toolbar" fill="none" stroke="#000" stroke-width="2">
+    <path d="M 3 6 L 21 6"/>
+    <path d="M 3 12 L 21 12"/>
+    <path d="M 3 18 L 21 18"/>
+  </g>
+</svg>
