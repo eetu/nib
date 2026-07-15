@@ -339,6 +339,14 @@ class DocumentStore {
     }
   }
 
+  /** Move a tree node one slot within its parent — `forward` = higher z (later), else lower. */
+  reorderNode(uid: string, forward: boolean): void {
+    if (this.#apply({ type: "reorderNode", uid, forward })) {
+      this.commit();
+      this.treeVersion++;
+    }
+  }
+
   markSaved(): void {
     this.dirty = false;
     this.#persist();

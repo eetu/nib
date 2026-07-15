@@ -218,7 +218,11 @@
     menu = {
       x: e.clientX,
       y: e.clientY,
-      items: [{ label: "ungroup", run: () => editor.ungroupNode(uid) }],
+      items: [
+        { label: "bring forward", run: () => editor.reorderNode(uid, true) },
+        { label: "send backward", run: () => editor.reorderNode(uid, false) },
+        { label: "ungroup", run: () => editor.ungroupNode(uid) },
+      ],
     };
   }
 
@@ -273,12 +277,20 @@
 
   function openPathMenu(e: MouseEvent, index: number, name: string) {
     e.preventDefault();
+    const uid = doc?.paths[index]?.uid;
     menu = {
       x: e.clientX,
       y: e.clientY,
       items: [
         { label: "rename", run: () => startRename(index, name) },
         { label: "duplicate", run: () => (editor.selectPath(index), editor.duplicateSelected()) },
+        // Tree z-order (imported shapes have a uid); drawn rows reorder by drag instead.
+        ...(uid
+          ? [
+              { label: "bring forward", run: () => editor.reorderNode(uid, true) },
+              { label: "send backward", run: () => editor.reorderNode(uid, false) },
+            ]
+          : []),
         { label: "delete", danger: true, run: () => editor.deletePath(index) },
       ],
     };

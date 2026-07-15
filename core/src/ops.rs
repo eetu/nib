@@ -210,6 +210,9 @@ pub enum Op {
     },
     /// Dissolve a group node (`uid`) in the tree, splicing its children into its parent in place.
     UngroupNode { uid: String },
+    /// Move a tree node one element-slot within its parent — `forward` (later in document order =
+    /// higher z) or backward. Re-projects the paths view (z-order changed).
+    ReorderNode { uid: String, forward: bool },
 
     /// Set (`value: Some`) or clear (`value: None`) one presentation attribute. Added paths
     /// edit their own `attributes`; imported paths accumulate a `style_override`.
@@ -690,6 +693,17 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
         }
         Op::UngroupNode { uid } => {
             let ok = doc.tree.as_mut().map(|t| t.ungroup(uid)).unwrap_or(false);
+            if ok {
+                reproject_paths(doc);
+            }
+            ok
+        }
+        Op::ReorderNode { uid, forward } => {
+            let ok = doc
+                .tree
+                .as_mut()
+                .map(|t| t.reorder(uid, *forward))
+                .unwrap_or(false);
             if ok {
                 reproject_paths(doc);
             }
@@ -1520,6 +1534,28 @@ mod tests {
             out2.matches("<rect").count() == 2,
             "rects still there: {out2}"
         );
+    }
+
+    #[test]
+    fn reorder_node_changes_document_z_order() {
+        use crate::model::document::{parse_svg, serialize_via_tree};
+        let mut doc = parse_svg(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="a" x="0" y="0" width="10" height="10"/><rect id="b" x="20" y="0" width="10" height="10"/></svg>"#,
+        )
+        .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        let ua = doc.paths[0].uid.clone(); // rect "a", first (lowest z)
+        assert!(apply(
+            &mut doc,
+            &Op::ReorderNode {
+                uid: ua,
+                forward: true
+            }
+        ));
+        let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        let ia = out.find("id=\"a\"").unwrap();
+        let ib = out.find("id=\"b\"").unwrap();
+        assert!(ib < ia, "after bring-forward, b precedes a: {out}");
     }
 
     #[test]

@@ -687,6 +687,37 @@ impl Tree {
     pub fn ungroup(&mut self, uid: &str) -> bool {
         ungroup_in(&mut self.root, uid)
     }
+
+    /// Swap the node `uid` with its adjacent element sibling — `forward` (toward the end / higher
+    /// z) or backward. No-op at the end of the run. Returns whether the node was found.
+    pub fn reorder(&mut self, uid: &str, forward: bool) -> bool {
+        reorder_in(&mut self.root, uid, forward)
+    }
+}
+
+fn reorder_in(node: &mut Node, uid: &str, forward: bool) -> bool {
+    if let Node::Element { children, .. } = node {
+        if let Some(i) = children.iter().position(|c| c.uid() == Some(uid)) {
+            // Adjacent *element* sibling (skipping whitespace text nodes between them).
+            let j = if forward {
+                (i + 1..children.len()).find(|&k| matches!(children[k], Node::Element { .. }))
+            } else {
+                (0..i)
+                    .rev()
+                    .find(|&k| matches!(children[k], Node::Element { .. }))
+            };
+            if let Some(j) = j {
+                children.swap(i, j);
+            }
+            return true;
+        }
+        for c in children.iter_mut() {
+            if reorder_in(c, uid, forward) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn group_in(node: &mut Node, uids: &[String], new_uid: &str, name: &str) -> bool {
