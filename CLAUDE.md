@@ -228,7 +228,19 @@ client-side pro pillars, all running on the core):
   Browser-only build stays fully functional.
 - **Phase D (gated):** arbitrary *nested* groups — a full object tree on top of B's
   one-level named groups (needs stable-id addressing; imported paths currently group
-  for membership/visibility/order but aren't `<g>`-wrapped on export).
+  for membership/visibility/order but aren't `<g>`-wrapped on export). **Folds into E.**
+- **Phase E (approved, scoped — the big model shift):** grow from **paths-only** (rest
+  preserved as an opaque source string) to a **full SVG element tree** parsed natively,
+  so **save = re-emit the tree** ("import → native → export" cornerstone). Key insight
+  keeps it *safe + incremental*: **per-node original text** (unedited node re-emits
+  verbatim → byte-preservation generalizes from paths to *all* elements; only edited
+  nodes change) + an **opaque `Raw` node** for element types not yet modeled (zero loss;
+  promote opaque→typed over time). Byte-for-byte stops being a serializer strategy and
+  becomes a per-node dirty-tracking property. Phases: E1 tree parse + `Raw` + re-emit +
+  stable-id addressing; E2 editable primitives (`<rect>`/`<circle>`/…); E3 real nested
+  groups (subsumes D); E4 text/image/use; E5 defs (clip/mask/filter). Plus an explicit
+  "export normalized copy" action. Full plan: `~/.claude/plans/nib-full-svg-dom.md`.
+  Make-or-break = round-trip fidelity on a real-SVG corpus (the `Raw` node de-risks it).
 
 The `added`/`attributes` model + op vocabulary + pluggable tools + grouped rail are
 shaped to absorb these. If a feature crosses into an unbuilt area, check the
