@@ -35,18 +35,33 @@
   // Live boolean groups: their members are operands, so we render the *computed* result
   // (editor.booleanResults) instead of the members' own fills.
   const booleanLayers = $derived(editor.booleanLayerIds);
-  // Drawn paths to render, in draw (array) order = z-order; skip hidden paths + hidden groups
-  // + boolean-group operands (represented by the computed result below).
-  const newPaths = $derived(
+  // Is this an imported *primitive* (rect/circle/…) rather than a `<path>`? A `<path>` DOM node
+  // updates its geometry in place; a primitive can't (it has no `d`), so an edited one is hidden
+  // and re-painted declaratively as a `<path>`.
+  function isPrimitive(p: { originalTag?: string }): boolean {
+    const t = p.originalTag?.trimStart() ?? "";
+    return t !== "" && !t.startsWith("<path");
+  }
+
+  // Elements rendered declaratively from the model: drawn (added) paths + any *edited imported
+  // primitive* (now a `<path>`; its source node is hidden below). Edited `<path>`s stay in the
+  // artwork DOM (updated in place — no z-order change). Draw order = z-order; skip hidden + operands.
+  const renderPaths = $derived(
     editor.doc?.paths.filter(
       (p) =>
-        p.added &&
+        (p.added || (p.edited && isPrimitive(p))) &&
         !p.deleted &&
         !p.hidden &&
         !(p.layer && hiddenLayers.has(p.layer)) &&
         !(p.layer && booleanLayers.has(p.layer)),
     ) ?? [],
   );
+
+  // A path's effective style: drawn paths keep their whole `attributes`; imported paths merge any
+  // `styleOverride` over the parsed attributes.
+  function eff(p: { attributes?: Record<string, string>; styleOverride?: Record<string, string> }) {
+    return { ...(p.attributes ?? {}), ...(p.styleOverride ?? {}) };
+  }
 
   // WebKit-only trackpad gesture event (Safari); not in the standard DOM lib.
   type GestureLike = Event & { scale: number; clientX: number; clientY: number };
@@ -85,7 +100,9 @@
       // eslint-disable-next-line svelte/no-dom-manipulating
       artworkGroup.appendChild(document.importNode(child, true));
     }
-    livePaths = Array.from(artworkGroup.querySelectorAll("path"));
+    livePaths = Array.from(
+      artworkGroup.querySelectorAll("path,rect,circle,ellipse,line,polygon,polyline"),
+    );
     // Frame the artboard *plus* any content drawn outside it, so a reload never lands on a
     // view where shapes beyond the viewBox are off-screen.
     pendingFit = loadViewBox();
@@ -102,30 +119,36 @@
     }
   });
 
-  // Reflect model edits into the live (imported) <path> elements: geometry, and
-  // effective style (parsed attributes + any override). Applying the full
-  // effective style every run means undo restores the original look too. Drawn
-  // paths have no live element (rendered declaratively) and are skipped.
+  // Reflect the model onto the live (imported) elements. An *unedited* imported path/shape keeps
+  // its source node, showing + restyled here (geometry stays as authored). An *edited* one — or a
+  // hidden/deleted/operand one — is hidden, because it now paints declaratively from the model
+  // (renderPaths) as a <path> (edited primitives change tag, which the source node can't). Drawn
+  // (added) paths have no live element and are skipped.
   $effect(() => {
     const doc = editor.doc;
     if (!doc) return;
     for (const p of doc.paths) {
+      if (p.added) continue;
       const el = livePaths[p.index];
       if (!el) continue;
-      if (
+      const isPath = el.tagName.toLowerCase() === "path";
+      const hidden =
         p.deleted ||
         p.hidden ||
+        (p.edited && !isPath) || // edited primitive → repaints declaratively as a <path>
         (p.layer && hiddenLayers.has(p.layer)) ||
-        (p.layer && booleanLayers.has(p.layer)) // operand of a live boolean → result renders instead
-      ) {
+        (p.layer && booleanLayers.has(p.layer));
+      if (hidden) {
         el.setAttribute("display", "none");
         continue;
       }
       el.removeAttribute("display");
-      el.setAttribute("d", p.edited ? pathToD(p.subpaths) : p.originalD);
-      const eff = { ...(p.attributes ?? {}), ...(p.styleOverride ?? {}) };
+      // A `<path>` updates its geometry in place (keeps its z-order); primitives keep their
+      // authored geometry until edited (then they're hidden above).
+      if (isPath) el.setAttribute("d", p.edited ? pathToD(p.subpaths) : p.originalD);
+      const style = eff(p);
       for (const key of STYLE_KEYS) {
-        const v = eff[key];
+        const v = style[key];
         if (v == null) el.removeAttribute(key);
         else el.setAttribute(key, v);
       }
@@ -363,10 +386,10 @@
     >
       <!-- imported artwork: nib fills this imperatively (see the effect) -->
       <g bind:this={artworkGroup} class="artwork"></g>
-      <!-- pen-drawn paths: Svelte-managed, rendered straight from the model -->
+      <!-- drawn paths + edited imported paths/shapes: Svelte-managed, straight from the model -->
       <g class="drawn">
-        {#each newPaths as p (p.id)}
-          <path {...p.attributes ?? {}} d={pathToD(p.subpaths)} />
+        {#each renderPaths as p (p.id)}
+          <path {...eff(p)} d={pathToD(p.subpaths)} />
         {/each}
       </g>
       <!-- live boolean groups: the computed result (operands render as overlay outlines) -->

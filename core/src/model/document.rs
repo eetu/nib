@@ -9,6 +9,7 @@ use indexmap::IndexMap;
 use kurbo::{BezPath, Shape};
 
 use super::path::{parse_path_d, path_to_d_prec};
+use super::tree::{Tree, serialize_tree};
 use super::types::{Gradient, Layer, PathElement, Subpath, SvgDocument, ViewBox};
 
 const DEFAULT_VIEWBOX: ViewBox = ViewBox {
@@ -184,6 +185,7 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
                 .unwrap_or_else(|| format!("path-{index}"));
             PathElement {
                 id,
+                uid: String::new(),
                 index,
                 subpaths: parse_path_d(&original_d),
                 attributes: Some(parse_style_attrs(el)),
@@ -672,6 +674,25 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
     }
 }
 
+/// Serialize through the **document tree** (Phase E) rather than the flat splice: reconcile the
+/// flat paths' edits onto a clone of the parsed `base` tree, emit it (byte-for-byte for untouched
+/// nodes; edited primitives become `<path>`), then append drawn paths + inject gradient defs +
+/// grow the viewBox exactly as the splice path does. This is what makes editing *non-path*
+/// elements exportable — the tree carries the full structure the flat splice can't.
+pub fn serialize_via_tree(doc: &SvgDocument, base: &Tree, precision: usize) -> String {
+    let mut tree = base.clone();
+    tree.reconcile_paths(&doc.paths, precision);
+    let out = serialize_tree(&tree);
+    let with_drawn = append_drawn_paths(&out, doc, precision);
+    let with_defs = inject_defs(&with_drawn, doc);
+    let evb = export_view_box(doc);
+    if evb != doc.view_box {
+        rewrite_svg_viewbox(&with_defs, evb)
+    } else {
+        with_defs
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,6 +702,7 @@ mod tests {
     fn drawn_on_layer(id: &str, layer: &str) -> PathElement {
         PathElement {
             id: id.to_string(),
+            uid: String::new(),
             index: 0,
             original_d: String::new(),
             subpaths: parse_path_d("M 0 0 L 10 10"),

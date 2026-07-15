@@ -517,6 +517,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             let layer = doc.active_layer.clone();
             doc.paths.push(PathElement {
                 id: id.clone(),
+                uid: String::new(),
                 index,
                 original_d: String::new(),
                 subpaths: subpaths.clone(),
@@ -542,6 +543,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             let layer = doc.active_layer.clone();
             doc.paths.push(PathElement {
                 id: id.clone(),
+                uid: String::new(),
                 index,
                 original_d: String::new(),
                 subpaths: vec![Subpath { nodes, closed }],
@@ -771,6 +773,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             let index = doc.paths.len();
             doc.paths.push(PathElement {
                 id: id.clone(),
+                uid: String::new(),
                 index,
                 original_d: String::new(),
                 subpaths,
@@ -837,6 +840,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             let index = doc.paths.len();
             doc.paths.push(PathElement {
                 id: id.clone(),
+                uid: String::new(),
                 index,
                 original_d: String::new(),
                 subpaths,
@@ -878,6 +882,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 let index = doc.paths.len();
                 doc.paths.push(PathElement {
                     id,
+                    uid: String::new(),
                     index,
                     original_d: String::new(),
                     subpaths: vec![sp],
@@ -939,6 +944,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             let index = doc.paths.len();
             doc.paths.push(PathElement {
                 id: id.clone(),
+                uid: String::new(),
                 index,
                 original_d: String::new(),
                 subpaths,
@@ -977,6 +983,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             let index = doc.paths.len();
             doc.paths.push(PathElement {
                 id: id.clone(),
+                uid: String::new(),
                 index,
                 original_d: String::new(),
                 subpaths,
@@ -1078,6 +1085,7 @@ mod tests {
             },
             paths: vec![PathElement {
                 id: "p0".into(),
+                uid: String::new(),
                 index: 0,
                 original_d: d.to_string(),
                 subpaths: parse_path_d(d),

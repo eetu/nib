@@ -143,7 +143,12 @@ pub struct Gradient {
 pub struct PathElement {
     /// Stable id for selection — the element's `id` attr, else `path-<index>`.
     pub id: String,
-    /// 0-based position among `<path>` elements in document order.
+    /// Stable in-memory handle linking this path back to its source tree node, so serialization
+    /// reconciles edits onto the right node regardless of reorder/grouping. Empty for in-app
+    /// drawn paths (they have no source node; exported by appending). Not written to SVG.
+    #[serde(default)]
+    pub uid: String,
+    /// 0-based position among editable shape elements in document order.
     pub index: usize,
     /// The `d` attribute exactly as it appeared in the source.
     #[serde(rename = "originalD")]

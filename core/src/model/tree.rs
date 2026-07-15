@@ -13,12 +13,20 @@
 //! (see `project_paths`).** Byte-for-byte holds *by construction*: the source is partitioned into
 //! slices along child boundaries, each owned by exactly one node, so concatenating reproduces it.
 
+use std::collections::HashMap;
+
 use indexmap::IndexMap;
 
 use super::document::STYLE_KEYS;
 use super::path::{parse_path_d, path_to_d_prec};
 use super::shapes::{ellipse_nodes, line_nodes, rect_nodes};
 use super::types::{PathElement, PathNode, Point, Subpath};
+
+/// Geometry attributes stripped when an edited primitive is converted to a `<path>` — its shape
+/// now lives in the regenerated `d`, so `x`/`cx`/`points`/… would be dead weight.
+const GEOMETRY_ATTRS: [&str; 14] = [
+    "x", "y", "width", "height", "cx", "cy", "r", "rx", "ry", "x1", "y1", "x2", "y2", "points",
+];
 
 /// Element tags nib can turn into editable anchor-node geometry (subpaths). `<path>` parses its
 /// `d`; the primitives convert to the same shape builders drawn shapes use. Anything else stays
@@ -314,6 +322,7 @@ fn attr<'a>(attrs: &'a [(String, String)], key: &str) -> Option<&'a str> {
 
 fn collect_paths(node: &Node, out: &mut Vec<PathElement>) {
     let Node::Element {
+        uid,
         tag,
         attrs,
         original_open,
@@ -323,26 +332,42 @@ fn collect_paths(node: &Node, out: &mut Vec<PathElement>) {
     else {
         return;
     };
-    if tag == "path" {
+    // `<path>` always projects (even an empty `d`, matching the flat parser); the other
+    // primitives project only when they have valid geometry (else stay opaque/uneditable).
+    let subpaths = if tag == "path" {
+        Some(parse_path_d(attr(attrs, "d").unwrap_or("")))
+    } else {
+        shape_subpaths(tag, attrs)
+    };
+    if let Some(subpaths) = subpaths {
         let index = out.len();
-        let d = attr(attrs, "d").unwrap_or("").to_string();
+        // A path keeps the flat parser's `path-N` fallback name; shapes get a friendly
+        // `rect-N`/`circle-N`. Explicit `id` attr wins for either.
         let id = attr(attrs, "id")
             .filter(|s| !s.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| format!("path-{index}"));
+            .unwrap_or_else(|| format!("{tag}-{index}"));
         let mut style = IndexMap::new();
         for key in STYLE_KEYS {
             if let Some(v) = attr(attrs, key) {
                 style.insert(key.to_string(), v.to_string());
             }
         }
+        // original_d is the source `d` for a path; shapes have none (their `d` is regenerated
+        // on edit via reconcile).
+        let original_d = if tag == "path" {
+            attr(attrs, "d").unwrap_or("").to_string()
+        } else {
+            String::new()
+        };
         out.push(PathElement {
             id,
+            uid: uid.clone(),
             index,
-            subpaths: parse_path_d(&d),
+            subpaths,
             attributes: Some(style),
             original_tag: Some(original_open.clone()),
-            original_d: d,
+            original_d,
             edited: false,
             added: false,
             style_override: None,
@@ -364,61 +389,78 @@ fn set_or_push(attrs: &mut Vec<(String, String)>, key: &str, value: &str) {
     }
 }
 
-fn reconcile(node: &mut Node, paths: &[PathElement], i: &mut usize, precision: usize) {
-    // attrs/edited/children are disjoint fields, so we can update the tag *and* recurse here.
-    if let Node::Element {
+fn reconcile_node(node: &mut Node, by_uid: &HashMap<&str, &PathElement>, precision: usize) {
+    let Node::Element {
+        uid,
         tag,
         attrs,
-        edited,
+        original_open,
+        original_close,
         children,
-        ..
+        edited,
     } = node
-    {
-        if tag == "path" {
-            if let Some(p) = paths.get(*i) {
-                if p.edited {
-                    set_or_push(attrs, "d", &path_to_d_prec(&p.subpaths, precision));
-                    *edited = true;
-                }
-                if p.renamed {
-                    set_or_push(attrs, "id", &p.id);
-                    *edited = true;
-                }
-                if let Some(so) = &p.style_override {
-                    for (k, v) in so {
-                        set_or_push(attrs, k, v);
-                        *edited = true;
-                    }
-                }
+    else {
+        return;
+    };
+    if let Some(p) = by_uid.get(uid.as_str()) {
+        if p.deleted {
+            // Drop the element: blank its tags + children so it emits nothing (the flat model
+            // soft-deletes; this reflects that in the tree without touching indices).
+            original_open.clear();
+            original_close.clear();
+            children.clear();
+            *edited = false;
+            return;
+        }
+        if p.edited {
+            // An edited primitive becomes a `<path>` (its geometry is now the `d`; the shape
+            // attrs would be dead weight), then the regenerated `d` is written.
+            if tag != "path" {
+                attrs.retain(|(k, _)| !GEOMETRY_ATTRS.contains(&k.as_str()));
+                *tag = "path".to_string();
             }
-            *i += 1;
+            set_or_push(attrs, "d", &path_to_d_prec(&p.subpaths, precision));
+            *edited = true;
         }
-        for c in children {
-            reconcile(c, paths, i, precision);
+        if p.renamed {
+            set_or_push(attrs, "id", &p.id);
+            *edited = true;
         }
+        if let Some(so) = &p.style_override {
+            for (k, v) in so {
+                set_or_push(attrs, k, v);
+                *edited = true;
+            }
+        }
+    }
+    for c in children {
+        reconcile_node(c, by_uid, precision);
     }
 }
 
 impl Tree {
-    /// Project the flat `<path>` view the current editor/frontend runs on out of the tree, in
-    /// document order — the bridge that lets the `Editor` become tree-backed while the paths-based
-    /// UI keeps working unchanged. Mirrors `parse_svg`'s path extraction, sourced from tree nodes.
-    /// (Non-path elements + `<g>` structure carry richer identity on the tree; they flow into the
-    /// paths view as E2/E3 land.)
+    /// Project the flat `<path>` view the editor/frontend runs on out of the tree, in document
+    /// order — the bridge that lets the `Editor` be tree-backed while the paths UI keeps working.
+    /// Every editable shape element (`path`/`rect`/`circle`/… via `shape_subpaths`) becomes a
+    /// `PathElement` carrying its node `uid`; non-editable elements stay opaque tree nodes.
     pub fn project_paths(&self) -> Vec<PathElement> {
         let mut out = Vec::new();
         collect_paths(&self.root, &mut out);
         out
     }
 
-    /// Write the flat paths view's edits back onto the tree's `<path>` nodes (document order), so
-    /// `serialize_tree` reflects them: an edited path regenerates its `d`, a renamed one its `id`,
-    /// and style overrides merge into attrs — each marking only that node edited (siblings stay
-    /// verbatim). The return direction of `project_paths`; together they bridge flat editing ↔ the
-    /// tree until ops mutate the tree directly. (Added/deleted paths + layers land with #29's flip.)
+    /// Write the flat paths view's edits back onto the tree, matched to nodes by stable `uid`
+    /// (robust to reorder/grouping): an edited path/shape regenerates its `d` (a shape converts to
+    /// `<path>`), renamed → `id`, style overrides → attrs, deleted → dropped — each marking only
+    /// that node edited so siblings stay verbatim. The return direction of `project_paths`; drawn
+    /// (added) paths have no `uid`/node and are appended separately on export.
     pub fn reconcile_paths(&mut self, paths: &[PathElement], precision: usize) {
-        let mut i = 0;
-        reconcile(&mut self.root, paths, &mut i, precision);
+        let by_uid: HashMap<&str, &PathElement> = paths
+            .iter()
+            .filter(|p| !p.uid.is_empty())
+            .map(|p| (p.uid.as_str(), p))
+            .collect();
+        reconcile_node(&mut self.root, &by_uid, precision);
     }
 }
 
@@ -561,17 +603,72 @@ mod tests {
     }
 
     #[test]
-    fn project_paths_matches_the_flat_parser_across_the_corpus() {
-        // The tree can reproduce the exact flat `paths` view the current editor/frontend runs on
-        // — the bridge for flipping the Editor to tree-backed without changing the paths UI.
+    fn project_paths_matches_the_flat_parser_for_path_only_docs() {
+        // For path-only fixtures the projection reproduces the flat parser exactly (regression
+        // guard). Only the new `uid` differs, so compare with uid cleared. mixed-elements (index
+        // 3) has shapes → checked in the next test.
         for (i, src) in CORPUS.iter().enumerate() {
-            let projected = parse_tree(src).unwrap().project_paths();
+            if i == 3 {
+                continue;
+            }
+            let projected: Vec<_> = parse_tree(src)
+                .unwrap()
+                .project_paths()
+                .into_iter()
+                .map(|mut p| {
+                    p.uid = String::new();
+                    p
+                })
+                .collect();
             let flat = crate::model::document::parse_svg(src).unwrap().paths;
             assert_eq!(
                 projected, flat,
                 "fixture {i}: projected paths != flat parser"
             );
         }
+    }
+
+    #[test]
+    fn project_paths_includes_editable_primitives() {
+        // mixed-elements: <rect>, <circle>, <path>, <text>. The three shapes project as editable
+        // paths (text stays opaque, not editable).
+        let paths = parse_tree(CORPUS[3]).unwrap().project_paths();
+        let ids: Vec<&str> = paths.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["rect-0", "circle-1", "path-2"]); // <text> excluded
+        assert!(
+            paths.iter().all(|p| !p.uid.is_empty()),
+            "each projected path carries a uid"
+        );
+        assert!(paths[0].subpaths[0].closed && paths[0].subpaths[0].nodes.len() == 4); // rect
+    }
+
+    #[test]
+    fn editing_a_primitive_serializes_it_as_a_path_siblings_verbatim() {
+        use crate::model::types::Point;
+        let mut tree = parse_tree(CORPUS[3]).unwrap(); // rect, circle, path, text
+        let mut paths = tree.project_paths();
+        // edit the rect (index 0) — move a corner
+        paths[0].subpaths[0].nodes[0].point = Point::new(1.0, 1.0);
+        paths[0].edited = true;
+        tree.reconcile_paths(&paths, 2);
+        let out = serialize_tree(&tree);
+        assert!(
+            !out.contains("<rect"),
+            "edited rect converted away from <rect>: {out}"
+        );
+        assert!(
+            out.contains("fill=\"#f90\""),
+            "rect's fill carried onto the path: {out}"
+        );
+        // untouched siblings stay verbatim
+        assert!(
+            out.contains("<circle cx=\"50\" cy=\"50\" r=\"30\""),
+            "circle verbatim: {out}"
+        );
+        assert!(
+            out.contains("<text x=\"20\" y=\"90\""),
+            "text verbatim: {out}"
+        );
     }
 
     #[test]

@@ -29,7 +29,10 @@ export type Subpath = {
 export type PathElement = {
   /** Stable id for selection — the element's `id` attr, else `path-<index>`. */
   id: string;
-  /** 0-based position among <path> elements in document order; maps to the
+  /** Stable handle linking this path to its source tree node (empty for drawn paths). Not
+   *  written to SVG; used by the core to reconcile edits back onto the right node. */
+  uid?: string;
+  /** 0-based position among editable shape elements in document order; maps to the
    *  live DOM node when rendering. */
   index: number;
   /** The `d` attribute exactly as it appeared in the source. */

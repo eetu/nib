@@ -632,6 +632,48 @@ test("basic UI level hides advanced tools; advanced restores them", async ({ pag
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("an imported <rect> is an editable path and exports as <path> once edited", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="20" y="20" width="40" height="40" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // The <rect> projects into the model as an editable path row (Phase E: primitives editable).
+  const rows = page.locator(".layerlist .row-btn");
+  await expect(rows).toHaveCount(1);
+
+  // Select + nudge → geometry edit. The edited primitive repaints declaratively as a <path>
+  // (its source <rect> hides), and export serializes it as <path> through the document tree.
+  await rows.nth(0).click();
+  for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowRight");
+  await expect(page.locator("svg.canvas g.drawn path")).toHaveCount(1);
+  await expect(page.locator("svg.canvas g.artwork rect")).toHaveAttribute("display", "none");
+
+  // Source (= export) now has a <path>, not a <rect>.
+  await page.getByRole("button", { name: "source" }).click();
+  const src = await page.locator(".sourceview textarea").inputValue();
+  expect(src).toContain("<path");
+  expect(src).not.toContain("<rect");
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("clicking a filled shape's interior selects it (fill hit-test)", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

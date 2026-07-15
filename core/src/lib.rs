@@ -21,7 +21,8 @@ pub mod ops;
 pub mod snap;
 
 use history::History;
-use model::document::{boolean_group_result, parse_svg, serialize_svg};
+use model::document::{boolean_group_result, parse_svg, serialize_svg, serialize_via_tree};
+use model::tree::{Tree, parse_tree};
 use model::types::{Gradient, Layer, NodeRef, PathElement, Subpath, SvgDocument};
 use ops::Op;
 
@@ -44,6 +45,10 @@ struct Snapshot {
 #[wasm_bindgen]
 pub struct Editor {
     doc: Option<SvgDocument>,
+    /// The document's full-element tree, parsed once from the source — the **constant base** for
+    /// serialization. Edits live in `doc.paths` (the working model); `to_svg` reconciles them onto
+    /// a clone of this tree, so non-`<path>` structure + edited primitives export correctly.
+    tree: Option<Tree>,
     selection: Option<NodeRef>,
     selected_path: Option<usize>,
     dirty: bool,
@@ -78,8 +83,13 @@ impl Editor {
     /// Replace the document from SVG source. Errors (without mutating) if it won't parse —
     /// so a failed edit in the SOURCE drawer leaves the current doc intact.
     pub fn load_source(&mut self, source: &str) -> Result<(), String> {
-        let doc = parse_svg(source)?;
+        let mut doc = parse_svg(source)?;
+        let tree = parse_tree(source)?;
+        // The model's paths come from the tree projection — so imported primitives (rect/circle/
+        // …) are editable paths, and each carries the `uid` linking it back to its tree node.
+        doc.paths = tree.project_paths();
         self.doc = Some(doc);
+        self.tree = Some(tree);
         self.selection = None;
         self.selected_path = None;
         self.dirty = false;
@@ -136,6 +146,7 @@ impl Editor {
     pub fn new() -> Editor {
         Editor {
             doc: None,
+            tree: None,
             selection: None,
             selected_path: None,
             dirty: false,
@@ -159,6 +170,7 @@ impl Editor {
 
     pub fn clear(&mut self) {
         self.doc = None;
+        self.tree = None;
         self.selection = None;
         self.selected_path = None;
         self.dirty = false;
@@ -177,6 +189,9 @@ impl Editor {
     #[wasm_bindgen(js_name = setDocument)]
     pub fn set_document(&mut self, doc: JsValue) -> Result<(), JsValue> {
         let doc: SvgDocument = serde_wasm_bindgen::from_value(doc)?;
+        // Rebuild the constant base tree from the persisted source — its uids match the persisted
+        // paths' uids (walk order is deterministic), so reconcile on export lines up.
+        self.tree = parse_tree(&doc.source).ok();
         self.doc = Some(doc);
         self.selection = None;
         self.selected_path = None;
@@ -262,7 +277,14 @@ impl Editor {
     /// Current document serialized back to SVG (unedited markup preserved byte-for-byte).
     #[wasm_bindgen(js_name = toSvg)]
     pub fn to_svg(&self) -> String {
-        self.doc.as_ref().map(serialize_svg).unwrap_or_default()
+        match (&self.doc, &self.tree) {
+            // Tree-backed serialize (Phase E): reconcile edits onto the parsed tree — preserves
+            // non-path structure + exports edited primitives as `<path>`.
+            (Some(doc), Some(tree)) => serialize_via_tree(doc, tree, 3),
+            // Fallback (no tree, e.g. a doc set without source): the flat splice serializer.
+            (Some(doc), None) => serialize_svg(doc),
+            _ => String::new(),
+        }
     }
 
     #[wasm_bindgen(getter)]

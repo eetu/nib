@@ -131,6 +131,7 @@ mod tests {
         let d = format!("M {x0} {y0} L {x1} {y0} L {x1} {y1} L {x0} {y1} Z");
         PathElement {
             id: "r".into(),
+            uid: String::new(),
             index: 0,
             original_d: d.clone(),
             subpaths: parse_path_d(&d),
