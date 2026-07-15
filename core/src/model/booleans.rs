@@ -168,7 +168,10 @@ mod tests {
         let b = rect(5.0, 5.0, 15.0, 15.0);
         let out = boolean("union", &[&a, &b]).unwrap();
         let (x0, y0, x1, y1) = bounds(&out);
-        assert!(x0 <= 0.1 && y0 <= 0.1 && x1 >= 14.9 && y1 >= 14.9, "{x0},{y0},{x1},{y1}");
+        assert!(
+            x0 <= 0.1 && y0 <= 0.1 && x1 >= 14.9 && y1 >= 14.9,
+            "{x0},{y0},{x1},{y1}"
+        );
     }
 
     #[test]
@@ -177,7 +180,10 @@ mod tests {
         let b = rect(5.0, 5.0, 15.0, 15.0);
         let out = boolean("intersect", &[&a, &b]).unwrap();
         let (x0, y0, x1, y1) = bounds(&out);
-        assert!(x0 >= 4.9 && y0 >= 4.9 && x1 <= 10.1 && y1 <= 10.1, "{x0},{y0},{x1},{y1}");
+        assert!(
+            x0 >= 4.9 && y0 >= 4.9 && x1 <= 10.1 && y1 <= 10.1,
+            "{x0},{y0},{x1},{y1}"
+        );
     }
 
     #[test]
@@ -199,7 +205,10 @@ mod tests {
         let r = rect(10.0, 10.0, 30.0, 30.0);
         let out = offset_path(&r.subpaths, 5.0).unwrap();
         let (x0, y0, x1, y1) = bounds(&out);
-        assert!(x0 <= 6.0 && y0 <= 6.0 && x1 >= 34.0 && y1 >= 34.0, "{x0},{y0},{x1},{y1}");
+        assert!(
+            x0 <= 6.0 && y0 <= 6.0 && x1 >= 34.0 && y1 >= 34.0,
+            "{x0},{y0},{x1},{y1}"
+        );
     }
 
     #[test]
@@ -207,6 +216,9 @@ mod tests {
         let r = rect(0.0, 0.0, 20.0, 20.0);
         let out = offset_path(&r.subpaths, -5.0).unwrap();
         let (x0, y0, x1, y1) = bounds(&out);
-        assert!(x0 >= 4.0 && y0 >= 4.0 && x1 <= 16.0 && y1 <= 16.0, "{x0},{y0},{x1},{y1}");
+        assert!(
+            x0 >= 4.0 && y0 >= 4.0 && x1 <= 16.0 && y1 <= 16.0,
+            "{x0},{y0},{x1},{y1}"
+        );
     }
 }

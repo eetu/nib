@@ -17,7 +17,12 @@ fn corner(x: f64, y: f64) -> PathNode {
 pub fn rect_nodes(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<PathNode> {
     let (ax, bx) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
     let (ay, by) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
-    vec![corner(ax, ay), corner(bx, ay), corner(bx, by), corner(ax, by)]
+    vec![
+        corner(ax, ay),
+        corner(bx, ay),
+        corner(bx, by),
+        corner(ax, by),
+    ]
 }
 
 /// Two corner nodes of a straight line segment (open subpath).
@@ -38,7 +43,14 @@ pub fn polygon_nodes(cx: f64, cy: f64, r: f64, sides: u32, rotation: f64) -> Vec
 }
 
 /// `2 * points` corner nodes of a star, alternating `outer`/`inner` radius.
-pub fn star_nodes(cx: f64, cy: f64, outer: f64, inner: f64, points: u32, rotation: f64) -> Vec<PathNode> {
+pub fn star_nodes(
+    cx: f64,
+    cy: f64,
+    outer: f64,
+    inner: f64,
+    points: u32,
+    rotation: f64,
+) -> Vec<PathNode> {
     let n = points.max(2);
     (0..2 * n)
         .map(|i| {

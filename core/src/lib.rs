@@ -11,6 +11,7 @@
 //! state). Editing logic is deliberately split so it is testable natively: each JS-facing
 //! `#[wasm_bindgen]` method is a thin serde wrapper over a plain-Rust core method.
 
+use indexmap::IndexMap;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -20,8 +21,8 @@ pub mod ops;
 pub mod snap;
 
 use history::History;
-use model::document::{parse_svg, serialize_svg};
-use model::types::{Gradient, Layer, NodeRef, PathElement, SvgDocument};
+use model::document::{boolean_group_result, parse_svg, serialize_svg};
+use model::types::{Gradient, Layer, NodeRef, PathElement, Subpath, SvgDocument};
 use ops::Op;
 
 const BLANK_SVG: &str =
@@ -288,6 +289,27 @@ impl Editor {
     /// document, the selection, and the undo/dirty flags. Maps serialize as plain JS objects
     /// (not `Map`s) so `attributes.fill` reads work.
     pub fn state(&self) -> Result<JsValue, JsValue> {
+        // Compute live-boolean group results here (not stored on the doc) so the UI can render
+        // the baked geometry while the operands stay editable in `document.paths`.
+        let boolean_results: Vec<BooleanResultDto> = self
+            .doc
+            .as_ref()
+            .map(|doc| {
+                doc.layers
+                    .iter()
+                    .filter(|l| l.boolean_op.is_some())
+                    .filter_map(|l| {
+                        boolean_group_result(doc, l).map(|(subpaths, attributes)| {
+                            BooleanResultDto {
+                                layer: l.id.clone(),
+                                subpaths,
+                                attributes,
+                            }
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let state = EditorState {
             document: self.doc.as_ref(),
             selection: self.selection,
@@ -295,6 +317,7 @@ impl Editor {
             dirty: self.dirty,
             can_undo: self.history.can_undo(),
             can_redo: self.history.can_redo(),
+            boolean_results,
         };
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
         state.serialize(&serializer).map_err(Into::into)
@@ -319,6 +342,18 @@ struct EditorState<'a> {
     can_undo: bool,
     #[serde(rename = "canRedo")]
     can_redo: bool,
+    /// Computed geometry of each live-boolean group (derived, not stored on the doc).
+    #[serde(rename = "booleanResults")]
+    boolean_results: Vec<BooleanResultDto>,
+}
+
+/// A live-boolean group's computed render geometry + the paint it inherits (subject style).
+#[derive(Serialize)]
+struct BooleanResultDto {
+    /// The boolean group's layer id.
+    layer: String,
+    subpaths: Vec<Subpath>,
+    attributes: IndexMap<String, String>,
 }
 
 /// The core crate version, surfaced in the UI to confirm the WASM engine is loaded.

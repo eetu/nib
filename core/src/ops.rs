@@ -34,11 +34,39 @@ pub enum Handle {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "shape", rename_all = "camelCase")]
 pub enum ShapeSpec {
-    Ellipse { cx: f64, cy: f64, rx: f64, ry: f64 },
-    Rect { x0: f64, y0: f64, x1: f64, y1: f64 },
-    Line { x0: f64, y0: f64, x1: f64, y1: f64 },
-    Polygon { cx: f64, cy: f64, r: f64, sides: u32, rotation: f64 },
-    Star { cx: f64, cy: f64, outer: f64, inner: f64, points: u32, rotation: f64 },
+    Ellipse {
+        cx: f64,
+        cy: f64,
+        rx: f64,
+        ry: f64,
+    },
+    Rect {
+        x0: f64,
+        y0: f64,
+        x1: f64,
+        y1: f64,
+    },
+    Line {
+        x0: f64,
+        y0: f64,
+        x1: f64,
+        y1: f64,
+    },
+    Polygon {
+        cx: f64,
+        cy: f64,
+        r: f64,
+        sides: u32,
+        rotation: f64,
+    },
+    Star {
+        cx: f64,
+        cy: f64,
+        outer: f64,
+        inner: f64,
+        points: u32,
+        rotation: f64,
+    },
 }
 
 impl ShapeSpec {
@@ -48,12 +76,21 @@ impl ShapeSpec {
             ShapeSpec::Ellipse { cx, cy, rx, ry } => (ellipse_nodes(cx, cy, rx, ry), true),
             ShapeSpec::Rect { x0, y0, x1, y1 } => (rect_nodes(x0, y0, x1, y1), true),
             ShapeSpec::Line { x0, y0, x1, y1 } => (line_nodes(x0, y0, x1, y1), false),
-            ShapeSpec::Polygon { cx, cy, r, sides, rotation } => {
-                (polygon_nodes(cx, cy, r, sides, rotation), true)
-            }
-            ShapeSpec::Star { cx, cy, outer, inner, points, rotation } => {
-                (star_nodes(cx, cy, outer, inner, points, rotation), true)
-            }
+            ShapeSpec::Polygon {
+                cx,
+                cy,
+                r,
+                sides,
+                rotation,
+            } => (polygon_nodes(cx, cy, r, sides, rotation), true),
+            ShapeSpec::Star {
+                cx,
+                cy,
+                outer,
+                inner,
+                points,
+                rotation,
+            } => (star_nodes(cx, cy, outer, inner, points, rotation), true),
         }
     }
 }
@@ -142,6 +179,22 @@ pub enum Op {
         id: String,
         name: String,
     },
+    /// Wrap paths into a new **live boolean** group (`op` = union/subtract/intersect/exclude):
+    /// like `GroupPaths` but the group renders/exports the *computed* boolean of its members
+    /// (which stay editable operands), recomputed live as they change. Non-destructive.
+    BooleanGroup {
+        op: String,
+        paths: Vec<usize>,
+        id: String,
+        name: String,
+    },
+    /// Set (`Some`) or clear (`None`) the live-boolean op on an existing group — turning a plain
+    /// group into a live boolean, changing the operation, or flattening it back to a plain group.
+    SetLayerBoolean {
+        layer: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        op: Option<String>,
+    },
 
     /// Set (`value: Some`) or clear (`value: None`) one presentation attribute. Added paths
     /// edit their own `attributes`; imported paths accumulate a `style_override`.
@@ -199,11 +252,7 @@ pub enum Op {
     SimplifyPath { path: usize, tolerance: f64 },
     /// Expand a path's stroke (`width`) into a filled outline: the source is soft-deleted and a
     /// new fill path (`id`) is added, its fill taken from the source's stroke colour.
-    OutlineStroke {
-        path: usize,
-        width: f64,
-        id: String,
-    },
+    OutlineStroke { path: usize, width: f64, id: String },
     /// Offset a path's outline by `distance` (outward if positive, inward if negative), adding
     /// the result as a new path (`id`) that inherits the source's style; the source is kept.
     OffsetPath {
@@ -211,6 +260,48 @@ pub enum Op {
         distance: f64,
         id: String,
     },
+}
+
+/// Shared by `GroupPaths` (boolean_op = None) and `BooleanGroup` (Some(op)): create the group
+/// (active), assign the paths to it, and pull them into a contiguous block at the lowest
+/// member's slot. Returns false if the selection is empty or the id already exists.
+fn group_paths_into(
+    doc: &mut SvgDocument,
+    paths: &[usize],
+    id: &str,
+    name: &str,
+    boolean_op: Option<String>,
+) -> bool {
+    let mut idxs: Vec<usize> = paths
+        .iter()
+        .copied()
+        .filter(|&i| i < doc.paths.len())
+        .collect();
+    idxs.sort_unstable();
+    idxs.dedup();
+    if idxs.is_empty() || doc.layers.iter().any(|l| l.id == id) {
+        return false;
+    }
+    doc.layers.push(Layer {
+        id: id.to_string(),
+        name: name.to_string(),
+        visible: true,
+        boolean_op,
+    });
+    doc.active_layer = Some(id.to_string());
+    for &i in &idxs {
+        if let Some(p) = doc.paths.get_mut(i) {
+            p.layer = Some(id.to_string());
+        }
+    }
+    // Pull the members into a contiguous block at the lowest member's position.
+    let at = idxs[0];
+    let mut block: Vec<PathElement> = idxs.iter().rev().map(|&i| doc.paths.remove(i)).collect();
+    block.reverse();
+    for (k, p) in block.into_iter().enumerate() {
+        doc.paths.insert(at + k, p);
+    }
+    true
 }
 
 /// Apply an op to the document in place. Returns `true` if it found its target and mutated,
@@ -283,7 +374,8 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 };
                 let out_len = next.or(prev).map(|q| distance(p, q) / 3.0).unwrap_or(0.0);
                 let in_len = prev.or(next).map(|q| distance(p, q) / 3.0).unwrap_or(0.0);
-                sp.nodes[ni].handle_in = Some(Point::new(p.x - dir.x * in_len, p.y - dir.y * in_len));
+                sp.nodes[ni].handle_in =
+                    Some(Point::new(p.x - dir.x * in_len, p.y - dir.y * in_len));
                 sp.nodes[ni].handle_out =
                     Some(Point::new(p.x + dir.x * out_len, p.y + dir.y * out_len));
             }
@@ -506,34 +598,20 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             p.hidden = *hidden;
             true
         }
-        Op::GroupPaths { paths, id, name } => {
-            let mut idxs: Vec<usize> =
-                paths.iter().copied().filter(|&i| i < doc.paths.len()).collect();
-            idxs.sort_unstable();
-            idxs.dedup();
-            if idxs.is_empty() || doc.layers.iter().any(|l| &l.id == id) {
-                return false;
+        Op::GroupPaths { paths, id, name } => group_paths_into(doc, paths, id, name, None),
+        Op::BooleanGroup {
+            op,
+            paths,
+            id,
+            name,
+        } => group_paths_into(doc, paths, id, name, Some(op.clone())),
+        Op::SetLayerBoolean { layer, op } => match doc.layers.iter_mut().find(|l| &l.id == layer) {
+            Some(l) => {
+                l.boolean_op = op.clone();
+                true
             }
-            doc.layers.push(Layer {
-                id: id.clone(),
-                name: name.clone(),
-                visible: true,
-            });
-            doc.active_layer = Some(id.clone());
-            for &i in &idxs {
-                if let Some(p) = doc.paths.get_mut(i) {
-                    p.layer = Some(id.clone());
-                }
-            }
-            // Pull the members into a contiguous block at the lowest member's position.
-            let at = idxs[0];
-            let mut block: Vec<PathElement> = idxs.iter().rev().map(|&i| doc.paths.remove(i)).collect();
-            block.reverse();
-            for (k, p) in block.into_iter().enumerate() {
-                doc.paths.insert(at + k, p);
-            }
-            true
-        }
+            None => false,
+        },
         Op::SetStyle { path, key, value } => {
             let Some(p) = doc.paths.get_mut(*path) else {
                 return false;
@@ -562,6 +640,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 id: id.clone(),
                 name: name.clone(),
                 visible: true,
+                boolean_op: None,
             });
             doc.active_layer = Some(id.clone());
             true
@@ -847,7 +926,10 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                         m.insert(k.clone(), v.clone());
                     }
                 }
-                let stroke_color = m.get("stroke").cloned().unwrap_or_else(|| "#000000".to_string());
+                let stroke_color = m
+                    .get("stroke")
+                    .cloned()
+                    .unwrap_or_else(|| "#000000".to_string());
                 m.insert("fill".to_string(), stroke_color);
                 m.insert("stroke".to_string(), "none".to_string());
                 m.shift_remove("stroke-width");
@@ -1307,11 +1389,78 @@ mod tests {
     }
 
     #[test]
+    fn boolean_group_creates_a_live_boolean_layer() {
+        let mut doc = doc_from("M 0 0 L 60 0 L 60 60 L 0 60 Z", true); // p0 (subject)
+        apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "cutter".into(),
+                subpaths: parse_path_d("M 40 40 L 100 40 L 100 100 L 40 100 Z"),
+                attributes: IndexMap::new(),
+            },
+        );
+        assert!(apply(
+            &mut doc,
+            &Op::BooleanGroup {
+                op: "subtract".into(),
+                paths: vec![0, 1],
+                id: "b1".into(),
+                name: "cut".into(),
+            }
+        ));
+        let layer = doc.layers.iter().find(|l| l.id == "b1").unwrap();
+        assert_eq!(layer.boolean_op.as_deref(), Some("subtract"));
+        assert_eq!(doc.paths[0].layer.as_deref(), Some("b1")); // operands still present + editable
+        assert_eq!(doc.paths[1].layer.as_deref(), Some("b1"));
+
+        // SetLayerBoolean can change the op and flatten it back to a plain group.
+        assert!(apply(
+            &mut doc,
+            &Op::SetLayerBoolean {
+                layer: "b1".into(),
+                op: Some("union".into()),
+            }
+        ));
+        assert_eq!(
+            doc.layers
+                .iter()
+                .find(|l| l.id == "b1")
+                .unwrap()
+                .boolean_op
+                .as_deref(),
+            Some("union")
+        );
+        assert!(apply(
+            &mut doc,
+            &Op::SetLayerBoolean {
+                layer: "b1".into(),
+                op: None,
+            }
+        ));
+        assert_eq!(
+            doc.layers.iter().find(|l| l.id == "b1").unwrap().boolean_op,
+            None
+        );
+    }
+
+    #[test]
     fn set_path_hidden_toggles() {
         let mut doc = doc_from("M 0 0 L 1 1", true);
-        assert!(apply(&mut doc, &Op::SetPathHidden { path: 0, hidden: true }));
+        assert!(apply(
+            &mut doc,
+            &Op::SetPathHidden {
+                path: 0,
+                hidden: true
+            }
+        ));
         assert!(doc.paths[0].hidden);
-        assert!(!apply(&mut doc, &Op::SetPathHidden { path: 0, hidden: true }));
+        assert!(!apply(
+            &mut doc,
+            &Op::SetPathHidden {
+                path: 0,
+                hidden: true
+            }
+        ));
     }
 
     #[test]
@@ -1546,7 +1695,12 @@ mod tests {
             &Op::SetShape {
                 path: 0,
                 subpath: 0,
-                spec: ShapeSpec::Rect { x0: 10.0, y0: 20.0, x1: 30.0, y1: 40.0 },
+                spec: ShapeSpec::Rect {
+                    x0: 10.0,
+                    y0: 20.0,
+                    x1: 30.0,
+                    y1: 40.0,
+                },
             },
         );
         assert_eq!(doc.paths[0].subpaths[0].nodes.len(), 4);
@@ -1557,7 +1711,12 @@ mod tests {
             &Op::SetShape {
                 path: 0,
                 subpath: 0,
-                spec: ShapeSpec::Line { x0: 0.0, y0: 0.0, x1: 5.0, y1: 5.0 },
+                spec: ShapeSpec::Line {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 5.0,
+                    y1: 5.0,
+                },
             },
         );
         assert_eq!(doc.paths[0].subpaths[0].nodes.len(), 2);

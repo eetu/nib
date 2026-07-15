@@ -85,6 +85,12 @@ pub struct Layer {
     pub name: String,
     #[serde(default = "default_true")]
     pub visible: bool,
+    /// When set ("union"/"subtract"/"intersect"/"exclude") the group is a **live boolean**: its
+    /// member paths are editable operands and the document renders/exports the *computed* boolean
+    /// of them (subject = the first member) instead of the members themselves. `None` = a plain
+    /// organizational group. Non-destructive — reshaping an operand re-cuts the result live.
+    #[serde(rename = "booleanOp", skip_serializing_if = "Option::is_none", default)]
+    pub boolean_op: Option<String>,
 }
 
 fn zero() -> f64 {
@@ -197,7 +203,11 @@ pub struct SvgDocument {
     #[serde(default)]
     pub layers: Vec<Layer>,
     /// The layer new shapes are added to (`None` = unassigned).
-    #[serde(rename = "activeLayer", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "activeLayer",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub active_layer: Option<String>,
     /// Gradient paints, injected into a `<defs>` on export (empty = none).
     #[serde(default)]
