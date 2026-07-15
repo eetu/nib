@@ -45,6 +45,11 @@
       run: () => editor.booleanOp(op),
       enabled: () => editor.selectedPaths.length >= 2,
     })),
+    ...(["union", "subtract", "intersect", "exclude"] as const).map((op) => ({
+      label: `Live boolean: ${op} (non-destructive)`,
+      run: () => editor.makeBooleanGroup(op),
+      enabled: () => editor.selectedPaths.length >= 2,
+    })),
     {
       label: "Make compound path",
       run: () => editor.combinePaths(),

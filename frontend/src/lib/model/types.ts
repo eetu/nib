@@ -76,6 +76,19 @@ export type Layer = {
   id: string;
   name: string;
   visible: boolean;
+  /** When set the group is a **live boolean**: its members are editable operands and the
+   *  document renders the *computed* boolean of them (see `BooleanResult`) instead of the
+   *  members. Absent = a plain organizational group. */
+  booleanOp?: "union" | "subtract" | "intersect" | "exclude";
+};
+
+/** A live boolean group's computed render geometry + the paint it inherits (subject style).
+ *  Derived by the core each snapshot (not stored on the doc); the canvas renders these. */
+export type BooleanResult = {
+  /** The boolean group's layer id. */
+  layer: string;
+  subpaths: Subpath[];
+  attributes: Record<string, string>;
 };
 
 export type GradientStop = { offset: number; color: string; opacity?: number };

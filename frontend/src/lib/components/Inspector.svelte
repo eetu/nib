@@ -47,6 +47,13 @@
   const opacityPct = $derived(Math.round((Number(style.opacity ?? "1") || 1) * 100));
 
   let opacityLive = $state<number | null>(null);
+  // When on, the boolean buttons build a *live* (non-destructive) boolean group — operands stay
+  // editable and the result recomputes — instead of baking + deleting the inputs.
+  let booleanLive = $state(false);
+  function doBoolean(op: "union" | "subtract" | "intersect" | "exclude"): void {
+    if (booleanLive) editor.makeBooleanGroup(op);
+    else editor.booleanOp(op);
+  }
   const opacityShown = $derived(opacityLive ?? opacityPct);
 
   let offsetDist = $state(4);
@@ -307,14 +314,17 @@
           </button>
         </div>
       {/if}
+      <label
+        class="live-toggle"
+        title="live = non-destructive: operands stay editable, result recomputes"
+      >
+        <input type="checkbox" bind:checked={booleanLive} /> live (non-destructive)
+      </label>
       <div class="combine">
-        <button title="unite" onclick={() => editor.booleanOp("union")}>union</button>
-        <button title="front minus back" onclick={() => editor.booleanOp("subtract")}
-          >subtract</button
-        >
-        <button title="intersection" onclick={() => editor.booleanOp("intersect")}>intersect</button
-        >
-        <button title="exclude overlap" onclick={() => editor.booleanOp("exclude")}>exclude</button>
+        <button title="unite" onclick={() => doBoolean("union")}>union</button>
+        <button title="front minus back" onclick={() => doBoolean("subtract")}>subtract</button>
+        <button title="intersection" onclick={() => doBoolean("intersect")}>intersect</button>
+        <button title="exclude overlap" onclick={() => doBoolean("exclude")}>exclude</button>
       </div>
       <button
         class="combine-all"
@@ -1056,6 +1066,16 @@
   }
 
   /* boolean path ops (union / subtract / intersect / exclude) */
+  .live-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 6px 0 4px;
+    font-size: 11px;
+    color: var(--halo-text-muted);
+    cursor: pointer;
+  }
+
   .combine {
     display: grid;
     grid-template-columns: 1fr 1fr;

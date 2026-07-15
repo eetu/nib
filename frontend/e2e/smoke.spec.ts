@@ -552,6 +552,51 @@ test("boolean union combines two shapes into one", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("live boolean keeps operands editable and recomputes the result", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  // Two overlapping filled squares.
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><path d="M10 10 H70 V70 H10 Z" fill="#3b82f6"/><path d="M50 50 H110 V110 H50 Z" fill="#ef4444"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const rows = page.locator(".layerlist .row-btn");
+  await expect(rows).toHaveCount(2);
+  await rows.nth(0).click();
+  await rows.nth(1).click({ modifiers: ["Shift"] });
+
+  // Turn on live (non-destructive) mode, then subtract → a live boolean group.
+  await page.getByLabel("live (non-destructive)").check();
+  await page.getByRole("button", { name: "subtract", exact: true }).click();
+
+  // The computed result renders, and BOTH operands survive (non-destructive — vs the
+  // destructive boolean above which collapses to one path).
+  const result = page.locator("svg.canvas g.booleans path");
+  await expect(result).toHaveCount(1);
+  await expect(rows).toHaveCount(2);
+
+  // Reshape an operand (nudge it) → the result recomputes live (its `d` changes).
+  const beforeD = await result.getAttribute("d");
+  await rows.nth(0).click();
+  for (let i = 0; i < 8; i++) await page.keyboard.press("ArrowRight");
+  await expect(result).not.toHaveAttribute("d", beforeD ?? "");
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("clicking a filled shape's interior selects it (fill hit-test)", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

@@ -45,6 +45,25 @@
   const outlineD = $derived(
     boxPath && !boxPath.deleted ? pathToD(toScreenSubpaths(boxPath.subpaths)) : "",
   );
+
+  // Live-boolean operand outlines: when a boolean group is "active" (a member is selected or
+  // node-edited) show *all* its operands as faint outlines, so the editable source shapes are
+  // visible behind the computed result (Pixelmator-style).
+  const booleanLayerIds = $derived(editor.booleanLayerIds);
+  const activeBoolLayers = $derived(
+    new Set(
+      (doc?.paths ?? [])
+        .map((p, i) => ({ p, i }))
+        .filter(
+          ({ p, i }) =>
+            !p.deleted &&
+            p.layer &&
+            booleanLayerIds.has(p.layer) &&
+            (editor.selectedPaths.includes(i) || editor.nodeEditIndex === i),
+        )
+        .map(({ p }) => p.layer as string),
+    ),
+  );
 </script>
 
 {#if doc}
@@ -78,6 +97,11 @@
         height={Math.abs(b.y - a.y)}
       />
     {/if}
+    {#each doc.paths as p, pi (pi)}
+      {#if p.layer && activeBoolLayers.has(p.layer) && !p.deleted}
+        <path class="operand-outline" d={pathToD(toScreenSubpaths(p.subpaths))} />
+      {/if}
+    {/each}
     {#if outlineD}
       <!-- selection centerline: light casing + accent core so it reads on any
            stroke colour (Pixelmator-style) -->
@@ -211,6 +235,15 @@
     fill: none;
     stroke: var(--halo-accent);
     stroke-width: 1.25;
+  }
+
+  /* live-boolean operand outlines — faint dashed source shapes behind the computed result */
+  .operand-outline {
+    fill: none;
+    stroke: var(--halo-accent);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+    opacity: 0.5;
   }
 
   /* selection bounding box around the selected path */

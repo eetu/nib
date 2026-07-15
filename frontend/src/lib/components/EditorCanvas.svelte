@@ -32,10 +32,19 @@
   const hiddenLayers = $derived(
     new Set((editor.doc?.layers ?? []).filter((l) => !l.visible).map((l) => l.id)),
   );
-  // Drawn paths to render, in draw (array) order = z-order; skip hidden paths + hidden groups.
+  // Live boolean groups: their members are operands, so we render the *computed* result
+  // (editor.booleanResults) instead of the members' own fills.
+  const booleanLayers = $derived(editor.booleanLayerIds);
+  // Drawn paths to render, in draw (array) order = z-order; skip hidden paths + hidden groups
+  // + boolean-group operands (represented by the computed result below).
   const newPaths = $derived(
     editor.doc?.paths.filter(
-      (p) => p.added && !p.deleted && !p.hidden && !(p.layer && hiddenLayers.has(p.layer)),
+      (p) =>
+        p.added &&
+        !p.deleted &&
+        !p.hidden &&
+        !(p.layer && hiddenLayers.has(p.layer)) &&
+        !(p.layer && booleanLayers.has(p.layer)),
     ) ?? [],
   );
 
@@ -103,7 +112,12 @@
     for (const p of doc.paths) {
       const el = livePaths[p.index];
       if (!el) continue;
-      if (p.deleted || p.hidden || (p.layer && hiddenLayers.has(p.layer))) {
+      if (
+        p.deleted ||
+        p.hidden ||
+        (p.layer && hiddenLayers.has(p.layer)) ||
+        (p.layer && booleanLayers.has(p.layer)) // operand of a live boolean → result renders instead
+      ) {
         el.setAttribute("display", "none");
         continue;
       }
@@ -353,6 +367,12 @@
       <g class="drawn">
         {#each newPaths as p (p.id)}
           <path {...p.attributes ?? {}} d={pathToD(p.subpaths)} />
+        {/each}
+      </g>
+      <!-- live boolean groups: the computed result (operands render as overlay outlines) -->
+      <g class="booleans">
+        {#each editor.booleanResults as r (r.layer)}
+          <path {...r.attributes} d={pathToD(r.subpaths)} />
         {/each}
       </g>
     </g>

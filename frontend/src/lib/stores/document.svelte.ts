@@ -2,6 +2,7 @@ import { Editor as WasmEditor } from "$lib/core";
 import { STYLE_KEYS } from "$lib/model/document";
 import { tightBounds } from "$lib/model/geometry";
 import type {
+  BooleanResult,
   Gradient,
   Layer,
   NodeRef,
@@ -35,6 +36,8 @@ type CoreState = {
   selectedPath: number | null;
   canUndo: boolean;
   canRedo: boolean;
+  /** Computed geometry of each live-boolean group (derived, not part of the doc). */
+  booleanResults: BooleanResult[];
 };
 
 type Clipboard = { subpaths: Subpath[]; attributes: Record<string, string>; name: string };
@@ -78,6 +81,8 @@ class DocumentStore {
    *  the select tool moves whole shapes; when set, that path's anchors/handles are editable.
    *  Client-only editing mode — not persisted (reload starts in object mode). */
   nodeEditIndex = $state<number | null>(null);
+  /** Computed render geometry of each live-boolean group (mirrored from the core snapshot). */
+  booleanResults = $state<BooleanResult[]>([]);
   #canUndo = $state(false);
   #canRedo = $state(false);
   /** Unsaved changes since the last load/save — owned here (not mirrored) so a rehydrated
@@ -133,6 +138,7 @@ class DocumentStore {
     this.doc = st.document ?? null;
     this.selection = st.selection ?? null;
     this.selectedPath = st.selectedPath ?? null;
+    this.booleanResults = st.booleanResults ?? [];
     this.#canUndo = st.canUndo;
     this.#canRedo = st.canRedo;
     // Keep the client object-selection set consistent with the core's single selection when
@@ -529,6 +535,34 @@ class DocumentStore {
   /** Dissolve a group — its paths become top level (the geometry is untouched). */
   ungroup(layerId: string): void {
     this.deleteLayer(layerId);
+  }
+
+  /** Layer ids that are live boolean groups — their members are operands (the canvas renders
+   *  the computed result instead of the members' own fills). */
+  get booleanLayerIds(): Set<string> {
+    return new Set((this.doc?.layers ?? []).filter((l) => l.booleanOp).map((l) => l.id));
+  }
+
+  /** Wrap the current object selection into a new **live boolean** group (non-destructive:
+   *  the members stay editable operands; the group renders the computed boolean, recomputed as
+   *  they change). Needs ≥2 selected paths. */
+  makeBooleanGroup(op: "union" | "subtract" | "intersect" | "exclude"): void {
+    const sel = [...this.selectedPaths].sort((a, b) => a - b);
+    if (sel.length < 2) return;
+    const id = crypto.randomUUID();
+    const name = this.#freshId(op);
+    if (this.#apply({ type: "booleanGroup", op, paths: sel, id, name })) {
+      this.commit();
+      const start = sel[0];
+      this.selectedPaths = sel.map((_, k) => start + k); // the now-contiguous operands
+      this.#persist();
+    }
+  }
+
+  /** Change (or clear, `null`) the live-boolean op on an existing group — flip union↔subtract,
+   *  or flatten a boolean back to a plain group. */
+  setLayerBoolean(layer: string, op: "union" | "subtract" | "intersect" | "exclude" | null): void {
+    if (this.#apply({ type: "setLayerBoolean", layer, op: op ?? undefined })) this.commit();
   }
 
   /** Show/hide a single path. */
