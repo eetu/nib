@@ -50,10 +50,10 @@ Per-area detail in `frontend/CLAUDE.md`.
   else — other elements, attributes, unedited paths — is preserved verbatim.
   Arcs in an *edited* path convert to cubics (lossy); untouched paths never change.
 - **Added (drawn) paths** carry `added: true` + their own `attributes` and have
-  no source location. They render from the model (a Svelte-managed `<g class=
-  "drawn">`, not the imperatively-imported artwork) and are *appended* before
-  `</svg>` on export. Everything else treats them like any path (editable,
-  snappable, undoable, persisted).
+  no source location. They render from the model in a Svelte-managed `<g class=
+  "drawn">` (on top of the imported document's declarative render) and are
+  *appended* before `</svg>` on export. Everything else treats them like any path
+  (editable, snappable, undoable, persisted).
 - **Layers = objects + groups (Figma/Pixelmator model, one level).** The single
   Inspector **LAYERS** panel *is* the object list: every path/shape is a row,
   **z-order = the `paths` array order** (drag a row to reorder → `ReorderPath`),
@@ -247,13 +247,15 @@ client-side pro pillars, all running on the core):
   `<polygon>`/`<polyline>`) are editable paths** (each carries a stable `uid`); `to_svg` =
   `serialize_via_tree` (reconcile flat edits by uid onto a tree clone — edited primitive →
   `<path>`, deleted dropped, siblings verbatim — then append drawn + inject defs + grow
-  viewBox). Frontend: edited `<path>`s update in place; edited primitives hide their source
-  node + repaint declaratively as `<path>`. Fidelity gate: `core/tests/roundtrip.rs` corpus.
-  **Remaining:** E3 real nested groups (object tree, subsumes D) · E4 text/image/use · E5
-  defs · a full declarative tree render (#30, retires the imperative import + fixes the
-  edited-primitive z-order wart) · "export normalized copy" · then finalize. Caveats now:
-  edited primitives render above other artwork; reordering *imported* paths may not reflect
-  on export. Full plan: `~/.claude/plans/nib-full-svg-dom.md`.
+  viewBox). Edited primitives **re-fit** on export — a form-preserving move/resize stays
+  `<rect>`/`<circle>`/… with updated attrs, only a freeform reshape falls to `<path>`
+  (`tree::refit`). **Rendering is fully declarative (#30 landed):** `EditorCanvas` draws the
+  whole document from `editor.renderTree()` — editable shapes as `<path>` from the model in
+  true z-order, opaque elements verbatim via `<svelte:element>`; the imperative import is
+  retired. Fidelity gate: `core/tests/roundtrip.rs` corpus. **Remaining:** E3 real nested
+  groups (object tree, subsumes D) · E4 text/image/use · E5 defs · "export normalized copy" ·
+  then finalize. Caveat: reordering *imported* paths may not reflect on export (tree emits in
+  source order). Full plan: `~/.claude/plans/nib-full-svg-dom.md`.
   Paired UX **(landed early, ahead of E):** a persisted **basic/advanced** UI preference
   (`settings.uiLevel`, default **advanced**) — *basic* is the opt-in that declutters to
   touch-up tools (select/node-edit/solid-style/save; hides the shapes rail group, arrange,

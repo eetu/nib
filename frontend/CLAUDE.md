@@ -49,5 +49,9 @@ Use yarn (the repo-vendored release). Unit tests cover the pure-TS core
   flips), and an inline script in `app.html` does the same pre-paint (no flash).
   `settings.canvasBg` (checker/light/dark) is the artwork's preview surface —
   absolute colours, orthogonal to the UI theme.
-- EditorCanvas imports the artwork imperatively into a `<g>` it owns (that's why
-  `svelte/no-dom-manipulating` is disabled at those two lines).
+- EditorCanvas renders the whole document **declaratively** from the core's render tree
+  (`editor.renderTree()`, constant per source): a recursive snippet draws editable shapes as
+  `<path>` from the model (live geometry by `uid`, true document z-order) and opaque elements
+  (`<g>`/`<text>`/`<image>`/`<defs>`/…) verbatim via `<svelte:element>`. Drawn (added) paths +
+  computed boolean results render in sibling groups on top. (The old imperative artwork
+  import + `livePaths[index]` mapping is gone.)
