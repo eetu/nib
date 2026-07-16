@@ -242,17 +242,29 @@ client-side pro pillars, all running on the core):
   UX polish, ship a 1.0), not new capability. **Phase C is not part of "the editor"** — it's
   the co-editing/persistence infra wrapping the *same* core, a parallel/after track; the
   browser-only editor stays fully functional without it.
-- **Phase C (additive, flag-gated):** rust-axum backend running the same core —
-  op-log-over-WebSocket sync + an MCP tool surface. **The op vocabulary the editor
-  already runs on IS the surface** (`moveNode` … `booleanOp` … `groupNodes`).
-  Browser-only build stays fully functional. **C1 LANDED** (backend serving the SPA + a
-  validated `.svg` documents API). **C3 LANDED** — the MCP tool surface (`backend/src/mcp.rs`,
-  `rmcp` 0.5): nested at **`/mcp`** on the same axum server via the Streamable-HTTP transport,
-  sharing one in-process editing session (`Editor` behind an `Arc<Mutex<Session>>`) so an LLM
-  and — after C2 — the live UI drive the same document. Tools: `list_documents`,
-  `open_document`, `get_document` (structured summary, paths by integer `index`), `get_svg`,
-  **`apply_op`** (the full op vocabulary as tagged JSON — the faithful surface), `save_document`
-  (validated write). C2 (op-log-over-WebSocket live sync) is the remaining Phase-C slice.
+- **Phase C (additive, flag-gated): the backend co-editing track — mostly LANDED.** A
+  rust-axum backend (`backend/`) links the **same `nib-core` natively** and now persists
+  **projects** in **SQLite** (sqlx), owned by **token-authed users** — a real multiuser scaffold
+  (a seeded `developer` user + per-user bearer token; no login yet). **The op vocabulary the
+  editor already runs on IS the surface** (`moveNode` … `booleanOp` … `groupNodes`). What's live:
+  - **Persistence + auth** (`db.rs`, `auth.rs`): `migrations/` (users, projects; the SVG source is
+    a `projects.svg` column), `Authorization: Bearer <token>` (an `AuthUser` extractor + an MCP
+    helper). REST (retired the C1 file API): `/api/me`, `/api/projects` (list/create),
+    `/api/projects/{id}` (get/put svg) — token-authed + ownership-scoped, writes validated through
+    the parser.
+  - **Sessions** (`session.rs`): one authoritative in-memory `Editor` per open project (keyed by
+    id, shared registry). Every edit funnels through `apply_ops` → mutate → **broadcast** → persist.
+  - **MCP** (`mcp.rs`, `rmcp` 0.5) nested at **`/mcp`** (Streamable-HTTP): token-authed +
+    project-scoped. Tools: `list_projects`/`create_project`/`open_project`, `get_document`
+    (structured, paths by integer `index`), `get_svg`, **`apply_op`** (full op vocabulary), +
+    ergonomic wrappers `add_shape`/`set_style`/`boolean_op`.
+  - **C2 live sync** (`sync.rs`): `GET /ws/projects/{id}?token=…` — the browser + the LLM edit the
+    **same project live**; MCP `apply_op` broadcasts to the WS, and WS ops broadcast back
+    (echo-guarded by `clientId`).
+  - **Remaining:** the **frontend connected mode** — build-flagged (`PUBLIC_NIB_BACKEND`) so the
+    **standalone / GitHub-Pages build ships zero backend code** and stays a pure local file editor;
+    when on, a projects list + token-in-Settings + `ProjectSync` (WS) + `DocumentStore.applyRemote`
+    make the co-editing visible in the browser. Plan: `~/.claude/plans/happy-crunching-blum.md`.
 - **Phase D — LANDED (folded into E3):** arbitrary *nested* groups are the object tree
   itself — `GroupNodes`/`UngroupNode`/`ReorderNode`/`SetNodeHidden` on stable-id (`uid`)
   addressing; drawn + imported content unified into one tree, `<g>`-wrapped on export.
