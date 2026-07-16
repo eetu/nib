@@ -68,6 +68,9 @@
         : {},
   );
   const opacityPct = $derived(Math.round((Number(style.opacity ?? "1") || 1) * 100));
+  // Paint set to "none" makes its sub-controls no-ops — dim/disable them so they don't read as live.
+  const fillNone = $derived((style.fill ?? "none") === "none");
+  const strokeNone = $derived((style.stroke ?? "none") === "none");
 
   let opacityLive = $state<number | null>(null);
   // When on, the boolean buttons build a *live* (non-destructive) boolean group — operands stay
@@ -494,13 +497,14 @@
           </div>
         {/if}
       </div>
-      {#snippet seg(label: string, key: string, options: string[], dflt: string)}
-        <div class="segrow">
+      {#snippet seg(label: string, key: string, options: string[], dflt: string, disabled: boolean)}
+        <div class="segrow" class:dim={disabled}>
           <span class="seglbl">{label}</span>
           <div class="segbtns">
             {#each options as opt (opt)}
               <button
                 class:active={(style[key] ?? dflt) === opt}
+                {disabled}
                 onclick={() => setStyle(key, opt)}
               >
                 {opt}
@@ -515,32 +519,34 @@
         setPaint={(v) => setStyle("fill", v)}
         previewPaint={(v) => previewStyle("fill", v)}
       />
-      {@render seg("rule", "fill-rule", ["nonzero", "evenodd"], "nonzero")}
+      {@render seg("rule", "fill-rule", ["nonzero", "evenodd"], "nonzero", fillNone)}
       <PaintInput
         label="stroke"
         value={style.stroke ?? "none"}
         setPaint={(v) => setStyle("stroke", v)}
         previewPaint={(v) => previewStyle("stroke", v)}
       />
-      <label class="row">
+      <label class="row" class:dim={strokeNone}>
         <span class="rlbl">width</span>
         <input
           type="number"
           min="0"
           step="0.5"
           value={style["stroke-width"] ?? "1"}
+          disabled={strokeNone}
           onchange={setWidth}
         />
       </label>
-      {@render seg("cap", "stroke-linecap", ["butt", "round", "square"], "butt")}
-      {@render seg("join", "stroke-linejoin", ["miter", "round", "bevel"], "miter")}
-      <label class="row">
+      {@render seg("cap", "stroke-linecap", ["butt", "round", "square"], "butt", strokeNone)}
+      {@render seg("join", "stroke-linejoin", ["miter", "round", "bevel"], "miter", strokeNone)}
+      <label class="row" class:dim={strokeNone}>
         <span class="rlbl">dash</span>
         <input
           class="dash"
           type="text"
           value={style["stroke-dasharray"] ?? ""}
           placeholder="none"
+          disabled={strokeNone}
           onchange={onDash}
           spellcheck="false"
         />
@@ -612,22 +618,10 @@
           <input type="number" step="1" bind:value={offsetDist} />
           <button class="ghost-btn" onclick={() => editor.offsetPath(offsetDist)}>apply</button>
         </div>
-        <div class="offsetrow">
+        <div class="offsetrow skewrow">
           <span class="seglbl">skew°</span>
-          <input
-            type="number"
-            step="1"
-            value="0"
-            title="skew X (degrees)"
-            onchange={(e) => skew("x", e)}
-          />
-          <input
-            type="number"
-            step="1"
-            value="0"
-            title="skew Y (degrees)"
-            onchange={(e) => skew("y", e)}
-          />
+          <label>x <input type="number" step="1" value="0" onchange={(e) => skew("x", e)} /></label>
+          <label>y <input type="number" step="1" value="0" onchange={(e) => skew("y", e)} /></label>
         </div>
       {/if}
       {#if editor.objectSelected}
@@ -1090,6 +1084,21 @@
 
   .offsetrow .ghost-btn {
     justify-content: center;
+  }
+
+  /* skew row: two axis-prefixed inputs sharing the row, like the coord rows */
+  .skewrow label {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: 5px;
+    color: var(--halo-text-muted);
+  }
+
+  /* a style row whose paint is "none" — its sub-controls are inert, so dim them */
+  .dim {
+    opacity: 0.45;
   }
 
   .layerlist {

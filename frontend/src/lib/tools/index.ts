@@ -51,7 +51,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
       {
         id: "select",
         tool: selectTool,
-        label: "Select & move",
+        label: "select & move",
         shortcut: "v",
         icon: MousePointer2,
       },
@@ -59,7 +59,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
   },
   {
     name: "draw",
-    tools: [{ id: "pen", tool: penTool, label: "Draw path / pen", shortcut: "p", icon: PenTool }],
+    tools: [{ id: "pen", tool: penTool, label: "pen", shortcut: "p", icon: PenTool }],
   },
   {
     // Shape primitives — rect / line / polygon / star slot in here and the group becomes a
@@ -69,21 +69,21 @@ export const TOOL_GROUPS: ToolGroup[] = [
     flyout: true,
     advanced: true,
     tools: [
-      { id: "circle", tool: circleTool, label: "Circle", shortcut: "c", icon: Circle },
-      { id: "rect", tool: rectTool, label: "Rectangle", shortcut: "r", icon: Square },
-      { id: "line", tool: lineTool, label: "Line", shortcut: "l", icon: Slash },
-      { id: "polygon", tool: polygonTool, label: "Polygon", shortcut: "g", icon: Hexagon },
-      { id: "star", tool: starTool, label: "Star", shortcut: "s", icon: Star },
+      { id: "circle", tool: circleTool, label: "circle", shortcut: "c", icon: Circle },
+      { id: "rect", tool: rectTool, label: "rectangle", shortcut: "r", icon: Square },
+      { id: "line", tool: lineTool, label: "line", shortcut: "l", icon: Slash },
+      { id: "polygon", tool: polygonTool, label: "polygon", shortcut: "g", icon: Hexagon },
+      { id: "star", tool: starTool, label: "star", shortcut: "s", icon: Star },
     ],
   },
   {
     name: "nodes",
     tools: [
-      { id: "add-node", tool: addNodeTool, label: "Add node", shortcut: "a", icon: Plus },
+      { id: "add-node", tool: addNodeTool, label: "add node", shortcut: "a", icon: Plus },
       {
         id: "delete-node",
         tool: deleteNodeTool,
-        label: "Delete node",
+        label: "delete node",
         shortcut: "d",
         icon: Eraser,
       },

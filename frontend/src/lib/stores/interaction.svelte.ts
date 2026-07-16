@@ -1,4 +1,4 @@
-import type { NodeRef, Point } from "$lib/model/types";
+import type { Point } from "$lib/model/types";
 
 /**
  * Transient, per-gesture UI feedback the overlay reads while a drag is in
@@ -9,8 +9,6 @@ class Interaction {
   snapPoint = $state<Point | null>(null);
   /** True when the current snap would close a loop (shows the closing hint). */
   closing = $state(false);
-  /** Node the pointer is hovering (highlight before you grab it). */
-  hover = $state<NodeRef | null>(null);
 
   /** Space bar held → the canvas pans instead of editing. */
   spaceHeld = $state(false);

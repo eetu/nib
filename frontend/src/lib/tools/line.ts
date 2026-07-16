@@ -21,7 +21,8 @@ export const lineTool: Tool = {
     let b = a;
     return {
       move(docPoint, event) {
-        b = snapPoint(docPoint).point;
+        const s = snapPoint(docPoint);
+        b = s.point;
         // Shift snaps the line's angle to 45° steps, keeping its length.
         if (event.shiftKey) {
           const dx = b.x - a.x;
@@ -30,6 +31,9 @@ export const lineTool: Tool = {
           const step = Math.PI / 4;
           const ang = Math.round(Math.atan2(dy, dx) / step) * step;
           b = { x: a.x + Math.cos(ang) * len, y: a.y + Math.sin(ang) * len };
+          interaction.snapPoint = null; // the constrained endpoint is off-snap
+        } else {
+          interaction.snapPoint = s.snapped ? b : null; // ring the snapped endpoint, like the circle tool
         }
         editor.setShape(ref.pathIndex, ref.subpathIndex, {
           shape: "line",
@@ -38,7 +42,6 @@ export const lineTool: Tool = {
           x1: b.x,
           y1: b.y,
         });
-        interaction.snapPoint = null;
       },
       up() {
         interaction.snapPoint = null;

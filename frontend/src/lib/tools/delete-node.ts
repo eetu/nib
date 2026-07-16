@@ -6,7 +6,8 @@ import type { Tool } from "./types";
 export const deleteNodeTool: Tool = {
   id: "delete-node",
   cursor(hit) {
-    return hit.kind === "anchor" ? "pointer" : "default";
+    // Only anchors are deletable — cue "actionable" over one, "won't act" elsewhere.
+    return hit.kind === "anchor" ? "pointer" : "not-allowed";
   },
   begin(ctx) {
     if (ctx.hit.kind === "anchor") editor.deleteNode(ctx.hit.ref);

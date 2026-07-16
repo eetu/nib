@@ -6,7 +6,9 @@ import type { Tool } from "./types";
 export const addNodeTool: Tool = {
   id: "add-node",
   cursor(hit) {
-    return hit.kind === "segment" ? "copy" : "default";
+    if (hit.kind === "segment") return "copy"; // insert an anchor here
+    if (hit.kind === "anchor") return "pointer"; // clicking selects this node
+    return "default";
   },
   begin(ctx) {
     const h = ctx.hit;

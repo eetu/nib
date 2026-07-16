@@ -86,7 +86,7 @@ test("New drawing creates a blank document from the top bar", async ({ page }) =
   });
 
   // The empty state is up; New in the top bar makes a blank document.
-  await page.locator("header").getByRole("button", { name: "New", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "new", exact: true }).click();
   await expect(page.locator("svg.canvas")).toBeVisible();
   await expect(page.locator("header .name")).toHaveText("untitled.svg");
 
@@ -127,7 +127,7 @@ test("double-click enters node editing — anchors appear only then", async ({ p
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -166,7 +166,7 @@ test("shift-selecting two paths enables align", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -206,7 +206,7 @@ test("multi-select shows group transform handles and scales all shapes together"
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -329,7 +329,7 @@ test("copy style transfers a fill from one path to another", async ({ page }) =>
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -361,7 +361,7 @@ test("simplify reduces a path's node count", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -395,7 +395,7 @@ test("outline stroke turns a stroked line into a filled shape", async ({ page })
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -429,7 +429,7 @@ test("offset path adds a second, larger path", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -459,7 +459,7 @@ test("skew shears the selected path", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -471,7 +471,7 @@ test("skew shears the selected path", async ({ page }) => {
 
   const artwork = page.locator("svg.canvas g.artwork path");
   const before = await artwork.getAttribute("d");
-  const skewX = page.getByTitle("skew X (degrees)");
+  const skewX = page.locator(".skewrow input").first();
   await skewX.fill("20");
   await skewX.press("Tab");
   await expect(artwork).not.toHaveAttribute("d", before ?? "");
@@ -490,7 +490,7 @@ test("combine merges two paths into one compound path", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   // a line + a detached dome (two separate paths)
   await page
     .locator("textarea")
@@ -567,7 +567,7 @@ test("live boolean keeps operands editable and recomputes the result", async ({ 
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   // Two overlapping filled squares.
   await page
     .locator("textarea")
@@ -647,7 +647,7 @@ test("an imported <rect> is editable and stays a <rect> when moved", async ({ pa
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -692,7 +692,7 @@ test("declarative render draws shapes as paths and opaque elements (text) verbat
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -724,7 +724,7 @@ test("declarative render keeps gradient defs functional (SVG namespace) + fill r
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -757,7 +757,7 @@ test("defs (clipPath/filter) render + their contents aren't editable paths", asy
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -789,7 +789,7 @@ test("the colour picker has an alpha channel (fill becomes 8-digit hex)", async 
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -828,7 +828,7 @@ test("a large document (hundreds of paths) loads + stays interactive", async ({ 
     (_, i) =>
       `<rect x="${(i % 25) * 8}" y="${Math.floor(i / 25) * 8}" width="6" height="6" fill="#3b82f6"/>`,
   ).join("");
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 160">${rects}</svg>`);
@@ -861,7 +861,7 @@ test("an SVG with a DOCTYPE/DTD (Inkscape/Illustrator) loads", async ({ page }) 
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -921,7 +921,7 @@ test("editing the SOURCE drawer re-parses the document", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="0" y="0" width="20" height="20"/></svg>`);
@@ -950,7 +950,7 @@ test("flattening a live boolean group renders its operands again", async ({ page
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><path d="M10 10 H70 V70 H10 Z" fill="#3b82f6"/><path d="M50 50 H110 V110 H50 Z" fill="#ef4444"/></svg>`);
@@ -984,7 +984,7 @@ test("drag-drop in the Layers panel reorders z-order", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -1017,7 +1017,7 @@ test("export normalized copy downloads a paths-only SVG", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -1058,7 +1058,7 @@ test("a <text> element is selectable and its content + attributes are editable",
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -1107,7 +1107,7 @@ test("a selected <text> element can be dragged on the canvas to move it", async 
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -1147,7 +1147,7 @@ test("a selected <text> can be resized + rotated with the transform box", async 
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -1197,7 +1197,7 @@ test("a source-defined gradient fill is editable in place (adopts on edit, keeps
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -1240,7 +1240,7 @@ test("nested groups: group a selection into a <g>, then ungroup", async ({ page 
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -1288,7 +1288,7 @@ test("structural edits (a group) survive a session reload", async ({ page }) => 
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -1328,7 +1328,7 @@ test("clicking a grouped shape selects the whole group; double-click drills in",
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 15_000,
   });
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -1372,7 +1372,7 @@ test("clicking a filled shape's interior selects it (fill hit-test)", async ({ p
   });
 
   // Paste a filled square whose middle sits at the viewBox centre (→ the canvas centre).
-  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
   await page
     .locator("textarea")
     .fill(
@@ -1399,6 +1399,13 @@ test("clicking a filled shape's interior selects it (fill hit-test)", async ({ p
   await page.mouse.move(knob.x + 45, knob.y + 30);
   await page.mouse.up();
   await expect(page.locator("svg.canvas g.artwork path")).not.toHaveAttribute("d", beforeD ?? "");
+
+  // Give it a stroke first — cap/width/dash are inert (disabled) without one.
+  await page
+    .locator(".paint")
+    .filter({ hasText: "stroke" })
+    .getByRole("button", { name: "solid", exact: true })
+    .click();
 
   // Styling round-trips through the core: set the stroke cap and see it on the element.
   await page

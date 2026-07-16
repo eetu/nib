@@ -127,7 +127,9 @@
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
-  // Space to pan, Escape to cancel a drag.
+  // Space to pan. (Escape is owned by the +page handler — it cancels an in-flight gesture, else
+  // steps out of node-edit / deselects — so one Esc does exactly one thing, and it's gated on
+  // open modals, which a raw canvas listener wouldn't be.)
   $effect(() => {
     function typing(): boolean {
       const el = document.activeElement;
@@ -137,8 +139,6 @@
       if (e.code === "Space" && !typing()) {
         interaction.spaceHeld = true;
         e.preventDefault();
-      } else if (e.key === "Escape") {
-        cancelDrag();
       }
     }
     function up(e: KeyboardEvent) {

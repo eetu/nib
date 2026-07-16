@@ -8,6 +8,7 @@
   import SourceView from "$lib/components/SourceView.svelte";
   import ToolRail from "$lib/components/ToolRail.svelte";
   import TopBar from "$lib/components/TopBar.svelte";
+  import { canvas } from "$lib/stores/canvas.svelte";
   import { editor } from "$lib/stores/document.svelte";
   import { interaction } from "$lib/stores/interaction.svelte";
   import { settings } from "$lib/stores/settings.svelte";
@@ -84,8 +85,14 @@
     }
 
     // Escape cancels the current context but keeps the active tool (familiar editor
-    // behaviour): finish an in-progress pen path → else leave node-edit mode → else deselect.
+    // behaviour). A drag/pan in flight? Cancel just that (the gesture machine owns it) and stop —
+    // so one Esc does one thing, not also stepping out of node-edit / deselecting. Otherwise:
+    // finish an in-progress pen path → else leave node-edit mode → else deselect.
     if (e.key === "Escape") {
+      if (!canvas.idle) {
+        canvas.send({ type: "CANCEL" });
+        return;
+      }
       if (interaction.penDrawing) finishPen();
       else if (editor.nodeEditIndex !== null) editor.exitNodeEdit();
       else editor.deselect();

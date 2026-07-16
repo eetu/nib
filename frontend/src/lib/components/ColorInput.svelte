@@ -91,7 +91,7 @@
       class:active={isNone}
       title="none"
       aria-label="{label} none"
-      onclick={() => onchange(isNone ? "#000000" : "none")}>⁄</button
+      onclick={() => onchange(isNone ? "#000000" : "none")}>—</button
     >
   {/if}
   {#if editable && parsed.hex}
@@ -123,7 +123,7 @@
   }
 
   .lbl {
-    width: 44px;
+    width: 50px;
     color: var(--halo-text-muted);
   }
 

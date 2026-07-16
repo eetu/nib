@@ -40,8 +40,8 @@
   <div class="group">
     <button
       class="icon-btn"
-      title="New drawing"
-      aria-label="New"
+      title="new drawing"
+      aria-label="new"
       onclick={() => workspace.newDocument()}
     >
       <File size={18} />
@@ -49,17 +49,17 @@
     {#if workspace.foldersSupported}
       <button
         class="icon-btn"
-        title="Open folder"
-        aria-label="Open folder"
+        title="open folder"
+        aria-label="open folder"
         onclick={() => workspace.openFolder()}
       >
         <FolderOpen size={18} />
       </button>
     {/if}
-    <button class="icon-btn" title="Open file" aria-label="Open file" onclick={onOpenFile}>
+    <button class="icon-btn" title="open file" aria-label="open file" onclick={onOpenFile}>
       <FilePlus size={18} />
     </button>
-    <button class="icon-btn" title="Paste SVG" aria-label="Paste SVG" onclick={onPaste}>
+    <button class="icon-btn" title="paste svg" aria-label="paste svg" onclick={onPaste}>
       <ClipboardPaste size={18} />
     </button>
   </div>
@@ -67,8 +67,8 @@
   <div class="group">
     <button
       class="icon-btn"
-      title="Undo (⌘Z)"
-      aria-label="Undo"
+      title="undo (⌘Z)"
+      aria-label="undo"
       onclick={() => editor.undo()}
       disabled={!editor.canUndo}
     >
@@ -76,8 +76,8 @@
     </button>
     <button
       class="icon-btn"
-      title="Redo (⇧⌘Z)"
-      aria-label="Redo"
+      title="redo (⇧⌘Z)"
+      aria-label="redo"
       onclick={() => editor.redo()}
       disabled={!editor.canRedo}
     >
@@ -93,7 +93,7 @@
   </div>
 
   <div class="group right">
-    <Popover icon={Magnet} title="Snap & grid" align="right">
+    <Popover icon={Magnet} title="snap & grid" align="right">
       <label class="snaprow">
         <input type="checkbox" bind:checked={tools.snapEnabled} /> snap to points
       </label>
@@ -110,13 +110,13 @@
         <input type="checkbox" bind:checked={tools.guidesEnabled} /> smart guides
       </label>
     </Popover>
-    <button class="icon-btn" title="Settings" aria-label="Settings" onclick={onSettings}>
+    <button class="icon-btn" title="settings" aria-label="settings" onclick={onSettings}>
       <Settings size={18} />
     </button>
     <button
       class="icon-btn"
-      title={copied ? "Copied" : "Copy SVG"}
-      aria-label="Copy SVG"
+      title={copied ? "copied" : "copy svg"}
+      aria-label="copy svg"
       onclick={copySvg}
       disabled={!editor.hasDocument}
       class:ok={copied}
@@ -125,8 +125,8 @@
     </button>
     <button
       class="icon-btn"
-      title="Save as…"
-      aria-label="Save as"
+      title="save as…"
+      aria-label="save as"
       onclick={() => workspace.saveAs()}
       disabled={!editor.hasDocument || workspace.busy}
     >
@@ -137,7 +137,7 @@
       onclick={() => workspace.save()}
       disabled={!editor.hasDocument || workspace.busy || (workspace.savesInPlace && !editor.dirty)}
     >
-      {#if workspace.savesInPlace}<Save size={16} />Save{:else}<Download size={16} />Download{/if}
+      {#if workspace.savesInPlace}<Save size={16} />save{:else}<Download size={16} />download{/if}
     </button>
   </div>
 </header>

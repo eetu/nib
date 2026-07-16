@@ -19,18 +19,18 @@
 
   const commands = $derived<Command[]>([
     ...TOOL_GROUPS.flatMap((g) => g.tools).map((t) => ({
-      label: `Tool: ${t.label}`,
+      label: `tool: ${t.label}`,
       run: () => tools.set(t.id),
     })),
-    { label: "Undo", run: () => editor.undo(), enabled: () => editor.canUndo },
-    { label: "Redo", run: () => editor.redo(), enabled: () => editor.canRedo },
-    { label: "Fit to view", run: () => fitToView(), enabled: () => editor.hasDocument },
-    { label: "Duplicate", run: () => editor.duplicateSelected(), enabled: hasSelection },
-    { label: "Copy", run: () => editor.copySelected(), enabled: hasSelection },
-    { label: "Paste", run: () => editor.paste(), enabled: () => editor.canPaste },
-    { label: "Cut", run: () => editor.cutSelected(), enabled: hasSelection },
+    { label: "undo", run: () => editor.undo(), enabled: () => editor.canUndo },
+    { label: "redo", run: () => editor.redo(), enabled: () => editor.canRedo },
+    { label: "fit to view", run: () => fitToView(), enabled: () => editor.hasDocument },
+    { label: "duplicate", run: () => editor.duplicateSelected(), enabled: hasSelection },
+    { label: "copy", run: () => editor.copySelected(), enabled: hasSelection },
+    { label: "paste", run: () => editor.paste(), enabled: () => editor.canPaste },
+    { label: "cut", run: () => editor.cutSelected(), enabled: hasSelection },
     {
-      label: "Delete selection",
+      label: "delete selection",
       run: () => {
         const i = editor.selectedPathIndex;
         if (editor.selection) editor.deleteNode(editor.selection);
@@ -38,67 +38,101 @@
       },
       enabled: hasSelection,
     },
-    { label: "Deselect", run: () => editor.deselect() },
-    { label: "Copy style", run: () => editor.copyStyle(), enabled: hasSelection },
-    { label: "Paste style", run: () => editor.pasteStyle(), enabled: () => editor.canPasteStyle },
+    { label: "deselect", run: () => editor.deselect() },
+    {
+      label: "group selection",
+      run: () => editor.groupSelection(),
+      enabled: () => editor.selectedPaths.length > 1,
+    },
+    {
+      label: "ungroup",
+      run: () => editor.ungroupSelection(),
+      enabled: () => editor.selectedGroupUid !== null,
+    },
+    ...(
+      [
+        ["left", "align left"],
+        ["hcenter", "align centers (horizontal)"],
+        ["right", "align right"],
+        ["top", "align top"],
+        ["vcenter", "align centers (vertical)"],
+        ["bottom", "align bottom"],
+      ] as const
+    ).map(([edge, label]) => ({
+      label,
+      run: () => editor.align(edge),
+      enabled: () => editor.selectedPaths.length >= 2,
+    })),
+    {
+      label: "distribute horizontally",
+      run: () => editor.distribute("h"),
+      enabled: () => editor.selectedPaths.length >= 3,
+    },
+    {
+      label: "distribute vertically",
+      run: () => editor.distribute("v"),
+      enabled: () => editor.selectedPaths.length >= 3,
+    },
+    { label: "copy style", run: () => editor.copyStyle(), enabled: hasSelection },
+    { label: "paste style", run: () => editor.pasteStyle(), enabled: () => editor.canPasteStyle },
     ...(["union", "subtract", "intersect", "exclude"] as const).map((op) => ({
-      label: `Boolean: ${op}`,
+      label: `boolean: ${op}`,
       run: () => editor.booleanOp(op),
       enabled: () => editor.selectedPaths.length >= 2,
     })),
     ...(["union", "subtract", "intersect", "exclude"] as const).map((op) => ({
-      label: `Live boolean: ${op} (non-destructive)`,
+      label: `live boolean: ${op} (non-destructive)`,
       run: () => editor.makeBooleanGroup(op),
       enabled: () => editor.selectedPaths.length >= 2,
     })),
     {
-      label: "Make compound path",
+      label: "make compound path",
       run: () => editor.combinePaths(),
       enabled: () => editor.selectedPaths.length >= 2,
     },
     {
-      label: "Release compound path",
+      label: "release compound path",
       run: () => editor.releaseCompound(),
       enabled: () => (editor.selectedPathElement?.subpaths.length ?? 0) > 1,
     },
     {
-      label: "Simplify path",
+      label: "simplify path",
       run: () => editor.simplifyPath(),
       enabled: () => editor.selectedPathIndex !== null,
     },
     {
-      label: "Outline stroke",
+      label: "outline stroke",
       run: () => editor.outlineStroke(),
       enabled: () => editor.selectedPathIndex !== null,
     },
     {
-      label: "Offset path outward",
+      label: "offset path outward",
       run: () => editor.offsetPath(4),
       enabled: () => editor.selectedPathIndex !== null,
     },
     {
-      label: "Offset path inward",
+      label: "offset path inward",
       run: () => editor.offsetPath(-4),
       enabled: () => editor.selectedPathIndex !== null,
     },
-    { label: "Toggle grid", run: () => (tools.gridEnabled = !tools.gridEnabled) },
-    { label: "Toggle snap to points", run: () => (tools.snapEnabled = !tools.snapEnabled) },
-    { label: "Toggle smart guides", run: () => (tools.guidesEnabled = !tools.guidesEnabled) },
-    { label: "New drawing", run: () => workspace.newDocument() },
-    { label: "Save", run: () => void workspace.save(), enabled: () => editor.hasDocument },
-    { label: "Save as…", run: () => void workspace.saveAs(), enabled: () => editor.hasDocument },
+    { label: "toggle snap to grid", run: () => (tools.gridEnabled = !tools.gridEnabled) },
+    { label: "toggle snap to points", run: () => (tools.snapEnabled = !tools.snapEnabled) },
+    { label: "toggle smart guides", run: () => (tools.guidesEnabled = !tools.guidesEnabled) },
+    { label: "new drawing", run: () => workspace.newDocument() },
+    { label: "save", run: () => void workspace.save(), enabled: () => editor.hasDocument },
+    { label: "save as…", run: () => void workspace.saveAs(), enabled: () => editor.hasDocument },
     {
-      label: "Copy SVG",
+      label: "copy svg",
       run: () => void navigator.clipboard.writeText(editor.toSvg()),
       enabled: () => editor.hasDocument,
     },
     {
-      label: "Copy normalized SVG",
+      label: "copy normalized svg",
       run: () => void navigator.clipboard.writeText(editor.toSvgNormalized()),
       enabled: () => editor.hasDocument,
     },
     {
-      label: "Export normalized copy",
+      label: "export normalized copy",
       run: () => {
         const base = (editor.fileName ?? "nib.svg").replace(/\.svg$/i, "");
         downloadSvg(`${base}-normalized.svg`, editor.toSvgNormalized());
@@ -155,7 +189,7 @@
   <div class="palette" role="dialog" aria-label="Command palette">
     <input
       class="q"
-      placeholder="Run a command…"
+      placeholder="run a command…"
       bind:value={query}
       oninput={() => (index = 0)}
       onkeydown={onKeydown}

@@ -21,13 +21,17 @@ export const rectTool: Tool = {
     let b = a;
     return {
       move(docPoint, event) {
-        b = snapPoint(docPoint).point;
+        const s = snapPoint(docPoint);
+        b = s.point;
         // Shift constrains to a square — the larger side sets both, keeping the drag direction.
         if (event.shiftKey) {
           const dx = b.x - a.x;
           const dy = b.y - a.y;
           const m = Math.max(Math.abs(dx), Math.abs(dy));
           b = { x: a.x + (dx < 0 ? -m : m), y: a.y + (dy < 0 ? -m : m) };
+          interaction.snapPoint = null; // the squared corner is off-snap
+        } else {
+          interaction.snapPoint = s.snapped ? b : null; // ring the snapped corner, like the circle tool
         }
         editor.setShape(ref.pathIndex, ref.subpathIndex, {
           shape: "rect",
@@ -36,7 +40,6 @@ export const rectTool: Tool = {
           x1: b.x,
           y1: b.y,
         });
-        interaction.snapPoint = null;
       },
       up() {
         interaction.snapPoint = null;

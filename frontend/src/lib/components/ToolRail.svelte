@@ -99,8 +99,8 @@
   <button
     class="icon-btn"
     class:active={tools.gridEnabled}
-    title="Toggle grid"
-    aria-label="Toggle grid"
+    title="snap to grid"
+    aria-label="snap to grid"
     aria-pressed={tools.gridEnabled}
     onclick={() => (tools.gridEnabled = !tools.gridEnabled)}
   >
@@ -111,8 +111,8 @@
 
   <button
     class="icon-btn"
-    title="Fit to view (0)"
-    aria-label="Fit to view"
+    title="fit to view (0)"
+    aria-label="fit to view"
     onclick={fitToView}
     disabled={!editor.hasDocument}
   >

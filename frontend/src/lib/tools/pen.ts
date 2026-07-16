@@ -19,6 +19,7 @@ export function finishPen(): void {
   interaction.penDrawing = false;
   interaction.penCursor = null;
   interaction.resumePoint = null;
+  interaction.snapPoint = null;
 }
 
 type EndpointHit = { pathIndex: number; subpathIndex: number; atHead: boolean; point: Point };
@@ -110,6 +111,10 @@ export const penTool: Tool = {
   cursor: () => "crosshair",
   onDeactivate: finishPen,
   hover(docPoint) {
+    // Ring the anchor the pen would connect to (snap on an existing node) — the same cue the
+    // shape tools show. Grid-snapped points don't ring (they'd fire on every hover).
+    const { point, snapRef } = penPoint(docPoint);
+    interaction.snapPoint = snapRef ? point : null;
     if (interaction.penDrawing) {
       // Rubber-band from the last-placed anchor to the cursor while drawing.
       interaction.penCursor = docPoint;
