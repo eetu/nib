@@ -64,7 +64,9 @@ Per-area detail in `frontend/CLAUDE.md`.
   (`GroupNodes {uids,uid,name}`) wraps sibling nodes in a new `<g id="name">`;
   **Ungroup** (`UngroupNode`) splices its children back into the parent; **reorder**
   (`ReorderNode {uid,forward}`, bring-forward/send-backward in the row context menu)
-  swaps a node with its adjacent element sibling. **Show/hide** is per-node
+  swaps a node with its adjacent element sibling; **drag a row** (`MoveTreeNode {uid,refUid,
+  position}`) reorders arbitrarily + moves nodes in/out of groups (before/after a sibling, or inside
+  a group). **Show/hide** is per-node
   (`SetNodeHidden` → `Node.hidden`, a group + its subtree) or per-path (`SetPathHidden`
   → `PathElement.hidden`); both export `display="none"`. **Export is byte-for-byte
   until something is edited/grouped/reordered/hidden/drawn** (grouping/reordering is an
