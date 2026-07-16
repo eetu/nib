@@ -101,10 +101,21 @@ Per-area detail in `frontend/CLAUDE.md`.
   subpath so appends still run off the tail, via `editor.reverseSubpath`),
   circle (drag out a closed 4-node bezier), add-node, delete-node. Shapes are built as
   editable paths (`model/shapes.ts`), not native `<circle>`/`<rect>`.
-- **Selection = node + path.** `selection` is the active node; `selectedPath` is
-  an explicit path selection (PATHS row / path-body click). `selectedPathIndex`
-  is the effective selected path: the selected node's path if any, else
-  `selectedPath`. The STYLE panel targets it.
+- **Selection = node + path (+ element).** `selection` is the active node;
+  `selectedPath` is an explicit path selection (PATHS row / path-body click).
+  `selectedPathIndex` is the effective selected path: the selected node's path if
+  any, else `selectedPath`. The STYLE panel targets it. `selectedElementUid`
+  (orthogonal — each clears the other) selects a **non-shape element** (text/image/
+  use) by its tree `uid`; the Inspector's element section edits it.
+- **Non-shape elements (text/image/use) are transformable objects (E4).** They
+  aren't editable paths (no anchor geometry), so they carry no `PathElement`;
+  instead the canvas selects them by `data-uid` on the rendered DOM (when the model
+  hit-test misses), measures their box from the rendered DOM (`getBoundingClientRect`
+  — the model can't know font metrics), draws the shared transform box, and
+  move/resize/rotate compose an SVG `transform` matrix on the node (a plain move with
+  no existing transform edits `x`/`y` for clean markup). Ops: `SetNodeAttr {uid,key,
+  value?}` (any attr — x/y/width/height/transform/fill/font-size) + `SetNodeText
+  {uid,text}` (content). The Inspector element section edits authored attrs + text.
 - **Object vs node mode (one tool, like Figma), switched by double-click.** The
   select tool defaults to **object mode**: clicking a path selects it
   (`objectSelected` = a path selected with *no* node *and* not node-editing) and
@@ -250,7 +261,12 @@ client-side pro pillars, all running on the core):
   retired. Fidelity gate: `core/tests/roundtrip.rs` corpus. **E3 real nested groups LANDED**
   (the unified object tree: drawn + imported content, nested `<g>` groups, live booleans, all
   one tree — subsumes D; reorder/group/ungroup go through the tree so they reflect on export).
-  **Remaining:** E4 text/image/use · E5 defs · "export normalized copy" · then finalize.
+  **E4 transformable text/image/use LANDED:** non-shape elements are first-class objects — click-
+  select on canvas (DOM `data-uid` when the model hit misses) + a transform box (measured from the
+  rendered DOM bbox) with move/resize/rotate composing an SVG `transform` matrix (a plain move with
+  no existing transform edits x/y for clean markup); the Inspector's element section edits authored
+  attrs (x/y/w/h/font-size/fill) + text content via `SetNodeAttr`/`SetNodeText`. **Remaining:** E5
+  defs (clip/mask/filter) + source-gradient unification · "export normalized copy" · then finalize.
   Full plan: `~/.claude/plans/nib-full-svg-dom.md`.
   Paired UX **(landed early, ahead of E):** a persisted **basic/advanced** UI preference
   (`settings.uiLevel`, default **advanced**) — *basic* is the opt-in that declutters to
