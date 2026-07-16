@@ -5,6 +5,7 @@
   import Moon from "@lucide/svelte/icons/moon";
   import Sun from "@lucide/svelte/icons/sun";
 
+  import { focusTrap } from "$lib/actions/focusTrap";
   import { setCanvasBg, setThemeMode, settings, setUiLevel } from "$lib/stores/settings.svelte";
 
   let { open, onClose }: { open: boolean; onClose: () => void } = $props();
@@ -30,6 +31,7 @@
       aria-label="Settings"
       tabindex="-1"
       use:autofocus
+      use:focusTrap
       onkeydown={onKeydown}
     >
       <h2>settings</h2>

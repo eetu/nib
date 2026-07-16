@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { focusTrap } from "$lib/actions/focusTrap";
   import { workspace } from "$lib/stores/workspace.svelte";
 
   let { open, onClose }: { open: boolean; onClose: () => void } = $props();
@@ -40,6 +41,7 @@
       aria-modal="true"
       aria-label="Paste SVG"
       tabindex="-1"
+      use:focusTrap
       onkeydown={onKeydown}
     >
       <h2>paste svg</h2>

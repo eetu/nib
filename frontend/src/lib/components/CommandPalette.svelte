@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { focusTrap } from "$lib/actions/focusTrap";
   import { editor } from "$lib/stores/document.svelte";
   import { tools } from "$lib/stores/tool.svelte";
   import { workspace } from "$lib/stores/workspace.svelte";
@@ -185,7 +186,7 @@
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="scrim" onclick={close}></div>
-  <div class="palette" role="dialog" aria-label="Command palette">
+  <div class="palette" role="dialog" aria-label="Command palette" use:focusTrap>
     <input
       class="q"
       placeholder="run a command…"
