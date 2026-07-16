@@ -245,6 +245,7 @@
     if (n.kind !== "element") return;
     const uid = n.uid;
     const items: Menu["items"] = [
+      { label: "rename", run: () => startGroupRename(uid, treeName(n)) },
       { label: "bring forward", run: () => editor.reorderNode(uid, true) },
       { label: "send backward", run: () => editor.reorderNode(uid, false) },
     ];
@@ -385,6 +386,21 @@
     if (renaming !== pi) return;
     editor.renamePath(pi, renameValue);
     renaming = null;
+  }
+
+  // Group rename edits the `<g>`'s `id` (its display name) via SetNodeAttr — keyed by uid, since a
+  // group has no path index. Mirrors path rename (double-click / context menu).
+  let renamingGroup = $state<string | null>(null);
+  let groupRenameValue = $state("");
+  function startGroupRename(uid: string, current: string) {
+    renamingGroup = uid;
+    groupRenameValue = current;
+  }
+  function commitGroupRename(uid: string) {
+    if (renamingGroup !== uid) return;
+    const name = groupRenameValue.trim();
+    if (name) editor.setNodeAttr(uid, "id", name);
+    renamingGroup = null;
   }
 
   function autofocus(node: HTMLInputElement) {
@@ -789,7 +805,25 @@
                 size={13}
               />{/if}
           </button>
-          <span class="lname" title="right-click for group actions">{treeName(n)}</span>
+          {#if renamingGroup === n.uid}
+            <input
+              class="rename"
+              bind:value={groupRenameValue}
+              use:autofocus
+              onblur={() => commitGroupRename(n.uid)}
+              onkeydown={(e) => {
+                if (e.key === "Enter") commitGroupRename(n.uid);
+                else if (e.key === "Escape") renamingGroup = null;
+              }}
+            />
+          {:else}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <span
+              class="lname"
+              ondblclick={() => startGroupRename(n.uid, treeName(n))}
+              title="double-click to rename · right-click for group actions">{treeName(n)}</span
+            >
+          {/if}
           {#if n.booleanOp}
             <span class="bool-badge" title="live boolean: {n.booleanOp}"
               >{BOOL_GLYPH[n.booleanOp]}</span

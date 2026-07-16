@@ -1460,3 +1460,41 @@ test("grouping a non-adjacent multi-selection then deleting removes the right sh
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
+
+test("a group can be renamed from the layers panel", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><path d="M10 10 H40 V40 H10 Z" fill="#f00"/><path d="M60 10 H90 V40 H60 Z" fill="#00f"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const rows = page.locator(".layerlist .row-btn");
+  await expect(rows).toHaveCount(2);
+  await rows.nth(0).click();
+  await rows.nth(1).click({ modifiers: ["Shift"] });
+  await page.keyboard.press("Meta+g");
+
+  // Double-click the group header name → inline rename → the header shows the new name.
+  const gname = page.locator(".grouphead .lname");
+  await expect(gname).toBeVisible();
+  await gname.dblclick();
+  const input = page.locator(".grouphead input.rename");
+  await input.fill("my-group");
+  await input.press("Enter");
+  await expect(page.locator(".grouphead .lname")).toHaveText("my-group");
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
