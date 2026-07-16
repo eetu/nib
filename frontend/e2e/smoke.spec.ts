@@ -967,7 +967,7 @@ test("flattening a live boolean group renders its operands again", async ({ page
 
   // Flatten via the group header menu → plain group → both operands render again.
   await page.locator(".layerlist .grouphead").click({ button: "right" });
-  await page.getByRole("button", { name: "flatten (plain group)" }).click();
+  await page.getByRole("menuitem", { name: "flatten (plain group)" }).click();
   await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(2);
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
@@ -1269,7 +1269,7 @@ test("nested groups: group a selection into a <g>, then ungroup", async ({ page 
 
   // Ungroup via the group header's context menu → the group dissolves.
   await page.locator(".layerlist .grouphead").click({ button: "right" });
-  await page.getByRole("button", { name: "ungroup" }).click();
+  await page.getByRole("menuitem", { name: "ungroup" }).click();
   await expect(page.locator(".layerlist .grouphead")).toHaveCount(0);
   const src2 = await page.locator(".sourceview textarea").inputValue();
   expect(src2).not.toContain("<g id=\"group 1\"");

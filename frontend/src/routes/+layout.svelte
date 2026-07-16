@@ -124,7 +124,18 @@
 
   :global(input:focus),
   :global(select:focus) {
-    outline: none;
     border-color: var(--halo-accent);
+  }
+
+  /* A consistent keyboard-focus ring across the (icon-button-heavy) chrome. `:focus-visible` so it
+     shows for keyboard/AT users without ringing every mouse click. */
+  :global(button:focus-visible),
+  :global(input:focus-visible),
+  :global(select:focus-visible),
+  :global(a:focus-visible),
+  :global([tabindex]:focus-visible) {
+    outline: 2px solid var(--halo-accent);
+    outline-offset: 1px;
+    border-radius: var(--halo-radius);
   }
 </style>

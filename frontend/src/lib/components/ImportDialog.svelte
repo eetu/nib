@@ -34,14 +34,17 @@
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="scrim" onclick={(e) => e.target === e.currentTarget && onClose()}>
-    <div class="dialog halo-card" role="dialog" aria-modal="true" aria-label="Paste SVG">
+    <div
+      class="dialog halo-card"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Paste SVG"
+      tabindex="-1"
+      onkeydown={onKeydown}
+    >
       <h2>paste svg</h2>
-      <textarea
-        bind:this={field}
-        bind:value={text}
-        onkeydown={onKeydown}
-        spellcheck="false"
-        placeholder={PLACEHOLDER}></textarea>
+      <textarea bind:this={field} bind:value={text} spellcheck="false" placeholder={PLACEHOLDER}
+      ></textarea>
       {#if workspace.error}<p class="error">{workspace.error}</p>{/if}
       <div class="actions">
         <button class="ghost" onclick={onClose}>cancel</button>

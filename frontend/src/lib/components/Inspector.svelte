@@ -73,6 +73,16 @@
   const strokeNone = $derived((style.stroke ?? "none") === "none");
 
   let opacityLive = $state<number | null>(null);
+
+  // Copy-style gives a brief confirmation tint (it's otherwise a silent action), matching the top
+  // bar's Copy-SVG feedback.
+  let styleCopied = $state(false);
+  function copyStyleWithFeedback() {
+    editor.copyStyle();
+    styleCopied = true;
+    setTimeout(() => (styleCopied = false), 1200);
+  }
+
   // When on, the boolean buttons build a *live* (non-destructive) boolean group — operands stay
   // editable and the result recomputes — instead of baking + deleting the inputs.
   let booleanLive = $state(false);
@@ -264,6 +274,35 @@
     y: number;
     items: { label: string; danger?: boolean; run: () => void }[];
   };
+
+  // Keep the menu inside the viewport (raw cursor coords can overflow the bottom/right edge) and
+  // move keyboard focus into it so it's operable + Escape/arrows work.
+  function placeMenu(node: HTMLElement) {
+    const r = node.getBoundingClientRect();
+    const pad = 8;
+    const dx = Math.min(0, window.innerWidth - pad - r.right);
+    const dy = Math.min(0, window.innerHeight - pad - r.bottom);
+    if (dx || dy) node.style.transform = `translate(${dx}px, ${dy}px)`;
+    node.querySelector("button")?.focus();
+  }
+
+  function onMenuKeydown(e: KeyboardEvent) {
+    const items = [
+      ...(e.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>("button"),
+    ];
+    const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === "Escape") {
+      menu = null;
+      e.stopPropagation(); // don't let +page's window Escape also fire (it would deselect)
+      e.preventDefault();
+    } else if (e.key === "ArrowDown") {
+      items[(i + 1) % items.length]?.focus();
+      e.preventDefault();
+    } else if (e.key === "ArrowUp") {
+      items[(i - 1 + items.length) % items.length]?.focus();
+      e.preventDefault();
+    }
+  }
   let menu = $state<Menu | null>(null);
 
   function openPathMenu(e: MouseEvent, index: number, name: string) {
@@ -483,9 +522,10 @@
           <div class="lhead-actions">
             <button
               class="ghost-btn"
-              title="copy style"
+              class:ok={styleCopied}
+              title={styleCopied ? "copied" : "copy style"}
               aria-label="copy style"
-              onclick={() => editor.copyStyle()}><Pipette size={13} /></button
+              onclick={copyStyleWithFeedback}><Pipette size={13} /></button
             >
             <button
               class="ghost-btn"
@@ -837,9 +877,18 @@
         menu = null;
       }}
     ></div>
-    <div class="ctx" style:left="{menu.x}px" style:top="{menu.y}px" role="menu">
+    <div
+      class="ctx"
+      style:left="{menu.x}px"
+      style:top="{menu.y}px"
+      role="menu"
+      tabindex="-1"
+      use:placeMenu
+      onkeydown={onMenuKeydown}
+    >
       {#each menu.items as it (it.label)}
         <button
+          role="menuitem"
           class:danger={it.danger}
           onclick={() => {
             it.run();
@@ -1048,6 +1097,12 @@
   .ghost-btn:hover:not(:disabled) {
     border-color: var(--halo-accent);
     color: var(--halo-accent);
+  }
+
+  /* brief confirmation tint after copy-style */
+  .ghost-btn.ok {
+    border-color: var(--halo-connected);
+    color: var(--halo-connected);
   }
 
   .ghost-btn:disabled {
