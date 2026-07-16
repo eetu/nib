@@ -24,6 +24,7 @@ mod auth;
 mod db;
 mod mcp;
 mod session;
+mod sync;
 
 use auth::AuthUser;
 use session::Sessions;
@@ -174,6 +175,7 @@ async fn main() {
         .route("/api/me", get(me))
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/projects/{id}", get(get_project).put(put_project))
+        .route("/ws/projects/{id}", get(sync::ws_handler))
         .nest_service("/mcp", mcp_service)
         .fallback_service(spa)
         .layer(CorsLayer::permissive()) // dev: the :5173 SPA may call the :4321 API
@@ -260,6 +262,45 @@ mod tests {
         let reloaded = db::get_project(&pool, user.id, id).await.unwrap().unwrap();
         assert_ne!(reloaded.svg, BLANK_SVG);
         assert!(reloaded.svg.contains("<path"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn apply_ops_broadcasts_to_subscribers() {
+        let path = std::env::temp_dir().join(format!("nib-bcast-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let pool = db::connect(&format!("sqlite:{}", path.display()))
+            .await
+            .unwrap();
+        db::ensure_dev_user(&pool, "tkn").await.unwrap();
+        let user = db::user_by_token(&pool, "tkn").await.unwrap().unwrap();
+        let id = db::create_project(&pool, user.id, "p", BLANK_SVG)
+            .await
+            .unwrap();
+        let sessions = session::new_sessions();
+        let sess = session::open(&pool, &sessions, user.id, id).await.unwrap();
+
+        // Two subscribers (two live clients on the project).
+        let mut rx1 = sess.lock().unwrap().tx.subscribe();
+        let mut rx2 = sess.lock().unwrap().tx.subscribe();
+
+        let op = serde_json::json!({
+            "type": "addShape", "id": "r1",
+            "spec": { "shape": "rect", "x0": 0, "y0": 0, "x1": 10, "y1": 10 },
+            "attributes": {}
+        });
+        assert_eq!(
+            session::apply_ops(&sess, &pool, vec![op], "clientA").unwrap(),
+            1
+        );
+
+        // Both receive the op batch, tagged with the origin client so they can ignore an echo.
+        let m1 = rx1.recv().await.unwrap();
+        let m2 = rx2.recv().await.unwrap();
+        assert_eq!(m1.client_id, "clientA");
+        assert_eq!(m1.ops.len(), 1);
+        assert_eq!(m2.client_id, "clientA");
 
         let _ = std::fs::remove_file(&path);
     }
