@@ -314,6 +314,12 @@ class DocumentStore {
     return this.#wasm?.toSvg() ?? "";
   }
 
+  /** A normalized copy — every element regenerated canonically + editable shapes as `<path>` (no
+   *  verbatim spans / primitives). For downstream tools that want plain paths. */
+  toSvgNormalized(): string {
+    return this.#wasm?.toSvgNormalized() ?? "";
+  }
+
   /** The canvas render tree (root `<svg>`'s children) — the canvas draws it declaratively,
    *  pulling live geometry for editable shapes from `doc.paths` by uid. Re-fetched on source
    *  change + whenever `treeVersion` bumps (a structural op mutated the tree). */

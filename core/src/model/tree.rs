@@ -724,7 +724,12 @@ fn set_or_push(attrs: &mut Vec<(String, String)>, key: &str, value: &str) {
     }
 }
 
-fn reconcile_node(node: &mut Node, by_uid: &HashMap<&str, &PathElement>, precision: usize) {
+fn reconcile_node(
+    node: &mut Node,
+    by_uid: &HashMap<&str, &PathElement>,
+    precision: usize,
+    normalize: bool,
+) {
     let Node::Element {
         uid,
         tag,
@@ -740,6 +745,12 @@ fn reconcile_node(node: &mut Node, by_uid: &HashMap<&str, &PathElement>, precisi
     else {
         return;
     };
+    // Normalized export: regenerate every element from its parsed tag+attrs (canonical), and force
+    // every editable shape to a `<path>` (below) — a clean, fully-derived copy vs the byte-preserving
+    // save. Text nodes still emit verbatim, so whitespace/structure is kept.
+    if normalize {
+        *edited = true;
+    }
     if let Some(p) = by_uid.get(uid.as_str()) {
         if p.deleted {
             // Drop the element: blank its tags + children so it emits nothing (the flat model
@@ -767,18 +778,20 @@ fn reconcile_node(node: &mut Node, by_uid: &HashMap<&str, &PathElement>, precisi
             *tag = "path".to_string();
             *edited = true;
         } else {
-            if p.edited {
+            // `normalize` forces every editable shape to a canonical `<path>` (skip the refit that
+            // would keep a `<rect>`); otherwise only an edited path re-serializes.
+            if p.edited || normalize {
                 if tag == "path" {
                     set_or_push(attrs, "d", &path_to_d_prec(&p.subpaths, precision));
-                } else if let Some(geo) = refit(tag, &p.subpaths, precision) {
+                } else if !normalize && let Some(geo) = refit(tag, &p.subpaths, precision) {
                     // A move/resize keeps the primitive in form → re-emit it as itself with
                     // updated geometry attrs (a `<rect>` stays a `<rect>`), preserving clean markup.
                     for (k, v) in geo {
                         set_or_push(attrs, &k, &v);
                     }
                 } else {
-                    // The edit broke the form (e.g. a dragged corner) → become a `<path>` (its
-                    // geometry is now the `d`; the shape attrs would be dead weight).
+                    // The edit broke the form (e.g. a dragged corner), or we're normalizing →
+                    // become a `<path>` (its geometry is the `d`; shape attrs would be dead weight).
                     attrs.retain(|(k, _)| !GEOMETRY_ATTRS.contains(&k.as_str()));
                     *tag = "path".to_string();
                     set_or_push(attrs, "d", &path_to_d_prec(&p.subpaths, precision));
@@ -802,7 +815,7 @@ fn reconcile_node(node: &mut Node, by_uid: &HashMap<&str, &PathElement>, precisi
         }
     }
     for c in children {
-        reconcile_node(c, by_uid, precision);
+        reconcile_node(c, by_uid, precision, normalize);
     }
 }
 
@@ -832,12 +845,18 @@ impl Tree {
     /// that node edited so siblings stay verbatim. The return direction of `project_paths`; drawn
     /// (added) paths have no `uid`/node and are appended separately on export.
     pub fn reconcile_paths(&mut self, paths: &[PathElement], precision: usize) {
+        self.reconcile_paths_opt(paths, precision, false);
+    }
+
+    /// Like [`reconcile_paths`], but `normalize` regenerates every node canonically and forces
+    /// every editable shape to a `<path>` — the basis of the "export normalized copy" action.
+    pub fn reconcile_paths_opt(&mut self, paths: &[PathElement], precision: usize, normalize: bool) {
         let by_uid: HashMap<&str, &PathElement> = paths
             .iter()
             .filter(|p| !p.uid.is_empty())
             .map(|p| (p.uid.as_str(), p))
             .collect();
-        reconcile_node(&mut self.root, &by_uid, precision);
+        reconcile_node(&mut self.root, &by_uid, precision, normalize);
     }
 
     /// Show/hide the element with stable id `uid` (structural op). Returns whether it was found.

@@ -778,6 +778,45 @@ test("defs (clipPath/filter) render + their contents aren't editable paths", asy
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("export normalized copy downloads a paths-only SVG", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="10" y="10" width="40" height="40" fill="#3b82f6"/><circle cx="70" cy="70" r="20" fill="#ef4444"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+
+  // Run the palette command → it triggers a download named *-normalized.svg.
+  await page.keyboard.press("Meta+k");
+  await page.locator(".palette .q").fill("Export normalized");
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.keyboard.press("Enter"),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/-normalized\.svg$/i);
+  // The normalized copy is paths-only — the rect + circle became <path>.
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const c of stream) chunks.push(c as Buffer);
+  const svg = Buffer.concat(chunks).toString("utf8");
+  expect(svg).not.toContain("<rect");
+  expect(svg).not.toContain("<circle");
+  expect(svg).toContain("<path");
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("a <text> element is selectable and its content + attributes are editable", async ({
   page,
 }) => {

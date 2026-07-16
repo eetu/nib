@@ -625,8 +625,20 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
 /// grow the viewBox exactly as the splice path does. This is what makes editing *non-path*
 /// elements exportable — the tree carries the full structure the flat splice can't.
 pub fn serialize_via_tree(doc: &SvgDocument, base: &Tree, precision: usize) -> String {
+    serialize_via_tree_opt(doc, base, precision, false)
+}
+
+/// A **normalized** export: a clean, fully-regenerated copy — every element re-emitted canonically
+/// from its tag+attrs and every editable shape forced to a `<path>` (no verbatim spans, no
+/// `<rect>`/`<circle>` primitives). For downstream tools that want plain paths, vs the
+/// byte-preserving default save.
+pub fn serialize_normalized(doc: &SvgDocument, base: &Tree, precision: usize) -> String {
+    serialize_via_tree_opt(doc, base, precision, true)
+}
+
+fn serialize_via_tree_opt(doc: &SvgDocument, base: &Tree, precision: usize, normalize: bool) -> String {
     let mut tree = base.clone();
-    tree.reconcile_paths(&doc.paths, precision);
+    tree.reconcile_paths_opt(&doc.paths, precision, normalize);
     // A source gradient the model has adopted (same id in `doc.gradients`) is dropped from the tree
     // so it isn't defined twice — it re-emits from the model via `inject_defs`. No-op (byte-for-byte)
     // until something is adopted.
@@ -839,6 +851,20 @@ mod tests {
         let phalf = out.find("offset=\"0.5\"").unwrap();
         let p1 = out.find("offset=\"1\"").unwrap();
         assert!(p0 < phalf && phalf < p1, "stops emit in offset order: {out}");
+    }
+
+    #[test]
+    fn normalized_export_forces_every_shape_to_a_path() {
+        let src = include_str!("../../tests/fixtures/shapes.svg");
+        let mut doc = parse_svg(src).unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths(); // what the Editor does on load
+        let tree = doc.tree.clone().unwrap();
+        let out = serialize_normalized(&doc, &tree, 3);
+        for tag in ["<rect", "<circle", "<ellipse", "<polygon", "<polyline"] {
+            assert!(!out.contains(tag), "normalized copy has no {tag}: {out}");
+        }
+        assert!(out.contains("<path"), "shapes emitted as paths: {out}");
+        assert!(parse_svg(&out).is_ok(), "normalized copy re-parses");
     }
 
     #[test]
