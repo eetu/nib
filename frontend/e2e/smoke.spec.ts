@@ -837,6 +837,54 @@ test("a selected <text> element can be dragged on the canvas to move it", async 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("a selected <text> can be resized + rotated with the transform box", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="20" y="50" font-size="14">hello</text></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+  await page.locator(".layerlist .row-btn").filter({ hasText: "text" }).click();
+
+  const t = page.locator("svg.canvas g.artwork text");
+  const handles = page.locator("svg.canvas g.overlay rect.xf-handle");
+  await expect(handles).toHaveCount(8);
+
+  // Resize via the SE corner handle (index 4) → the text scales up (a transform matrix appears).
+  const w0 = (await t.boundingBox())!.width;
+  const se = (await handles.nth(4).boundingBox())!;
+  await page.mouse.move(se.x + se.width / 2, se.y + se.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(se.x + 50, se.y + 30, { steps: 6 });
+  await page.mouse.up();
+  await expect(t).toHaveAttribute("transform", /matrix/);
+  expect((await t.boundingBox())!.width).toBeGreaterThan(w0);
+
+  // Rotate via the knob → the transform gains rotation (off-diagonal matrix terms ≠ 0).
+  const knob = (await page.locator("svg.canvas g.overlay circle.rotate-knob").boundingBox())!;
+  await page.mouse.move(knob.x + knob.width / 2, knob.y + knob.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(knob.x + 40, knob.y + 25, { steps: 6 });
+  await page.mouse.up();
+  const tr = (await t.getAttribute("transform")) ?? "";
+  const m = tr.match(/matrix\(([^)]+)\)/)?.[1].split(/[\s,]+/).map(Number) ?? [];
+  expect(Math.abs(m[1] ?? 0) + Math.abs(m[2] ?? 0)).toBeGreaterThan(0.01);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("a source-defined gradient fill (url(#id)) shows its stops, not the raw url", async ({
   page,
 }) => {

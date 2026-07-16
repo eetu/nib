@@ -8,6 +8,16 @@
   import { tools } from "$lib/stores/tool.svelte";
   import { viewport } from "$lib/stores/viewport.svelte";
   import { getTool, type Hit, hitTest } from "$lib/tools";
+  import {
+    type Bounds,
+    boxCenter,
+    handleAnchor,
+    handlePoints,
+    padBounds,
+    ROTATE_KNOB_PX,
+    SELECT_PAD_PX,
+    type TransformHandle,
+  } from "$lib/tools/transform";
   import { loadViewBox } from "$lib/view";
 
   import Overlay from "./Overlay.svelte";
@@ -163,9 +173,75 @@
     };
   }
 
-  // Non-shape element (text/image/use) selection + drag runs outside the (path-focused) gesture
-  // machine, like pan/pinch. A drag translates the element's x/y live; commit at gesture end.
-  let elDrag: { uid: string; x0: number; y0: number; start: Point; moved: boolean } | null = null;
+  // --- non-shape element (text/image/use) selection + transform ----------
+  // These run outside the (path-focused) gesture machine, like pan/pinch. The element's geometry
+  // isn't in the model, so its box is *measured* from the rendered DOM (getBoundingClientRect,
+  // which accounts for font metrics + transforms). Move/resize/rotate compose an SVG `transform`
+  // matrix on the node (a plain move with no existing transform edits x/y instead, keeping markup
+  // + the inspector clean). The inspector still edits authored x/y/width/height/font-size.
+
+  // Screen-space bbox of the selected element (relative to the svg), re-measured on selection /
+  // tree / viewport changes → the Overlay draws its transform box, and gestures hit-test it.
+  let elBox = $state<{ x: number; y: number; w: number; h: number } | null>(null);
+  $effect(() => {
+    const uid = editor.selectedElementUid;
+    void editor.treeVersion; // re-measure on tree edits + any viewport change
+    void viewport.scale;
+    void viewport.tx;
+    void viewport.ty;
+    void pxW;
+    void pxH;
+    const el = uid && svgEl ? svgEl.querySelector(`[data-uid="${CSS.escape(uid)}"]`) : null;
+    if (!el) {
+      elBox = null;
+      return;
+    }
+    const r = el.getBoundingClientRect();
+    const s = svgEl.getBoundingClientRect();
+    elBox = { x: r.left - s.left, y: r.top - s.top, w: r.width, h: r.height };
+  });
+
+  // The selected element's box in document coordinates (the viewport is axis-aligned, so the
+  // screen bbox maps to an axis-aligned doc bbox) — the basis for handle positions + transforms.
+  const elBounds = $derived.by((): Bounds | null => {
+    if (!elBox) return null;
+    const a = viewport.toDoc({ x: elBox.x, y: elBox.y });
+    const b = viewport.toDoc({ x: elBox.x + elBox.w, y: elBox.y + elBox.h });
+    return {
+      minX: Math.min(a.x, b.x),
+      minY: Math.min(a.y, b.y),
+      maxX: Math.max(a.x, b.x),
+      maxY: Math.max(a.y, b.y),
+    };
+  });
+
+  type ElXf =
+    | { uid: string; mode: "moveXy"; x0: number; y0: number; start: Point; moved: boolean }
+    | { uid: string; mode: "move"; m0: DOMMatrix; start: Point; moved: boolean }
+    | {
+        uid: string;
+        mode: "scale";
+        m0: DOMMatrix;
+        anchor: Point;
+        startPt: Point;
+        axisX: boolean;
+        axisY: boolean;
+        corner: boolean;
+        moved: boolean;
+      }
+    | {
+        uid: string;
+        mode: "rotate";
+        m0: DOMMatrix;
+        center: Point;
+        startAngle: number;
+        moved: boolean;
+      };
+  let elXf: ElXf | null = null;
+
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+  const safeDiv = (n: number, d: number) => (Math.abs(d) < 1e-6 ? 1 : n / d);
+  const matrixStr = (m: DOMMatrix) => `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})`;
 
   // The uid of a selectable opaque element (text/image/use) under the pointer, via the DOM node's
   // data-uid — used only when the model hit-test misses (shapes take priority).
@@ -179,18 +255,21 @@
     return null;
   }
 
-  const round2 = (v: number) => Math.round(v * 100) / 100;
-
-  // Begin dragging an element: capture its current x/y (from the DOM) + the start point.
-  function startElDrag(uid: string, screen: Point): void {
-    const el = svgEl.querySelector(`[data-uid="${CSS.escape(uid)}"]`);
-    elDrag = {
-      uid,
-      x0: Number(el?.getAttribute("x") ?? "0") || 0,
-      y0: Number(el?.getAttribute("y") ?? "0") || 0,
-      start: viewport.toDoc(screen),
-      moved: false,
-    };
+  // A transform handle (or rotate knob) of the selected element's box under `screen`, if any —
+  // mirrors the path transform hit-test over the element's (measured) box.
+  function elHandleHit(
+    screen: Point,
+  ): { t: "rotate" } | { t: "scale"; handle: TransformHandle } | null {
+    if (!elBounds) return null;
+    const bb = padBounds(elBounds, viewport.toDocLength(SELECT_PAD_PX));
+    const top = viewport.toScreen({ x: (bb.minX + bb.maxX) / 2, y: bb.minY });
+    if (Math.hypot(screen.x - top.x, screen.y - (top.y - ROTATE_KNOB_PX)) <= 8)
+      return { t: "rotate" };
+    for (const { handle, point } of handlePoints(bb)) {
+      const s = viewport.toScreen(point);
+      if (Math.hypot(screen.x - s.x, screen.y - s.y) <= 8) return { t: "scale", handle };
+    }
+    return null;
   }
 
   // Is a screen point inside the selected element's box (with a small grab tolerance)?
@@ -202,6 +281,102 @@
       p.y >= elBox.y - 3 &&
       p.y <= elBox.y + elBox.h + 3
     );
+  }
+
+  // Begin a move / resize / rotate gesture on the element `uid`.
+  function startElXf(
+    uid: string,
+    kind: { t: "move" } | { t: "scale"; handle: TransformHandle } | { t: "rotate" },
+    screen: Point,
+  ): void {
+    const el = svgEl.querySelector(`[data-uid="${CSS.escape(uid)}"]`) as SVGGraphicsElement | null;
+    const m0 = el?.transform.baseVal.consolidate()?.matrix ?? new DOMMatrix();
+    const start = viewport.toDoc(screen);
+    if (kind.t === "move") {
+      // No existing transform → move via x/y (clean markup); else compose a translate.
+      if (el && !el.getAttribute("transform"))
+        elXf = {
+          uid,
+          mode: "moveXy",
+          x0: Number(el.getAttribute("x") ?? "0") || 0,
+          y0: Number(el.getAttribute("y") ?? "0") || 0,
+          start,
+          moved: false,
+        };
+      else elXf = { uid, mode: "move", m0, start, moved: false };
+      return;
+    }
+    if (!elBounds) return;
+    const bb = padBounds(elBounds, viewport.toDocLength(SELECT_PAD_PX));
+    if (kind.t === "rotate") {
+      const center = boxCenter(bb);
+      elXf = {
+        uid,
+        mode: "rotate",
+        m0,
+        center,
+        startAngle: Math.atan2(start.y - center.y, start.x - center.x),
+        moved: false,
+      };
+    } else {
+      const { anchor, moving, sx, sy } = handleAnchor(kind.handle, bb);
+      elXf = {
+        uid,
+        mode: "scale",
+        m0,
+        anchor,
+        startPt: moving,
+        axisX: sx,
+        axisY: sy,
+        corner: sx && sy,
+        moved: false,
+      };
+    }
+  }
+
+  // Apply the live transform for the in-flight element gesture at the current pointer.
+  function moveElXf(screen: Point, shift: boolean): void {
+    if (!elXf) return;
+    const cur = viewport.toDoc(screen);
+    elXf.moved = true;
+    if (elXf.mode === "moveXy") {
+      editor.previewNodeMove(
+        elXf.uid,
+        round2(elXf.x0 + cur.x - elXf.start.x),
+        round2(elXf.y0 + cur.y - elXf.start.y),
+      );
+      return;
+    }
+    let next: DOMMatrix;
+    if (elXf.mode === "move") {
+      next = new DOMMatrix()
+        .translate(cur.x - elXf.start.x, cur.y - elXf.start.y)
+        .multiply(elXf.m0);
+    } else if (elXf.mode === "scale") {
+      let sx = elXf.axisX ? safeDiv(cur.x - elXf.anchor.x, elXf.startPt.x - elXf.anchor.x) : 1;
+      let sy = elXf.axisY ? safeDiv(cur.y - elXf.anchor.y, elXf.startPt.y - elXf.anchor.y) : 1;
+      if (shift && elXf.corner) {
+        const s = Math.max(Math.abs(sx), Math.abs(sy));
+        sx = (sx < 0 ? -1 : 1) * s;
+        sy = (sy < 0 ? -1 : 1) * s;
+      }
+      const a = elXf.anchor;
+      next = new DOMMatrix()
+        .translate(a.x, a.y)
+        .scale(sx, sy)
+        .translate(-a.x, -a.y)
+        .multiply(elXf.m0);
+    } else {
+      const c = elXf.center;
+      let deg = ((Math.atan2(cur.y - c.y, cur.x - c.x) - elXf.startAngle) * 180) / Math.PI;
+      if (shift) deg = Math.round(deg / 15) * 15;
+      next = new DOMMatrix()
+        .translate(c.x, c.y)
+        .rotate(deg)
+        .translate(-c.x, -c.y)
+        .multiply(elXf.m0);
+    }
+    editor.previewNodeAttr(elXf.uid, "transform", matrixStr(next));
   }
 
   function onPointerDown(e: PointerEvent) {
@@ -219,18 +394,28 @@
     svgEl.setPointerCapture(e.pointerId);
     const screen = screenOf(e);
     const hit: Hit = pan ? { kind: "empty" } : hitTest(screen);
-    // Select tool, model hit missed → non-shape element (text/image/use). Once selected, dragging
-    // anywhere in its box moves it (forgiving, like a transform-box body); else pick one by paint.
-    if (!pan && tools.active === "select" && hit.kind === "empty") {
-      if (editor.selectedElementUid && inElBox(screen)) {
-        startElDrag(editor.selectedElementUid, screen);
-        return;
+    // Select tool + a non-shape element (text/image/use): its transform box handles take priority
+    // (even over a shape underneath), then — where the model hit missed — dragging in the box moves
+    // it, or a fresh element under the pointer gets picked + move-dragged.
+    if (!pan && tools.active === "select") {
+      if (editor.selectedElementUid) {
+        const h = elHandleHit(screen);
+        if (h) {
+          startElXf(editor.selectedElementUid, h, screen);
+          return;
+        }
       }
-      const el = elementHit(e);
-      if (el) {
-        editor.selectElement(el.uid);
-        startElDrag(el.uid, screen);
-        return;
+      if (hit.kind === "empty") {
+        if (editor.selectedElementUid && inElBox(screen)) {
+          startElXf(editor.selectedElementUid, { t: "move" }, screen);
+          return;
+        }
+        const el = elementHit(e);
+        if (el) {
+          editor.selectElement(el.uid);
+          startElXf(el.uid, { t: "move" }, screen);
+          return;
+        }
       }
     }
     if (!pan) editor.selectedElementUid = null; // any other click clears the element selection box
@@ -247,12 +432,8 @@
       return;
     }
     const screen = screenOf(e);
-    if (elDrag) {
-      const p = viewport.toDoc(screen);
-      const dx = p.x - elDrag.start.x;
-      const dy = p.y - elDrag.start.y;
-      if (dx || dy) elDrag.moved = true;
-      editor.previewNodeMove(elDrag.uid, round2(elDrag.x0 + dx), round2(elDrag.y0 + dy));
+    if (elXf) {
+      moveElXf(screen, e.shiftKey);
       return;
     }
     if (!canvas.idle) {
@@ -271,40 +452,13 @@
       if (pointers.length < 2) pinch = null; // pinch owned this gesture
       return;
     }
-    if (elDrag) {
-      if (elDrag.moved) editor.commit(); // record the live-moved x/y as one undo step
-      elDrag = null;
+    if (elXf) {
+      if (elXf.moved) editor.commit(); // record the live move/resize/rotate as one undo step
+      elXf = null;
       return;
     }
     canvas.send({ type: "UP", docPoint: viewport.toDoc(screenOf(e)) });
   }
-
-  // Screen-space bounding box of the selected non-shape element, measured from its rendered DOM
-  // node (getBoundingClientRect handles font metrics / transforms the model can't know). Re-measured
-  // when the selection, tree, or viewport changes; fed to the Overlay to draw its selection box.
-  let elBox = $state<{ x: number; y: number; w: number; h: number } | null>(null);
-  $effect(() => {
-    const uid = editor.selectedElementUid;
-    // deps: re-measure on tree edits + any viewport change
-    void editor.treeVersion;
-    void viewport.scale;
-    void viewport.tx;
-    void viewport.ty;
-    void pxW;
-    void pxH;
-    if (!uid || !svgEl) {
-      elBox = null;
-      return;
-    }
-    const el = svgEl.querySelector(`[data-uid="${CSS.escape(uid)}"]`);
-    if (!el) {
-      elBox = null;
-      return;
-    }
-    const r = el.getBoundingClientRect();
-    const s = svgEl.getBoundingClientRect();
-    elBox = { x: r.left - s.left, y: r.top - s.top, w: r.width, h: r.height };
-  });
 
   // Double-click a shape (select tool) to enter node-editing mode — Figma-style. Object
   // mode moves the whole shape on drag; nodes only become editable after entering here.
@@ -461,7 +615,7 @@
         {#each renderTree as n, i (i)}{@render renderNode(n)}{/each}
       </g>
     </g>
-    <Overlay elementBox={elBox} />
+    <Overlay elementBounds={elBounds} />
   </svg>
 </div>
 

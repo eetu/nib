@@ -14,11 +14,9 @@
     SELECT_PAD_PX,
   } from "$lib/tools/transform";
 
-  // Screen-space bbox of a selected non-shape element (text/image/use), measured from the DOM by
-  // EditorCanvas — drawn as a selection box here (element geometry isn't in the model).
-  let {
-    elementBox = null,
-  }: { elementBox?: { x: number; y: number; w: number; h: number } | null } = $props();
+  // Document-space bounds of a selected non-shape element (text/image/use), derived by EditorCanvas
+  // from its measured DOM bbox — drawn with the shared transform box (resize handles + rotate knob).
+  let { elementBounds = null }: { elementBounds?: Bounds | null } = $props();
 
   const doc = $derived(editor.doc);
   // Anchors show only while node-editing — any non-select tool, or the select tool in
@@ -115,16 +113,6 @@
       <path class="sel-outline-casing" d={outlineD} />
       <path class="sel-outline" d={outlineD} />
     {/if}
-    {#if elementBox}
-      <!-- selection box around a non-shape element (text/image/use), from its measured DOM bbox -->
-      <rect
-        class="sel-box"
-        x={elementBox.x - 3}
-        y={elementBox.y - 3}
-        width={elementBox.w + 6}
-        height={elementBox.h + 6}
-      />
-    {/if}
     {#snippet transformBox(raw: Bounds)}
       <!-- dashed box + rotate knob + 8 resize handles, around the padded bounds. Shared by
            single-object selection and the multi-select group (both scale/rotate as one). -->
@@ -143,6 +131,10 @@
     {#if boxPath && !boxPath.deleted}
       {@const raw = tightBounds(boxPath.subpaths)}
       {#if raw}{@render transformBox(raw)}{/if}
+    {/if}
+    {#if elementBounds}
+      <!-- transform box for a selected non-shape element (text/image/use), from its measured bbox -->
+      {@render transformBox(elementBounds)}
     {/if}
     {#if editor.multiSelected}
       <!-- outline every selected path (accent centerline) so it's clear which are in the
