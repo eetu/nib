@@ -300,7 +300,75 @@ mod tests {
         let m2 = rx2.recv().await.unwrap();
         assert_eq!(m1.client_id, "clientA");
         assert_eq!(m1.ops.len(), 1);
+        assert!(m1.svg.is_none(), "a plain op replays — no svg snapshot");
         assert_eq!(m2.client_id, "clientA");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // A tree-structural op (groupNodes) can't replay across clients — its `uid`s are per-client — so
+    // the broadcast carries an authoritative SVG snapshot to resync from instead of the op.
+    #[tokio::test]
+    async fn structural_op_broadcasts_svg_snapshot() {
+        let path = std::env::temp_dir().join(format!("nib-struct-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let pool = db::connect(&format!("sqlite:{}", path.display()))
+            .await
+            .unwrap();
+        db::ensure_dev_user(&pool, "tkn").await.unwrap();
+        let user = db::user_by_token(&pool, "tkn").await.unwrap().unwrap();
+        let id = db::create_project(&pool, user.id, "p", BLANK_SVG)
+            .await
+            .unwrap();
+        let sessions = session::new_sessions();
+        let sess = session::open(&pool, &sessions, user.id, id).await.unwrap();
+
+        // Two drawn shapes to group.
+        for name in ["a", "b"] {
+            let op = serde_json::json!({
+                "type": "addShape", "id": name,
+                "spec": { "shape": "rect", "x0": 0, "y0": 0, "x1": 10, "y1": 10 },
+                "attributes": {}
+            });
+            session::apply_ops(&sess, &pool, vec![op], "t").unwrap();
+        }
+        // Their tree uids — what the group op addresses (and what a peer would fail to replay).
+        let uids: Vec<String> = {
+            let s = sess.lock().unwrap();
+            let doc = s.editor.doc().unwrap();
+            doc.paths
+                .iter()
+                .filter(|p| !p.deleted)
+                .map(|p| p.uid.clone())
+                .collect()
+        };
+        assert_eq!(uids.len(), 2);
+        assert!(
+            uids.iter().all(|u| !u.is_empty()),
+            "drawn shapes carry tree uids"
+        );
+
+        let mut rx = sess.lock().unwrap().tx.subscribe();
+        let group = serde_json::json!({
+            "type": "groupNodes", "uids": uids, "uid": "grp-1", "name": "pair"
+        });
+        assert_eq!(
+            session::apply_ops(&sess, &pool, vec![group], "clientA").unwrap(),
+            1
+        );
+
+        let msg = rx.recv().await.unwrap();
+        assert_eq!(msg.client_id, "clientA");
+        assert!(
+            msg.ops.is_empty(),
+            "structural op broadcasts no replayable ops"
+        );
+        let svg = msg.svg.expect("structural op broadcasts an svg snapshot");
+        assert!(
+            svg.contains("<g"),
+            "the grouped <g> is in the resync svg: {svg}"
+        );
+        assert!(svg.contains("pair"), "the group name is applied: {svg}");
 
         let _ = std::fs::remove_file(&path);
     }

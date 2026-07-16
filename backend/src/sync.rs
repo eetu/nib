@@ -61,7 +61,16 @@ async fn handle_socket(mut socket: WebSocket, project_id: i64, token: String, st
             ws = socket.recv() => match ws {
                 Some(Ok(Message::Text(t))) => {
                     if let Ok(msg) = serde_json::from_str::<SyncMsg>(t.as_str()) {
-                        let _ = session::apply_ops(&sess, &st.pool, msg.ops, &msg.client_id);
+                        // A structural batch ships an SVG snapshot to adopt (uids can't replay across
+                        // clients); everything else is replayable ops.
+                        match msg.svg {
+                            Some(svg) => {
+                                let _ = session::apply_svg(&sess, &st.pool, &svg, &msg.client_id);
+                            }
+                            None => {
+                                let _ = session::apply_ops(&sess, &st.pool, msg.ops, &msg.client_id);
+                            }
+                        }
                     }
                 }
                 Some(Ok(Message::Close(_))) | None => break,

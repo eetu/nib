@@ -22,6 +22,23 @@ import { tools } from "./tool.svelte";
 
 type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 
+/** Ops that address existing tree nodes by `uid` — these can't be replayed across backend-sync
+ *  peers (uids are per-client), so a batch containing one resyncs from the authoritative SVG
+ *  instead. Mirrors `is_uid_op` in the backend's session.rs; keep the two in sync. */
+const UID_OPS = new Set([
+  "groupNodes",
+  "ungroupNode",
+  "reorderNode",
+  "moveTreeNode",
+  "setNodeHidden",
+  "setNodeBoolean",
+  "setNodeAttr",
+  "setNodeText",
+]);
+function isUidOp(op: unknown): boolean {
+  return typeof op === "object" && op !== null && UID_OPS.has((op as { type?: string }).type ?? "");
+}
+
 type Session = {
   doc: SvgDocument | null;
   selection: NodeRef | null;
@@ -109,8 +126,10 @@ class DocumentStore {
   #clipboard: Clipboard[] | null = null;
 
   // Backend live-sync (connected mode): a sink receives each commit's ops; the buffer collects the
-  // ops applied since the last commit. A null sink = standalone (no sync).
-  #syncSink: ((ops: unknown[]) => void) | null = null;
+  // ops applied since the last commit. A null sink = standalone (no sync). A batch that touches tree
+  // structure by `uid` ships an SVG snapshot instead of the ops (peers can't replay our uids — see
+  // applyRemoteReload / the backend SyncMsg).
+  #syncSink: ((msg: { ops: unknown[]; svg?: string }) => void) | null = null;
   #syncBuffer: unknown[] = [];
   #persist = debounce(() => {
     saveState<Session>(SESSION_KEY, {
@@ -939,9 +958,12 @@ class DocumentStore {
     this.dirty = true;
     this.#sync();
     this.#persist();
-    // Stream this commit's ops to the backend (connected mode), then clear the buffer.
+    // Stream this commit to the backend (connected mode), then clear the buffer. Tree-structural
+    // ops address nodes by `uid`, which peers can't replay (their uids differ) — so ship the
+    // authoritative SVG snapshot for those; everything else streams as replayable ops.
     if (this.#syncSink && this.#syncBuffer.length) {
-      this.#syncSink(this.#syncBuffer);
+      if (this.#syncBuffer.some(isUidOp)) this.#syncSink({ ops: [], svg: this.toSvg() });
+      else this.#syncSink({ ops: this.#syncBuffer });
       this.#syncBuffer = [];
     }
   }
@@ -954,8 +976,9 @@ class DocumentStore {
     this.treeVersion++; // the restored tree may differ (a mid-gesture add) → re-fetch
   }
 
-  /** Wire (or clear, `null`) a sink that receives each commit's ops — for backend live-sync. */
-  setSyncSink(sink: ((ops: unknown[]) => void) | null): void {
+  /** Wire (or clear, `null`) a sink that receives each commit — for backend live-sync. Gets the
+   *  replayable ops, or (for structural batches) an SVG snapshot to resync from. */
+  setSyncSink(sink: ((msg: { ops: unknown[]; svg?: string }) => void) | null): void {
     this.#syncSink = sink;
     this.#syncBuffer = [];
   }
@@ -966,6 +989,23 @@ class DocumentStore {
     if (!this.#wasm) return;
     this.#wasm.applyOps(ops);
     this.#wasm.commit();
+    this.#sync();
+    this.treeVersion++;
+  }
+
+  /** Full resync from a remote peer's authoritative SVG (backend sync). Used for tree-structural ops
+   *  (group/ungroup/reorder/node-attr…), which address nodes by `uid` and so can't be replayed here
+   *  — our uids don't match the origin's. Reloading the post-op SVG rebuilds our tree to match,
+   *  uids irrelevant. Backend-authoritative, so no local buffer/persist; selection refs into the old
+   *  structure are dropped. Guards against bad markup so a transient bad payload can't wipe the doc. */
+  applyRemoteReload(svg: string): void {
+    if (!this.#wasm) return;
+    try {
+      this.#wasm.load(svg); // throws on bad markup, before mutating
+    } catch {
+      return;
+    }
+    this.#resetClientSelection();
     this.#sync();
     this.treeVersion++;
   }
