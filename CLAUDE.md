@@ -265,8 +265,14 @@ client-side pro pillars, all running on the core):
   select on canvas (DOM `data-uid` when the model hit misses) + a transform box (measured from the
   rendered DOM bbox) with move/resize/rotate composing an SVG `transform` matrix (a plain move with
   no existing transform edits x/y for clean markup); the Inspector's element section edits authored
-  attrs (x/y/w/h/font-size/fill) + text content via `SetNodeAttr`/`SetNodeText`. **Remaining:** E5
-  defs (clip/mask/filter) + source-gradient unification · "export normalized copy" · then finalize.
+  attrs (x/y/w/h/font-size/fill) + text content via `SetNodeAttr`/`SetNodeText`. **E5 (defs) in
+  progress:** `<defs>` content is inert — clip/mask/filter/gradient defs render + round-trip
+  byte-for-byte, but their inner shapes no longer project as phantom editable paths (`DEF_CONTAINERS`
+  skip in `collect_paths`); imported source gradients that fit the model (objectBoundingBox) are
+  **editable in place** — the first edit adopts them into `doc.gradients` keeping their id, and
+  `serialize_via_tree` drops the source def (`Tree::remove_gradient_defs`) so it defines once
+  (byte-for-byte until adoption); ones that don't fit (userSpaceOnUse/gradientTransform/…) stay
+  read-only. **Remaining:** "export normalized copy" · then finalize.
   Full plan: `~/.claude/plans/nib-full-svg-dom.md`.
   Paired UX **(landed early, ahead of E):** a persisted **basic/advanced** UI preference
   (`settings.uiLevel`, default **advanced**) — *basic* is the opt-in that declutters to
