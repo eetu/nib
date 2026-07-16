@@ -90,6 +90,10 @@ class DocumentStore {
    *  elements that aren't editable paths. Orthogonal to path selection (setting one clears the
    *  other). Client-only. */
   selectedElementUid = $state<string | null>(null);
+  /** When set, the current `selectedPaths` are a **group** selected as one unit (Figma-style:
+   *  clicking a grouped shape selects the whole group; double-click drills in). Distinguishes a
+   *  group from an ad-hoc multi-selection so clicking a member doesn't reduce it. Client-only. */
+  selectedGroupUid = $state<string | null>(null);
   /** Computed render geometry of each live-boolean group (mirrored from the core snapshot). */
   booleanResults = $state<BooleanResult[]>([]);
   /** Bumped by structural tree ops (hide/group/ungroup/reorder) — the canvas keys its cached
@@ -518,6 +522,7 @@ class DocumentStore {
   selectElement(uid: string | null): void {
     this.nodeEditIndex = null;
     this.selectedPaths = [];
+    this.selectedGroupUid = null;
     this.#wasm?.deselect();
     this.selectedElementUid = uid;
     this.#sync();
@@ -527,6 +532,7 @@ class DocumentStore {
   select(ref: NodeRef | null): void {
     // Selecting a node implies node-editing that path; clears any multi-selection.
     this.selectedElementUid = null;
+    this.selectedGroupUid = null;
     this.nodeEditIndex = ref ? ref.pathIndex : null;
     this.selectedPaths = ref ? [ref.pathIndex] : [];
     this.#wasm?.select(ref);
@@ -534,8 +540,45 @@ class DocumentStore {
     this.#persist();
   }
 
+  /** The editable-shape path indices under the top-level group that contains the node `uid` (i.e.
+   *  the outermost `<g>` that is a direct child of the root), plus that group's uid — or `null` if
+   *  the node isn't inside a group (it's a direct child of the root). */
+  #groupMembers(uid: string): { groupUid: string; indices: number[] } | null {
+    const uidToIndex = new Map((this.doc?.paths ?? []).map((p, i) => [p.uid, i] as const));
+    const contains = (n: RenderNode, target: string): boolean =>
+      n.kind === "element" && (n.uid === target || n.children.some((c) => contains(c, target)));
+    for (const top of this.renderTree()) {
+      if (top.kind !== "element" || !contains(top, uid)) continue;
+      if (top.uid === uid) return null; // a direct child of the root → not grouped
+      const indices: number[] = [];
+      const walk = (n: RenderNode) => {
+        if (n.kind !== "element") return;
+        const i = uidToIndex.get(n.uid);
+        if (i !== undefined && !this.doc?.paths[i]?.deleted) indices.push(i);
+        n.children.forEach(walk);
+      };
+      walk(top);
+      return indices.length ? { groupUid: top.uid, indices } : null;
+    }
+    return null;
+  }
+
+  /** Select the shape at `pathIndex` group-aware (Figma-style): if it's inside a group, select the
+   *  whole group as one unit; otherwise just that shape. Double-click drills in (node editing). */
+  selectGroup(pathIndex: number): void {
+    const uid = this.doc?.paths[pathIndex]?.uid;
+    const group = uid ? this.#groupMembers(uid) : null;
+    if (group) {
+      this.setSelectedPaths(group.indices); // clears selectedGroupUid…
+      this.selectedGroupUid = group.groupUid; // …then mark this a group selection
+    } else {
+      this.selectPath(pathIndex);
+    }
+  }
+
   selectPath(pathIndex: number | null): void {
     this.selectedElementUid = null;
+    this.selectedGroupUid = null;
     this.nodeEditIndex = null; // object mode
     this.selectedPaths = pathIndex == null ? [] : [pathIndex];
     this.#wasm?.selectPath(pathIndex ?? undefined);
@@ -546,6 +589,7 @@ class DocumentStore {
   /** Toggle a path in/out of the object selection (shift-click). */
   togglePath(pathIndex: number): void {
     this.selectedElementUid = null;
+    this.selectedGroupUid = null;
     this.nodeEditIndex = null;
     this.selectedPaths = this.selectedPaths.includes(pathIndex)
       ? this.selectedPaths.filter((i) => i !== pathIndex)
@@ -559,6 +603,7 @@ class DocumentStore {
   /** Replace the object selection with a set of paths (marquee). */
   setSelectedPaths(indices: number[]): void {
     this.selectedElementUid = null;
+    this.selectedGroupUid = null;
     this.nodeEditIndex = null;
     this.selectedPaths = [...indices];
     this.#wasm?.selectPath(indices[0] ?? undefined);
@@ -568,6 +613,7 @@ class DocumentStore {
 
   deselect(): void {
     this.selectedElementUid = null;
+    this.selectedGroupUid = null;
     this.nodeEditIndex = null;
     this.selectedPaths = [];
     this.#wasm?.deselect();
@@ -579,6 +625,7 @@ class DocumentStore {
    *  its nodes as editable so the overlay shows anchors and the select tool edits them. */
   enterNodeEdit(pathIndex: number): void {
     this.selectedElementUid = null;
+    this.selectedGroupUid = null;
     this.#wasm?.selectPath(pathIndex);
     this.selectedPaths = [pathIndex];
     this.nodeEditIndex = pathIndex;

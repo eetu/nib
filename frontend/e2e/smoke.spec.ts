@@ -1315,6 +1315,50 @@ test("structural edits (a group) survive a session reload", async ({ page }) => 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("clicking a grouped shape selects the whole group; double-click drills in", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="0" y="0" width="30" height="30" fill="#f00"/><rect x="40" y="0" width="30" height="30" fill="#00f"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // Group the two rects.
+  const rows = page.locator(".layerlist .row-btn");
+  await rows.nth(0).click();
+  await rows.nth(1).click({ modifiers: ["Shift"] });
+  await page.getByRole("button", { name: "group selection" }).click();
+  await expect(page.locator(".layerlist .grouphead")).toHaveCount(1);
+
+  // Deselect, then a single click on a member selects the WHOLE group (→ the arrange/multi panel).
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("no canvas");
+  await page.mouse.click(box.x + box.width * 0.9, box.y + box.height * 0.9);
+  await page.locator("svg.canvas g.artwork path").first().click();
+  await expect(page.getByRole("heading", { name: /arrange/ })).toBeVisible();
+
+  // Double-click a member drills in → node editing that shape (anchors appear, group box gone).
+  await page.locator("svg.canvas g.artwork path").first().dblclick();
+  await expect(page.locator("svg.canvas g.overlay .anchor").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: /arrange/ })).toHaveCount(0);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("clicking a filled shape's interior selects it (fill hit-test)", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

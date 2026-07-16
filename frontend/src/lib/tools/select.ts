@@ -156,7 +156,9 @@ function selectionDrag(start: Point, primary: number, wasMulti: boolean): DragSe
     up() {
       interaction.clearDrag();
       if (moved) editor.commit();
-      else if (wasMulti) editor.selectPath(primary);
+      // A no-move click on a member of an *ad-hoc* multi-selection reduces it to that shape
+      // (Figma-style); a **group** selection stays whole (double-click drills in instead).
+      else if (wasMulti && !editor.selectedGroupUid) editor.selectPath(primary);
     },
     cancel() {
       interaction.clearDrag();
@@ -319,11 +321,13 @@ export const selectTool: Tool = {
         editor.togglePath(pi);
         return null;
       }
-      // Grabbing a member of a multi-selection drags the whole group; grabbing any other
-      // shape object-selects it (the path you're node-editing keeps node mode).
-      const inMulti = editor.multiSelected && editor.selectedPaths.includes(pi);
-      if (!inMulti && editor.nodeEditIndex !== pi) editor.selectPath(pi);
-      return selectionDrag(ctx.docPoint, pi, inMulti);
+      // Grabbing a member of the current selection drags the whole thing; grabbing any other
+      // shape group-selects it (its enclosing group as one unit, else the shape) — the path you're
+      // node-editing keeps node mode. Double-click drills into a group to node-edit a shape.
+      const inSel =
+        editor.selectedPaths.includes(pi) && (editor.multiSelected || editor.objectSelected);
+      if (!inSel && editor.nodeEditIndex !== pi) editor.selectGroup(pi);
+      return selectionDrag(ctx.docPoint, pi, editor.selectedPaths.length > 1);
     }
     // Empty canvas → rubber-band marquee (a plain click clears the selection).
     return marqueeDrag(ctx.docPoint);
