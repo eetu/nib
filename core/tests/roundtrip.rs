@@ -33,6 +33,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("compact-path", include_str!("fixtures/compact-path.svg")),
     ("inkscape", include_str!("fixtures/inkscape.svg")),
     ("illustrator", include_str!("fixtures/illustrator.svg")),
+    ("icon-optimized", include_str!("fixtures/icon-optimized.svg")),
 ];
 
 /// `<defs>` content (clipPath/mask/gradient/filter contents) is not directly-editable canvas
