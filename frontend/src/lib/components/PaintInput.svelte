@@ -119,9 +119,50 @@
     else editor.setGradient(next);
   }
 
-  function addStop() {
-    if (!grad) return;
-    const stops = [...grad.stops, { offset: 0.5, color: grad.stops[0].color }];
+  // Parse a #rgb / #rrggbb colour to [r,g,b], or null for named / url() paints.
+  function hexRgb(c: string): [number, number, number] | null {
+    const m = c.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if (!m) return null;
+    const h = m[1].length === 3 ? [...m[1]].map((x) => x + x).join("") : m[1];
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  }
+  // The interpolated colour at `offset` along the (offset-sorted) stops — a natural default for a
+  // stop dropped there. Falls back to the nearest stop's colour for non-hex paints.
+  function colorAt(sorted: GradientStop[], offset: number): string {
+    if (!sorted.length) return "#808080";
+    if (offset <= sorted[0].offset) return sorted[0].color;
+    const last = sorted[sorted.length - 1];
+    if (offset >= last.offset) return last.color;
+    let i = 0;
+    while (i < sorted.length - 1 && sorted[i + 1].offset < offset) i++;
+    const a = sorted[i];
+    const b = sorted[i + 1];
+    const ca = hexRgb(a.color);
+    const cb = hexRgb(b.color);
+    if (!ca || !cb) return a.color;
+    const t = (offset - a.offset) / Math.max(1e-6, b.offset - a.offset);
+    return (
+      "#" +
+      ca
+        .map((v, k) =>
+          Math.round(v + (cb[k] - v) * t)
+            .toString(16)
+            .padStart(2, "0"),
+        )
+        .join("")
+    );
+  }
+
+  // Click the bar (not a marker) to add a stop at that offset, coloured by interpolation.
+  function addStopFromClick(e: MouseEvent) {
+    if (!grad || !barEl || e.target !== barEl) return;
+    const r = barEl.getBoundingClientRect();
+    const offset = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    const sorted = [...grad.stops].sort((a, b) => a.offset - b.offset);
+    const stops = [
+      ...grad.stops,
+      { offset: Math.round(offset * 100) / 100, color: colorAt(sorted, offset) },
+    ];
     editor.setGradient({ ...grad, stops });
     selStop = stops.length - 1;
   }
@@ -200,7 +241,14 @@
       onchange={(v) => setPaint(v)}
     />
   {:else if grad}
-    <div class="bar" bind:this={barEl} style:background={previewBg}>
+    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+    <div
+      class="bar editable"
+      bind:this={barEl}
+      style:background={previewBg}
+      title="click to add a stop"
+      onclick={addStopFromClick}
+    >
       {#each grad.stops as s, i (i)}
         <button
           class="marker"
@@ -228,9 +276,6 @@
         aria-label="remove stop"
         onclick={() => removeStop(selStop)}>×</button
       >
-    </div>
-    <div class="grow">
-      <button class="addstop" onclick={addStop}>+ stop</button>
     </div>
     {#if grad.kind === "linear"}
       <label class="slider">
@@ -342,6 +387,10 @@
     border-radius: var(--halo-radius-pill);
   }
 
+  .bar.editable {
+    cursor: copy; /* the + cursor — click to add a stop */
+  }
+
   .bar.readonly {
     margin-bottom: 4px;
     cursor: default;
@@ -397,22 +446,6 @@
 
   .rm:disabled {
     opacity: 0.3;
-  }
-
-  .grow {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 2px 0 6px;
-  }
-
-  .addstop {
-    padding: 3px 10px;
-    border: 1px solid var(--halo-border);
-    border-radius: var(--halo-radius-pill);
-    background: var(--halo-bg-main);
-    color: var(--halo-text-main);
-    font-size: 12px;
   }
 
   /* angle: a slider row aligned to the panel's label column (matches Inspector .row) */
