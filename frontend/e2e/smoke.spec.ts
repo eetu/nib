@@ -471,7 +471,7 @@ test("skew shears the selected path", async ({ page }) => {
 
   const artwork = page.locator("svg.canvas g.artwork path");
   const before = await artwork.getAttribute("d");
-  const skewX = page.locator(".skewrow input").first();
+  const skewX = page.locator(".pairrow").filter({ hasText: "skew" }).locator("input").first();
   await skewX.fill("20");
   await skewX.press("Tab");
   await expect(artwork).not.toHaveAttribute("d", before ?? "");

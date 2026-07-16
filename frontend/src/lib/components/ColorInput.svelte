@@ -65,7 +65,9 @@
 </script>
 
 <div class="field">
-  {#if label}<span class="lbl">{label}</span>{/if}
+  <!-- Always reserve the label column (empty when used inside PaintInput, which shows the label
+       itself) so the swatch/hex align with the panel's other control rows. -->
+  <span class="lbl">{label}</span>
   <span class="swatch" class:none={isNone} style:background={swatchBg}>
     {#if editable}
       <input
@@ -182,11 +184,14 @@
   .alpha {
     display: flex;
     flex-basis: 100%;
+    min-width: 0; /* let the wrapped line shrink to the field width so the % isn't pushed off */
     align-items: center;
     gap: 6px;
   }
 
   .albl {
+    width: 50px;
+    flex: none;
     color: var(--halo-text-muted);
     font-size: 11px;
   }

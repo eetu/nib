@@ -625,7 +625,8 @@
   {#if path && bounds}
     <section>
       <h2>transform</h2>
-      <div class="coords">
+      <div class="pairrow">
+        <span class="rlbl">pos</span>
         <label
           >x <input
             type="text"
@@ -641,7 +642,8 @@
           /></label
         >
       </div>
-      <div class="coords">
+      <div class="pairrow">
+        <span class="rlbl">size</span>
         <label
           >w <input
             type="text"
@@ -674,8 +676,8 @@
           <input type="number" step="1" bind:value={offsetDist} />
           <button class="ghost-btn" onclick={() => editor.offsetPath(offsetDist)}>apply</button>
         </div>
-        <div class="offsetrow skewrow">
-          <span class="seglbl">skew°</span>
+        <div class="pairrow">
+          <span class="rlbl">skew°</span>
           <label>x <input type="number" step="1" value="0" onchange={(e) => skew("x", e)} /></label>
           <label>y <input type="number" step="1" value="0" onchange={(e) => skew("y", e)} /></label>
         </div>
@@ -1175,14 +1177,27 @@
     justify-content: center;
   }
 
-  /* skew row: two axis-prefixed inputs sharing the row, like the coord rows */
-  .skewrow label {
+  /* A paired row: a 50px leading label (.rlbl) + two axis-prefixed inputs sharing the rest, so
+     pos / size / skew align to the same control column as the single-label rows. */
+  .pairrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .pairrow label {
     display: flex;
     flex: 1;
     min-width: 0;
     align-items: center;
     gap: 5px;
     color: var(--halo-text-muted);
+  }
+
+  .pairrow label input {
+    width: 100%;
+    min-width: 0;
   }
 
   /* a style row whose paint is "none" — its sub-controls are inert, so dim them */
