@@ -35,20 +35,30 @@ test-backend:
 install: build-core
     cd frontend && node .yarn/releases/yarn-*.cjs install
 
-# Dev server (:5173). Connected mode on (talks to the backend on :4321 via the Vite proxy).
+# Dev: the backend (bacon, :4321) AND the frontend (Vite, :5173, connected mode) together, so
+# co-editing works from one command. Ctrl-C stops both. The SPA proxies /api,/mcp,/ws to the
+# backend; bacon hot-reloads the Rust on change. Frontend-only: `just dev-frontend`.
 dev: build-core
+    #!/usr/bin/env bash
+    set -euo pipefail
+    trap 'kill 0' EXIT
+    ( cd backend && bacon --headless -j run ) &
     cd frontend && VITE_NIB_BACKEND=1 node .yarn/releases/yarn-*.cjs dev
+
+# Frontend dev server only (:5173) — standalone local editor, no backend.
+dev-frontend: build-core
+    cd frontend && node .yarn/releases/yarn-*.cjs dev
 
 # Production build → frontend/dist (size-optimized core .wasm).
 build: opt-core
     cd frontend && node .yarn/releases/yarn-*.cjs build
 
-# Phase C backend (:4321): build the SPA, then serve it + the .svg documents API through **bacon**
+# Phase C backend (:4321): build the SPA, then serve it + the projects API/MCP/WS through **bacon**
 # (auto-reloads the Rust on source changes; `cargo install bacon`). Links nib-core natively — the
 # same engine the browser drives via WASM. Runs from backend/, so NIB_DIST defaults to
-# ../frontend/dist; NIB_DOCS points back at repo/docs. NIB_PORT/NIB_DOCS override. Mirrors ../scene.
+# ../frontend/dist, NIB_DB→backend/nib.db, NIB_DEV_TOKEN→nib-dev-token, NIB_PORT→4321. Mirrors ../scene.
 backend: build
-    cd backend && NIB_DOCS=../docs bacon --headless -j run
+    cd backend && bacon --headless -j run
 
 # Typecheck + lint + format check.
 validate:
