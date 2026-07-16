@@ -108,7 +108,11 @@ Per-area detail in `frontend/CLAUDE.md`.
   `selectedPathIndex` is the effective selected path: the selected node's path if
   any, else `selectedPath`. The STYLE panel targets it. `selectedElementUid`
   (orthogonal — each clears the other) selects a **non-shape element** (text/image/
-  use) by its tree `uid`; the Inspector's element section edits it.
+  use) by its tree `uid`; the Inspector's element section edits it. **Group selection
+  (Figma-style):** clicking a shape inside a `<g>` selects the whole outermost group
+  (`selectGroup` → its member path indices as a multi-selection + `selectedGroupUid` to
+  mark it a group, so clicking a member doesn't reduce it); double-click drills in to
+  node-edit that shape.
 - **Non-shape elements (text/image/use) are transformable objects (E4).** They
   aren't editable paths (no anchor geometry), so they carry no `PathElement`;
   instead the canvas selects them by `data-uid` on the rendered DOM (when the model
