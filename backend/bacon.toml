@@ -1,0 +1,16 @@
+# bacon — the Rust backend dev runner (auto-reloads + streams logs on source changes).
+# `just backend` runs the `run` job through bacon; `bacon` from this dir opens the TUI.
+# Mirrors the sibling apps (../scene). The server links nib-core natively + serves the built
+# SPA (NIB_DIST, default ../frontend/dist from here) + the .svg docs API (NIB_DOCS / NIB_PORT).
+default_job = "run"
+
+[jobs.check]
+command = ["cargo", "check", "--color", "always"]
+need_stdout = false
+
+[jobs.run]
+command = ["cargo", "run", "--color", "always"]
+need_stdout = true
+allow_warnings = true
+background = true
+on_change_strategy = "kill_then_restart"

@@ -43,10 +43,12 @@ dev: build-core
 build: opt-core
     cd frontend && node .yarn/releases/yarn-*.cjs build
 
-# Phase C backend (:4321): build the SPA, then serve it + the .svg documents API. Links
-# nib-core natively — the same engine the browser drives via WASM. NIB_PORT/NIB_DOCS override.
+# Phase C backend (:4321): build the SPA, then serve it + the .svg documents API through **bacon**
+# (auto-reloads the Rust on source changes; `cargo install bacon`). Links nib-core natively — the
+# same engine the browser drives via WASM. Runs from backend/, so NIB_DIST defaults to
+# ../frontend/dist; NIB_DOCS points back at repo/docs. NIB_PORT/NIB_DOCS override. Mirrors ../scene.
 backend: build
-    NIB_DIST=frontend/dist NIB_DOCS=docs cargo run -p nib-backend
+    cd backend && NIB_DOCS=../docs bacon --headless -j run
 
 # Typecheck + lint + format check.
 validate:
