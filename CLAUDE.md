@@ -245,8 +245,14 @@ client-side pro pillars, all running on the core):
 - **Phase C (additive, flag-gated):** rust-axum backend running the same core —
   op-log-over-WebSocket sync + an MCP tool surface. **The op vocabulary the editor
   already runs on IS the surface** (`moveNode` … `booleanOp` … `groupNodes`).
-  Browser-only build stays fully functional. C1 (backend serving the SPA + a validated
-  `.svg` documents API) has landed on the `phase-c` branch.
+  Browser-only build stays fully functional. **C1 LANDED** (backend serving the SPA + a
+  validated `.svg` documents API). **C3 LANDED** — the MCP tool surface (`backend/src/mcp.rs`,
+  `rmcp` 0.5): nested at **`/mcp`** on the same axum server via the Streamable-HTTP transport,
+  sharing one in-process editing session (`Editor` behind an `Arc<Mutex<Session>>`) so an LLM
+  and — after C2 — the live UI drive the same document. Tools: `list_documents`,
+  `open_document`, `get_document` (structured summary, paths by integer `index`), `get_svg`,
+  **`apply_op`** (the full op vocabulary as tagged JSON — the faithful surface), `save_document`
+  (validated write). C2 (op-log-over-WebSocket live sync) is the remaining Phase-C slice.
 - **Phase D — LANDED (folded into E3):** arbitrary *nested* groups are the object tree
   itself — `GroupNodes`/`UngroupNode`/`ReorderNode`/`SetNodeHidden` on stable-id (`uid`)
   addressing; drawn + imported content unified into one tree, `<g>`-wrapped on export.

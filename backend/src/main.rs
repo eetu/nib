@@ -5,7 +5,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::{
     Json, Router,
@@ -13,9 +13,14 @@ use axum::{
     http::StatusCode,
     routing::get,
 };
+use rmcp::transport::streamable_http_server::{
+    StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+};
 use serde::Serialize;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
+
+mod mcp;
 
 #[derive(Clone)]
 struct AppState {
@@ -37,7 +42,7 @@ async fn version() -> Json<Version> {
 }
 
 /// Reject anything that isn't a bare `*.svg` filename (no path traversal).
-fn safe_name(name: &str) -> Option<&str> {
+pub(crate) fn safe_name(name: &str) -> Option<&str> {
     let ok = !name.contains('/')
         && !name.contains('\\')
         && !name.contains("..")
@@ -93,10 +98,21 @@ async fn main() {
     // Serve the SPA, falling back to index.html for client-side deep links (family contract).
     let spa = ServeDir::new(&dist).fallback(ServeFile::new(dist.join("index.html")));
 
+    // The MCP tool surface (C3), nested at /mcp via the Streamable-HTTP transport. It shares one
+    // editing session with the process, so an LLM and (later, C2) the live UI drive the same doc.
+    let mcp_session = Arc::new(Mutex::new(mcp::Session::new()));
+    let mcp_docs = Arc::new(docs.clone());
+    let mcp_service = StreamableHttpService::new(
+        move || Ok(mcp::NibMcp::new(mcp_session.clone(), mcp_docs.clone())),
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig::default(),
+    );
+
     let app = Router::new()
         .route("/api/version", get(version))
         .route("/api/files", get(list_files))
         .route("/api/files/{name}", get(read_file).put(write_file))
+        .nest_service("/mcp", mcp_service)
         .fallback_service(spa)
         .layer(CorsLayer::permissive()) // dev: the :5173 SPA may call the :4321 API
         .with_state(state);
