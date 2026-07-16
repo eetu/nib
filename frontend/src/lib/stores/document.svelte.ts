@@ -106,7 +106,7 @@ class DocumentStore {
   dirty = $state(false);
   fileName = $state<string | null>(null);
 
-  #clipboard: Clipboard | null = null;
+  #clipboard: Clipboard[] | null = null;
   #persist = debounce(() => {
     saveState<Session>(SESSION_KEY, {
       doc: this.doc,
@@ -428,7 +428,10 @@ class DocumentStore {
       .map((i) => this.doc?.paths[i]?.uid)
       .filter((u): u is string => !!u);
     if (uids.length < 2) return;
-    this.groupNodes(uids, `group ${this.#countGroups(this.renderTree()) + 1}`);
+    const newUid = this.groupNodes(uids, `group ${this.#countGroups(this.renderTree()) + 1}`);
+    // Select the new group (its members at their new indices) so a follow-up move/delete acts on
+    // the right shapes, not the pre-group indices.
+    if (newUid) this.#reselectByUids(uids, newUid);
   }
 
   /** Ungroup the actively-selected group (⌘⇧G) — dissolve it back into its parent. No-op unless a
@@ -448,6 +451,26 @@ class DocumentStore {
     return c;
   }
 
+  /** The stable uids of the given path indices — survive a structural reindex of `doc.paths`. */
+  #pathUids(indices: number[]): string[] {
+    return indices.map((i) => this.doc?.paths[i]?.uid).filter((u): u is string => !!u);
+  }
+
+  /** Re-derive the numeric object-selection from stable uids after a structural op (group/ungroup/
+   *  reorder/move) reindexed `doc.paths` in the new tree walk order, and drop any stale core
+   *  node/path selection — their positional indices no longer hold, so leaving them would
+   *  select/transform/**delete the wrong shape**. */
+  #reselectByUids(uids: string[], groupUid: string | null): void {
+    const byUid = new Map((this.doc?.paths ?? []).map((p, i) => [p.uid, i] as const));
+    this.#wasm?.deselect();
+    this.selection = null;
+    this.selectedPath = null;
+    this.nodeEditIndex = null;
+    this.selectedElementUid = null;
+    this.selectedPaths = uids.map((u) => byUid.get(u)).filter((i): i is number => i !== undefined);
+    this.selectedGroupUid = groupUid;
+  }
+
   /** Set (`op`) or clear (`null`) the live-boolean op on a group node (by uid): turn a plain `<g>`
    *  into a live boolean, flip the operation, or flatten it back to a plain group. */
   setNodeBoolean(uid: string, op: "union" | "subtract" | "intersect" | "exclude" | null): void {
@@ -459,17 +482,23 @@ class DocumentStore {
 
   /** Dissolve a group node (by uid) in the tree, splicing its children into the parent. */
   ungroupNode(uid: string): void {
+    const sel = this.#pathUids(this.selectedPaths);
     if (this.#apply({ type: "ungroupNode", uid })) {
       this.commit();
       this.treeVersion++;
+      // The group dissolved → keep its members selected (as a plain multi), drop the group marker.
+      this.#reselectByUids(sel, null);
     }
   }
 
   /** Move a tree node one slot within its parent — `forward` = higher z (later), else lower. */
   reorderNode(uid: string, forward: boolean): void {
+    const sel = this.#pathUids(this.selectedPaths);
+    const grp = this.selectedGroupUid;
     if (this.#apply({ type: "reorderNode", uid, forward })) {
       this.commit();
       this.treeVersion++;
+      this.#reselectByUids(sel, grp); // re-derive indices — the walk order changed
     }
   }
 
@@ -477,9 +506,12 @@ class DocumentStore {
    *  (reparenting across levels), `inside` = into that group. */
   moveTreeNode(uid: string, refUid: string, position: "before" | "after" | "inside"): void {
     if (uid === refUid) return;
+    const sel = this.#pathUids(this.selectedPaths);
+    const grp = this.selectedGroupUid;
     if (this.#apply({ type: "moveTreeNode", uid, refUid, position })) {
       this.commit();
       this.treeVersion++;
+      this.#reselectByUids(sel, grp);
     }
   }
 
@@ -824,6 +856,7 @@ class DocumentStore {
       this.#apply({ type: "setNodeBoolean", uid, op });
       this.commit();
       this.treeVersion++;
+      this.#reselectByUids(uids, uid); // select the new boolean group
     }
   }
 
@@ -912,6 +945,7 @@ class DocumentStore {
     if (this.#wasm?.undo()) {
       this.dirty = true;
       this.#sync();
+      this.#resetClientSelection(); // structure/geometry rewound → stale group/element refs
       this.treeVersion++; // undo can add/remove nodes or change structure → re-fetch the tree
       this.#persist();
     }
@@ -921,9 +955,19 @@ class DocumentStore {
     if (this.#wasm?.redo()) {
       this.dirty = true;
       this.#sync();
+      this.#resetClientSelection();
       this.treeVersion++;
       this.#persist();
     }
+  }
+
+  /** Clear the client-only selection markers the core doesn't track (group / element / node-edit).
+   *  After undo/redo the tree can differ (a group added or dissolved), so a lingering
+   *  `selectedGroupUid`/`selectedElementUid`/`nodeEditIndex` may point at something gone. */
+  #resetClientSelection(): void {
+    this.selectedGroupUid = null;
+    this.selectedElementUid = null;
+    this.nodeEditIndex = null;
   }
 
   // --- style -------------------------------------------------------------
@@ -1100,31 +1144,51 @@ class DocumentStore {
 
   // --- clipboard + nudge -------------------------------------------------
 
+  /** Copy every selected path (not just one) — so a multi-selection copies/cuts/duplicates as a
+   *  set rather than silently doing nothing. */
   copySelected(): void {
-    const p = this.selectedPathElement;
-    if (!p) return;
-    const attributes = p.added
-      ? { ...(p.attributes ?? {}) }
-      : { ...(p.attributes ?? {}), ...(p.styleOverride ?? {}) };
-    this.#clipboard = { subpaths: clone(p.subpaths), attributes, name: p.id };
+    const entries: Clipboard[] = [];
+    for (const i of this.selectedPaths) {
+      const p = this.doc?.paths[i];
+      if (!p || p.deleted) continue;
+      const attributes = p.added
+        ? { ...(p.attributes ?? {}) }
+        : { ...(p.attributes ?? {}), ...(p.styleOverride ?? {}) };
+      entries.push({ subpaths: clone(p.subpaths), attributes, name: p.id });
+    }
+    this.#clipboard = entries.length ? entries : null;
   }
 
   paste(): void {
     if (!this.#clipboard || !this.doc || !this.#wasm) return;
-    const subpaths = clone(this.#clipboard.subpaths);
-    offsetSubpaths(subpaths, 10, 10);
-    const pathIndex = this.doc.paths.length;
-    this.#apply({
-      type: "addPath",
-      id: this.#freshId(`${this.#clipboard.name} copy`),
-      subpaths,
-      attributes: { ...this.#clipboard.attributes },
-    });
-    this.#wasm.selectPath(pathIndex); // object-select the paste (transform box, not nodes)
-    this.selectedPaths = [pathIndex];
+    const start = this.doc.paths.length;
+    let count = 0;
+    for (const entry of this.#clipboard) {
+      const subpaths = clone(entry.subpaths);
+      offsetSubpaths(subpaths, 10, 10);
+      if (
+        this.#apply({
+          type: "addPath",
+          id: this.#freshId(`${entry.name} copy`),
+          subpaths,
+          attributes: { ...entry.attributes },
+        })
+      )
+        count++;
+    }
+    if (count === 0) return;
     this.nodeEditIndex = null;
+    if (count === 1) {
+      this.#wasm.selectPath(start); // single paste → object-select it (transform box, not nodes)
+      this.selectedPaths = [start];
+    } else {
+      // A multi-paste is a client-owned multi-selection (#sync leaves length>1 intact).
+      this.#wasm.deselect();
+      this.selectedGroupUid = null;
+      this.selectedPaths = Array.from({ length: count }, (_, k) => start + k);
+    }
     this.commit();
-    this.treeVersion++; // pasted path node → re-fetch the render tree
+    this.treeVersion++; // pasted path nodes → re-fetch the render tree
   }
 
   duplicateSelected(): void {
@@ -1133,10 +1197,9 @@ class DocumentStore {
   }
 
   cutSelected(): void {
-    const i = this.selectedPathIndex;
-    if (i === null) return;
+    if (this.selectedPaths.length === 0) return;
     this.copySelected();
-    this.deletePath(i);
+    this.deleteSelectedPaths(); // soft-deletes every selected path + deselects + commits
   }
 
   nudge(dx: number, dy: number): void {

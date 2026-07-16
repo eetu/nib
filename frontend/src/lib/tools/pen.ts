@@ -131,18 +131,26 @@ export const penTool: Tool = {
 
     if (drawing) {
       const d = drawing;
-      // Clicking the subpath's own start node closes the loop and finishes.
-      const onStart =
-        snapRef?.pathIndex === d.pathIndex &&
-        snapRef?.subpathIndex === d.subpathIndex &&
-        snapRef?.nodeIndex === 0;
-      if (onStart) {
-        editor.closePath(d.pathIndex, d.subpathIndex);
+      // The drawn subpath can vanish under us — load / new / SOURCE re-parse / undo past the
+      // beginPath — leaving `drawing` dangling. Verify it still resolves; if not, abandon it and
+      // fall through to a fresh start rather than appending to a dead path.
+      const p = editor.doc.paths[d.pathIndex];
+      if (!p || p.deleted || !p.subpaths[d.subpathIndex]) {
         finishPen();
-        return null;
+      } else {
+        // Clicking the subpath's own start node closes the loop and finishes.
+        const onStart =
+          snapRef?.pathIndex === d.pathIndex &&
+          snapRef?.subpathIndex === d.subpathIndex &&
+          snapRef?.nodeIndex === 0;
+        if (onStart) {
+          editor.closePath(d.pathIndex, d.subpathIndex);
+          finishPen();
+          return null;
+        }
+        const ref = editor.appendNode(d.pathIndex, d.subpathIndex, point);
+        return penDrag(ref);
       }
-      const ref = editor.appendNode(d.pathIndex, d.subpathIndex, point);
-      return penDrag(ref);
     }
 
     // Not drawing: clicking an existing open endpoint resumes that path rather

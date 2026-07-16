@@ -1417,3 +1417,46 @@ test("clicking a filled shape's interior selects it (fill hit-test)", async ({ p
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
+
+test("grouping a non-adjacent multi-selection then deleting removes the right shapes", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  // Three rects; the middle one is green — grouping the two OUTER ones reindexes the flat path
+  // list, so a stale numeric selection would delete a mis-indexed neighbour (the green one).
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 100"><path d="M10 10 H40 V40 H10 Z" fill="#f00"/><path d="M60 10 H90 V40 H60 Z" fill="#0f0"/><path d="M110 10 H140 V40 H110 Z" fill="#00f"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const artwork = page.locator("svg.canvas g.artwork path");
+  await expect(artwork).toHaveCount(3);
+  // LAYERS rows are reversed (top-of-stack first), so the middle row is always the middle shape
+  // (green). Select the two outer rows (skipping green), group, delete.
+  const rows = page.locator(".layerlist .row-btn");
+  await expect(rows).toHaveCount(3);
+  await rows.nth(0).click();
+  await rows.nth(2).click({ modifiers: ["Shift"] });
+  await page.keyboard.press("Meta+g");
+  await page.keyboard.press("Delete");
+
+  // The two grouped (outer) rects are gone; the untouched green survivor proves the selection was
+  // re-derived by uid after the group reindexed the paths — not left pointing at a neighbour.
+  await expect(artwork).toHaveCount(1);
+  await expect(artwork.first()).toHaveAttribute("fill", "#0f0");
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});

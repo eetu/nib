@@ -32,9 +32,8 @@
     {
       label: "delete selection",
       run: () => {
-        const i = editor.selectedPathIndex;
         if (editor.selection) editor.deleteNode(editor.selection);
-        else if (i !== null) editor.deletePath(i);
+        else if (editor.selectedPaths.length > 0) editor.deleteSelectedPaths();
       },
       enabled: hasSelection,
     },
