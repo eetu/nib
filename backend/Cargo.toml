@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 axum = { version = "0.8.9", features = ["ws"] }
 nib-core = { path = "../core" }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate"] }
 rmcp = { version = "0.5", features = [
     "server",
     "macros",

@@ -1,58 +1,78 @@
-//! The MCP tool surface (Phase C3) — exposes nib's editing engine to an LLM over the Model
-//! Context Protocol. It runs **in-process with the backend** (nested at `/mcp` via the
-//! Streamable-HTTP transport) and shares one editing session, so the LLM and — later (C2) — the
-//! live UI act on the same document. The tools are a thin layer over the same `nib-core` op
-//! vocabulary the browser editor runs on: the ops ARE the surface.
+//! The MCP tool surface (Phase C) — nib's editing engine exposed to an LLM over MCP, nested at
+//! `/mcp` on the axum server. Token-authed + project-scoped: each call resolves the user from its
+//! bearer token and acts on the connection's active project, whose authoritative `Editor` lives in
+//! the shared session registry. Edits funnel through `session::apply_ops`, so they persist to
+//! SQLite and broadcast to the browser live. The tools are a thin layer over the same `nib-core`
+//! op vocabulary the browser editor runs on: the ops ARE the surface.
 
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use nib_core::Editor;
-use nib_core::ops::Op;
+use axum::http::request::Parts;
 use rmcp::handler::server::tool::{Parameters, ToolRouter};
 use rmcp::model::{ServerCapabilities, ServerInfo};
-use rmcp::{ErrorData, ServerHandler, schemars, tool, tool_handler, tool_router};
+use rmcp::service::RequestContext;
+use rmcp::{ErrorData, RoleServer, ServerHandler, schemars, tool, tool_handler, tool_router};
 use serde::Deserialize;
+use serde_json::json;
+use sqlx::SqlitePool;
 
-use crate::safe_name;
+use crate::db::{self, User};
+use crate::session::{self, ProjectSession, Sessions};
+use crate::{AppState, auth};
 
-/// The single editing session the MCP tools share (one document open at a time). Held behind an
-/// `Arc<Mutex<…>>` so every MCP connection — and, later, the live UI — drives the same `Editor`.
-pub struct Session {
-    pub editor: Editor,
-    /// The filename the current document was opened as (the default save target).
-    pub name: Option<String>,
-}
-
-impl Session {
-    pub fn new() -> Self {
-        Session {
-            editor: Editor::new(),
-            name: None,
-        }
-    }
-}
-
-impl Default for Session {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+const BLANK_SVG: &str =
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n</svg>";
 
 #[derive(Clone)]
 pub struct NibMcp {
-    session: Arc<Mutex<Session>>,
-    docs: Arc<PathBuf>,
+    pool: SqlitePool,
+    sessions: Sessions,
+    /// The project this connection is editing (set by `open_project`/`create_project`).
+    active: Arc<std::sync::Mutex<Option<i64>>>,
+    /// Monotonic suffix for generated element ids.
+    next_id: Arc<AtomicU64>,
     tool_router: ToolRouter<NibMcp>,
 }
 
 impl NibMcp {
-    pub fn new(session: Arc<Mutex<Session>>, docs: Arc<PathBuf>) -> Self {
+    pub fn new(state: &AppState) -> Self {
         NibMcp {
-            session,
-            docs,
+            pool: state.pool.clone(),
+            sessions: state.sessions.clone(),
+            active: Arc::new(std::sync::Mutex::new(None)),
+            next_id: Arc::new(AtomicU64::new(1)),
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Resolve the authenticated user from the request's bearer token.
+    async fn user(&self, ctx: &RequestContext<RoleServer>) -> Result<User, ErrorData> {
+        let parts = ctx
+            .extensions
+            .get::<Parts>()
+            .ok_or_else(|| bad("no request context"))?;
+        auth::user_from_parts(&self.pool, parts)
+            .await
+            .ok_or_else(|| bad("unauthorized — set Authorization: Bearer <token>"))
+    }
+
+    /// The active project's session (the one `open_project`/`create_project` selected).
+    async fn active_session(
+        &self,
+        user: &User,
+    ) -> Result<Arc<std::sync::Mutex<ProjectSession>>, ErrorData> {
+        let id =
+            self.active.lock().unwrap().ok_or_else(|| {
+                bad("no project open — call open_project or create_project first")
+            })?;
+        session::open(&self.pool, &self.sessions, user.id, id)
+            .await
+            .map_err(bad)
+    }
+
+    fn gen_id(&self, prefix: &str) -> String {
+        format!("{prefix}-{}", self.next_id.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -60,12 +80,11 @@ fn bad(msg: impl Into<String>) -> ErrorData {
     ErrorData::invalid_params(msg.into(), None)
 }
 
-/// A compact, structured view of the open document — what an LLM needs to plan edits: the
-/// viewBox and each editable path (addressed by integer `index`) with its id, rough bounds,
-/// fill/stroke, and node count. Not the raw markup (that's `get_svg`).
-fn summary(s: &Session) -> serde_json::Value {
+/// A compact structured view of the open document — viewBox + each editable path by integer
+/// `index` (id, rough bounds, fill/stroke, node count). What an LLM needs to plan edits.
+fn summary(s: &ProjectSession) -> serde_json::Value {
     let Some(doc) = s.editor.doc() else {
-        return serde_json::json!({ "open": false });
+        return json!({ "open": false });
     };
     let vb = &doc.view_box;
     let paths: Vec<serde_json::Value> = doc
@@ -91,34 +110,51 @@ fn summary(s: &Session) -> serde_json::Value {
                     .cloned()
             };
             let bounds = if minx <= maxx {
-                serde_json::json!({ "x": minx, "y": miny, "w": maxx - minx, "h": maxy - miny })
+                json!({ "x": minx, "y": miny, "w": maxx - minx, "h": maxy - miny })
             } else {
                 serde_json::Value::Null
             };
-            serde_json::json!({
-                "index": i,
-                "id": p.id,
-                "added": p.added,
-                "hidden": p.hidden,
+            json!({
+                "index": i, "id": p.id, "added": p.added, "hidden": p.hidden,
                 "nodes": p.subpaths.iter().map(|sp| sp.nodes.len()).sum::<usize>(),
-                "bounds": bounds,
-                "fill": style("fill"),
-                "stroke": style("stroke"),
+                "bounds": bounds, "fill": style("fill"), "stroke": style("stroke"),
             })
         })
         .collect();
-    serde_json::json!({
-        "open": true,
-        "name": s.name,
+    json!({
+        "project": s.project_id,
         "viewBox": { "minX": vb.min_x, "minY": vb.min_y, "width": vb.width, "height": vb.height },
         "paths": paths,
     })
 }
 
+/// Bounding-box → a `ShapeSpec` JSON for `add_shape`. `None` for an unknown shape.
+fn shape_spec(shape: &str, x: f64, y: f64, w: f64, h: f64) -> Option<serde_json::Value> {
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    let r = w.min(h) / 2.0;
+    let up = -std::f64::consts::FRAC_PI_2;
+    Some(match shape {
+        "ellipse" | "circle" => json!({"shape":"ellipse","cx":cx,"cy":cy,"rx":w/2.0,"ry":h/2.0}),
+        "rect" => json!({"shape":"rect","x0":x,"y0":y,"x1":x+w,"y1":y+h}),
+        "line" => json!({"shape":"line","x0":x,"y0":y,"x1":x+w,"y1":y+h}),
+        "polygon" => json!({"shape":"polygon","cx":cx,"cy":cy,"r":r,"sides":6,"rotation":up}),
+        "star" => {
+            json!({"shape":"star","cx":cx,"cy":cy,"outer":r,"inner":r*0.5,"points":5,"rotation":up})
+        }
+        _ => return None,
+    })
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct CreateParams {
+    /// A name for the new project.
+    pub name: String,
+}
+
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct OpenParams {
-    /// The document filename to open — a bare `*.svg` in the server's docs folder.
-    pub name: String,
+    /// The project id to open (from `list_projects`).
+    pub id: i64,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -128,99 +164,208 @@ pub struct ApplyOpParams {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
-pub struct SaveParams {
-    /// Target filename (a bare `*.svg`); defaults to the name the document was opened as.
+pub struct AddShapeParams {
+    /// One of: ellipse, rect, line, polygon, star.
+    pub shape: String,
+    /// Bounding box of the shape, in viewBox units.
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
     #[serde(default)]
-    pub name: Option<String>,
+    pub fill: Option<String>,
+    #[serde(default)]
+    pub stroke: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct SetStyleParams {
+    /// The path's integer index (from get_document).
+    pub index: usize,
+    #[serde(default)]
+    pub fill: Option<String>,
+    #[serde(default)]
+    pub stroke: Option<String>,
+    #[serde(default, rename = "strokeWidth")]
+    pub stroke_width: Option<f64>,
+    #[serde(default)]
+    pub opacity: Option<f64>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct BooleanParams {
+    /// One of: union, subtract, intersect, exclude.
+    pub op: String,
+    /// The path indices to combine (2+).
+    pub indices: Vec<usize>,
 }
 
 #[tool_router]
 impl NibMcp {
-    #[tool(description = "List the .svg documents in the server's docs folder.")]
-    fn list_documents(&self) -> Result<String, ErrorData> {
-        let mut names: Vec<String> = std::fs::read_dir(self.docs.as_ref())
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|e| e.file_name().into_string().ok())
-            .filter(|n| n.to_ascii_lowercase().ends_with(".svg"))
-            .collect();
-        names.sort();
-        Ok(serde_json::to_string(&names).unwrap_or_default())
+    #[tool(description = "List your projects (id, name, updated_at).")]
+    async fn list_projects(&self, ctx: RequestContext<RoleServer>) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let projects = db::list_projects(&self.pool, user.id)
+            .await
+            .map_err(|e| bad(e.to_string()))?;
+        Ok(serde_json::to_string(&projects).unwrap_or_default())
     }
 
     #[tool(
-        description = "Open a document from the docs folder into the editing session (replacing any current one). Returns a structured summary of its paths + viewBox."
+        description = "Create a new (blank) project and make it the active one. Returns its id."
     )]
-    fn open_document(&self, Parameters(p): Parameters<OpenParams>) -> Result<String, ErrorData> {
-        let name =
-            safe_name(&p.name).ok_or_else(|| bad("invalid filename (must be a bare *.svg)"))?;
-        let source = std::fs::read_to_string(self.docs.join(name))
-            .map_err(|_| bad(format!("no such document: {name}")))?;
-        let mut s = self.session.lock().unwrap();
-        s.editor.load_source(&source).map_err(bad)?;
-        s.name = Some(name.to_string());
-        Ok(serde_json::to_string(&summary(&s)).unwrap_or_default())
+    async fn create_project(
+        &self,
+        Parameters(p): Parameters<CreateParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let id = db::create_project(&self.pool, user.id, &p.name, BLANK_SVG)
+            .await
+            .map_err(|e| bad(e.to_string()))?;
+        *self.active.lock().unwrap() = Some(id);
+        Ok(json!({ "id": id, "name": p.name }).to_string())
     }
 
     #[tool(
-        description = "Summarize the open document: its viewBox and every editable path (integer `index`, id, rough bounds, fill, stroke, node count). Address paths by `index` in ops."
+        description = "Open one of your projects into the editing session and make it active. Returns a structured summary of its paths + viewBox."
     )]
-    fn get_document(&self) -> Result<String, ErrorData> {
-        let s = self.session.lock().unwrap();
-        Ok(serde_json::to_string(&summary(&s)).unwrap_or_default())
-    }
-
-    #[tool(description = "Get the open document serialized to SVG markup.")]
-    fn get_svg(&self) -> Result<String, ErrorData> {
-        let s = self.session.lock().unwrap();
-        if !s.editor.has_document() {
-            return Err(bad("no document open"));
-        }
-        Ok(s.editor.to_svg())
+    async fn open_project(
+        &self,
+        Parameters(p): Parameters<OpenParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = session::open(&self.pool, &self.sessions, user.id, p.id)
+            .await
+            .map_err(bad)?;
+        *self.active.lock().unwrap() = Some(p.id);
+        let out = serde_json::to_string(&summary(&sess.lock().unwrap())).unwrap_or_default();
+        Ok(out)
     }
 
     #[tool(
-        description = "Apply one editing operation to the open document — the full nib op vocabulary. `op` is a JSON object tagged by `type`. Examples: {\"type\":\"movePathBy\",\"path\":0,\"dx\":10,\"dy\":0}; {\"type\":\"setStyle\",\"path\":0,\"key\":\"fill\",\"value\":\"#ff0000\"}; {\"type\":\"addShape\",\"id\":\"c1\",\"spec\":{\"shape\":\"ellipse\",\"cx\":50,\"cy\":50,\"rx\":20,\"ry\":20},\"attributes\":{\"fill\":\"#0088ff\"}}; {\"type\":\"addPath\",\"id\":\"p1\",\"subpaths\":[...],\"attributes\":{...}}; {\"type\":\"booleanOp\",\"op\":\"union\",\"paths\":[0,1],\"id\":\"u1\"}; {\"type\":\"deletePath\",\"path\":2}; {\"type\":\"groupNodes\",\"uids\":[...],\"uid\":\"g1\",\"name\":\"group\"}. Returns the updated document summary, or an error if the op was invalid or matched no target."
+        description = "Summarize the active project: viewBox + every editable path (integer `index`, id, rough bounds, fill, stroke, node count). Address paths by `index` in ops."
     )]
-    fn apply_op(&self, Parameters(p): Parameters<ApplyOpParams>) -> Result<String, ErrorData> {
-        let op: Op = serde_json::from_value(p.op).map_err(|e| bad(format!("invalid op: {e}")))?;
-        let mut s = self.session.lock().unwrap();
-        if !s.editor.has_document() {
-            return Err(bad("no document open — open_document first"));
-        }
-        if !s.editor.apply(&op) {
+    async fn get_document(&self, ctx: RequestContext<RoleServer>) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let out = serde_json::to_string(&summary(&sess.lock().unwrap())).unwrap_or_default();
+        Ok(out)
+    }
+
+    #[tool(description = "Get the active project's document serialized to SVG markup.")]
+    async fn get_svg(&self, ctx: RequestContext<RoleServer>) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let svg = sess.lock().unwrap().editor.to_svg();
+        Ok(svg)
+    }
+
+    #[tool(
+        description = "Apply one editing operation to the active project — the full nib op vocabulary. `op` is a JSON object tagged by `type`. Examples: {\"type\":\"movePathBy\",\"path\":0,\"dx\":10,\"dy\":0}; {\"type\":\"setStyle\",\"path\":0,\"key\":\"fill\",\"value\":\"#ff0000\"}; {\"type\":\"deletePath\",\"path\":2}; {\"type\":\"booleanOp\",\"op\":\"union\",\"paths\":[0,1],\"id\":\"u1\"}. Persists + broadcasts to any live browser editing the same project."
+    )]
+    async fn apply_op(
+        &self,
+        Parameters(p): Parameters<ApplyOpParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let n = session::apply_ops(&sess, &self.pool, vec![p.op], "mcp").map_err(bad)?;
+        if n == 0 {
             return Err(bad("the op did not apply (missing target / no-op)"));
         }
-        s.editor.commit(); // one op = one undo step, like the UI
-        Ok(serde_json::to_string(&summary(&s)).unwrap_or_default())
+        let out = serde_json::to_string(&summary(&sess.lock().unwrap())).unwrap_or_default();
+        Ok(out)
     }
 
     #[tool(
-        description = "Save the open document to the docs folder (validated through the parser). Defaults to the name it was opened as; pass `name` to save under a different file."
+        description = "Add a shape to the active project by bounding box. shape ∈ {ellipse, rect, line, polygon, star}; x/y/w/h in viewBox units; optional fill/stroke colours."
     )]
-    fn save_document(&self, Parameters(p): Parameters<SaveParams>) -> Result<String, ErrorData> {
-        let mut s = self.session.lock().unwrap();
-        if !s.editor.has_document() {
-            return Err(bad("no document open"));
+    async fn add_shape(
+        &self,
+        Parameters(p): Parameters<AddShapeParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let spec = shape_spec(&p.shape, p.x, p.y, p.w, p.h)
+            .ok_or_else(|| bad(format!("unknown shape: {}", p.shape)))?;
+        let mut attrs = serde_json::Map::new();
+        if let Some(f) = &p.fill {
+            attrs.insert("fill".into(), json!(f));
         }
-        let target = p
-            .name
-            .or_else(|| s.name.clone())
-            .ok_or_else(|| bad("no filename — open a document first or pass `name`"))?;
-        let name = safe_name(&target)
-            .ok_or_else(|| bad("invalid filename (must be a bare *.svg)"))?
-            .to_string();
-        let svg = s.editor.to_svg();
-        // Never persist markup the editor can't reopen (matches the /api file writes).
-        nib_core::model::document::parse_svg(&svg).map_err(|e| {
-            ErrorData::internal_error(format!("refusing to save invalid svg: {e}"), None)
-        })?;
-        std::fs::create_dir_all(self.docs.as_ref()).ok();
-        std::fs::write(self.docs.join(&name), &svg)
-            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-        s.name = Some(name.clone());
-        Ok(format!("saved {name} ({} bytes)", svg.len()))
+        if let Some(s) = &p.stroke {
+            attrs.insert("stroke".into(), json!(s));
+        }
+        let op = json!({ "type": "addShape", "id": self.gen_id(&p.shape), "spec": spec, "attributes": attrs });
+        session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
+        let out = serde_json::to_string(&summary(&sess.lock().unwrap())).unwrap_or_default();
+        Ok(out)
+    }
+
+    #[tool(
+        description = "Set paint/stroke on a path (by integer index): any of fill, stroke, strokeWidth, opacity."
+    )]
+    async fn set_style(
+        &self,
+        Parameters(p): Parameters<SetStyleParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let mut ops = Vec::new();
+        let mut push = |key: &str, val: String| {
+            ops.push(json!({ "type": "setStyle", "path": p.index, "key": key, "value": val }));
+        };
+        if let Some(f) = &p.fill {
+            push("fill", f.clone());
+        }
+        if let Some(s) = &p.stroke {
+            push("stroke", s.clone());
+        }
+        if let Some(w) = p.stroke_width {
+            push("stroke-width", w.to_string());
+        }
+        if let Some(o) = p.opacity {
+            push("opacity", o.to_string());
+        }
+        if ops.is_empty() {
+            return Err(bad(
+                "nothing to set — pass at least one of fill/stroke/strokeWidth/opacity",
+            ));
+        }
+        let n = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
+        if n == 0 {
+            return Err(bad("no style applied (bad index?)"));
+        }
+        let out = serde_json::to_string(&summary(&sess.lock().unwrap())).unwrap_or_default();
+        Ok(out)
+    }
+
+    #[tool(
+        description = "Combine paths with a boolean op (union/subtract/intersect/exclude) by their integer indices (2+). The inputs are replaced by one result path."
+    )]
+    async fn boolean_op(
+        &self,
+        Parameters(p): Parameters<BooleanParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        if p.indices.len() < 2 {
+            return Err(bad("boolean_op needs at least 2 path indices"));
+        }
+        let op = json!({ "type": "booleanOp", "op": p.op, "paths": p.indices, "id": self.gen_id(&p.op) });
+        let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
+        if n == 0 {
+            return Err(bad(
+                "boolean op did not apply (check the op name + indices)",
+            ));
+        }
+        let out = serde_json::to_string(&summary(&sess.lock().unwrap())).unwrap_or_default();
+        Ok(out)
     }
 }
 
@@ -229,98 +374,15 @@ impl ServerHandler for NibMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "nib is an SVG path editor. Workflow: list_documents → open_document → \
-                 get_document (paths are addressed by integer `index`) → apply_op (one edit each) \
-                 → save_document. Coordinates are in the document's viewBox units."
+                "nib is an SVG path editor. Authenticate with a bearer token (your nib user token). \
+                 Workflow: list_projects → open_project (or create_project) → get_document (paths are \
+                 addressed by integer `index`) → edit with apply_op / add_shape / set_style / \
+                 boolean_op → changes persist + sync to any live browser editing the same project. \
+                 Coordinates are in the document's viewBox units."
                     .to_string(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn mcp_at(dir: &std::path::Path) -> NibMcp {
-        NibMcp::new(
-            Arc::new(Mutex::new(Session::new())),
-            Arc::new(dir.to_path_buf()),
-        )
-    }
-
-    #[test]
-    fn open_edit_save_roundtrip() {
-        let dir = std::env::temp_dir().join("nib-mcp-test-roundtrip");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let src = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="r" x="10" y="10" width="30" height="30" fill="#000000"/></svg>"##;
-        std::fs::write(dir.join("t.svg"), src).unwrap();
-
-        let mcp = mcp_at(&dir);
-
-        // list finds the file
-        assert!(mcp.list_documents().unwrap().contains("t.svg"));
-
-        // open → a summary with one editable path at index 0
-        let sum = mcp
-            .open_document(Parameters(OpenParams {
-                name: "t.svg".into(),
-            }))
-            .unwrap();
-        assert!(sum.contains("\"open\":true"), "summary: {sum}");
-        assert!(sum.contains("\"index\":0"), "path indexed: {sum}");
-
-        // apply_op: set the fill via the full op vocabulary
-        let op =
-            serde_json::json!({ "type": "setStyle", "path": 0, "key": "fill", "value": "#ff0000" });
-        let after = mcp.apply_op(Parameters(ApplyOpParams { op })).unwrap();
-        assert!(
-            after.contains("#ff0000"),
-            "summary reflects the edit: {after}"
-        );
-
-        // the edit is reflected in the serialized markup
-        assert!(
-            mcp.get_svg().unwrap().contains("#ff0000"),
-            "svg reflects the edit"
-        );
-
-        // save under a new name → a valid, reopenable file with the edit
-        let saved = mcp
-            .save_document(Parameters(SaveParams {
-                name: Some("out.svg".into()),
-            }))
-            .unwrap();
-        assert!(saved.contains("out.svg"), "saved: {saved}");
-        let written = std::fs::read_to_string(dir.join("out.svg")).unwrap();
-        assert!(written.contains("#ff0000"), "persisted markup has the edit");
-        assert!(
-            nib_core::model::document::parse_svg(&written).is_ok(),
-            "persisted svg reopens"
-        );
-
-        // a malformed op is rejected without panicking
-        assert!(
-            mcp.apply_op(Parameters(ApplyOpParams {
-                op: serde_json::json!({ "type": "notAnOp" }),
-            }))
-            .is_err()
-        );
-
-        // tools on a fresh (no-document) session error gracefully
-        let fresh = mcp_at(&dir);
-        assert!(fresh.get_svg().is_err());
-        assert!(
-            fresh
-                .apply_op(Parameters(ApplyOpParams {
-                    op: serde_json::json!({ "type": "deletePath", "path": 0 }),
-                }))
-                .is_err()
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
