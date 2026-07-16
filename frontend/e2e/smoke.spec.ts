@@ -811,6 +811,39 @@ test("the colour picker has an alpha channel (fill becomes 8-digit hex)", async 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("drag-drop in the Layers panel reorders z-order", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="r1" x="0" y="0" width="20" height="20"/><rect id="r2" x="40" y="0" width="20" height="20"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const rowLi = (id: string) => page.locator(".layerlist li.pathrow").filter({ hasText: id });
+  await expect(rowLi("r1")).toBeVisible();
+  // Drag r1's row onto the top of r2's row → r1 moves *after* r2 in document order (the panel is
+  // reversed, so the top of a row = higher z = later in the document).
+  await rowLi("r1").dragTo(rowLi("r2"), { targetPosition: { x: 20, y: 2 } });
+
+  await page.getByRole("button", { name: "source" }).click();
+  const src = await page.locator(".sourceview textarea").inputValue();
+  expect(src.indexOf('id="r2"')).toBeLessThan(src.indexOf('id="r1"'));
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("export normalized copy downloads a paths-only SVG", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

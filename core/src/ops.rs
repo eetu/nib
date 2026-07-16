@@ -189,6 +189,15 @@ pub enum Op {
     /// Move a tree node one element-slot within its parent — `forward` (later in document order =
     /// higher z) or backward. Re-projects the paths view (z-order changed).
     ReorderNode { uid: String, forward: bool },
+    /// Move a tree node relative to `ref_uid` — `position` = "before"/"after" (sibling, reparenting
+    /// across levels) or "inside" (into a group). The drag-drop reorder op. Re-projects the paths.
+    /// (Distinct from `MoveNode`, which moves an anchor *point*.)
+    MoveTreeNode {
+        uid: String,
+        #[serde(rename = "refUid")]
+        ref_uid: String,
+        position: String,
+    },
     /// Set (`Some`) or clear (`None`) the live-boolean op on a group node (by `uid`) in the tree:
     /// turn a plain `<g>` into a live boolean, change the operation, or flatten it back. The
     /// group's element children are the operands; the tree renders/exports the computed result.
@@ -662,6 +671,21 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 .tree
                 .as_mut()
                 .map(|t| t.reorder(uid, *forward))
+                .unwrap_or(false);
+            if ok {
+                reproject_paths(doc);
+            }
+            ok
+        }
+        Op::MoveTreeNode {
+            uid,
+            ref_uid,
+            position,
+        } => {
+            let ok = doc
+                .tree
+                .as_mut()
+                .map(|t| t.move_node(uid, ref_uid, position))
                 .unwrap_or(false);
             if ok {
                 reproject_paths(doc);
@@ -1268,6 +1292,63 @@ mod tests {
         let ia = out.find("id=\"a\"").unwrap();
         let ib = out.find("id=\"b\"").unwrap();
         assert!(ib < ia, "after bring-forward, b precedes a: {out}");
+    }
+
+    #[test]
+    fn move_node_reorders_across_siblings_and_into_groups() {
+        use crate::model::document::{parse_svg, serialize_via_tree};
+        let mut doc = parse_svg(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="a" x="0" y="0" width="10" height="10"/><rect id="b" x="20" y="0" width="10" height="10"/><g id="grp"><rect id="c" x="40" y="0" width="10" height="10"/></g></svg>"#,
+        )
+        .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        fn uid_of(tree: &crate::model::tree::Tree, id: &str) -> String {
+            fn walk<'a>(n: &'a crate::model::tree::Node, id: &str) -> Option<&'a str> {
+                if let crate::model::tree::Node::Element {
+                    attrs,
+                    uid,
+                    children,
+                    ..
+                } = n
+                {
+                    if attrs.iter().any(|(k, v)| k == "id" && v == id) {
+                        return Some(uid);
+                    }
+                    for c in children {
+                        if let Some(u) = walk(c, id) {
+                            return Some(u);
+                        }
+                    }
+                }
+                None
+            }
+            walk(&tree.root, id).unwrap().to_string()
+        }
+        let t = doc.tree.as_ref().unwrap();
+        let (ua, ub, ugrp, uc) = (uid_of(t, "a"), uid_of(t, "b"), uid_of(t, "grp"), uid_of(t, "c"));
+        // Move `a` after `b` (reorder siblings) → document order b, a, <g>.
+        assert!(apply(
+            &mut doc,
+            &Op::MoveTreeNode { uid: ua.clone(), ref_uid: ub, position: "after".into() }
+        ));
+        let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(out.find("id=\"b\"").unwrap() < out.find("id=\"a\"").unwrap(), "b before a: {out}");
+        // Move `a` INTO the group → it becomes a child of <g id="grp"> (reparent).
+        assert!(apply(
+            &mut doc,
+            &Op::MoveTreeNode { uid: ua, ref_uid: ugrp.clone(), position: "inside".into() }
+        ));
+        let out2 = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        // `a` now sits inside the group.
+        let g = out2.find("id=\"grp\"").unwrap();
+        let close = out2[g..].find("</g>").unwrap() + g;
+        let a = out2.find("id=\"a\"").unwrap();
+        assert!(a > g && a < close, "a moved inside the group: {out2}");
+        // Cycle guard: moving the group inside its own child is a no-op.
+        assert!(!apply(
+            &mut doc,
+            &Op::MoveTreeNode { uid: ugrp, ref_uid: uc, position: "inside".into() }
+        ));
     }
 
     #[test]

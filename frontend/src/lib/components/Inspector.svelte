@@ -314,14 +314,35 @@
   let renaming = $state<number | null>(null);
   let renameValue = $state("");
 
-  // Drag-drop reordering of the PATHS list (changes draw order).
-  let dragFrom = $state<number | null>(null);
-  let dragOver = $state<number | null>(null);
+  // Drag-drop reorder of the object tree by uid: reorder z (before/after) + move in/out of groups
+  // (inside). The panel is reversed (top-of-stack first), so the visual drop maps to doc order:
+  // dropping on a row's upper half = above in the panel = higher z = "after" in document order.
+  let dragUid = $state<string | null>(null);
+  let dropUid = $state<string | null>(null);
+  let dropPos = $state<"before" | "after" | "inside">("before");
 
-  function onDrop(pi: number) {
-    if (dragFrom !== null && dragFrom !== pi) editor.reorderPath(dragFrom, pi);
-    dragFrom = null;
-    dragOver = null;
+  function onRowDragStart(uid: string, e: DragEvent) {
+    dragUid = uid;
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  }
+  function onRowDragOver(uid: string, isGroup: boolean, e: DragEvent) {
+    if (!dragUid || dragUid === uid) return;
+    e.preventDefault();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const frac = (e.clientY - r.top) / r.height;
+    // A group's middle band = drop inside; otherwise before/after (reversed → upper half = after).
+    dropUid = uid;
+    dropPos = isGroup && frac > 0.25 && frac < 0.75 ? "inside" : frac < 0.5 ? "after" : "before";
+  }
+  function onRowDrop(e: DragEvent) {
+    e.preventDefault();
+    if (dragUid && dropUid && dragUid !== dropUid) editor.moveTreeNode(dragUid, dropUid, dropPos);
+    dragUid = null;
+    dropUid = null;
+  }
+  function onRowDragEnd() {
+    dragUid = null;
+    dropUid = null;
   }
 
   function startRename(pi: number, current: string) {
@@ -647,35 +668,19 @@
     </section>
   {/if}
 
-  {#snippet pathRow(p: PathElement, index: number, nested: boolean, drag: boolean)}
+  {#snippet pathRow(p: PathElement, index: number, nested: boolean, uid: string)}
     {@const b = tightBounds(p.subpaths)}
     <li
       class="pathrow"
       class:nested
-      class:dragover={drag && dragOver === index}
-      draggable={drag && renaming !== index}
-      ondragstart={(e) => {
-        if (!drag) return;
-        dragFrom = index;
-        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-      }}
-      ondragover={(e) => {
-        if (!drag) return;
-        e.preventDefault();
-        dragOver = index;
-      }}
-      ondragleave={() => {
-        if (dragOver === index) dragOver = null;
-      }}
-      ondrop={(e) => {
-        if (!drag) return;
-        e.preventDefault();
-        onDrop(index);
-      }}
-      ondragend={() => {
-        dragFrom = null;
-        dragOver = null;
-      }}
+      class:dropbefore={dropUid === uid && dropPos === "before"}
+      class:dropafter={dropUid === uid && dropPos === "after"}
+      draggable={renaming !== index}
+      ondragstart={(e) => onRowDragStart(uid, e)}
+      ondragover={(e) => onRowDragOver(uid, false, e)}
+      ondragleave={() => (dropUid === uid ? (dropUid = null) : null)}
+      ondrop={onRowDrop}
+      ondragend={onRowDragEnd}
       oncontextmenu={(e) => openPathMenu(e, index, p.id)}
     >
       {#if b && b.maxX > b.minX && b.maxY > b.minY}
@@ -740,10 +745,22 @@
         {@const idx = uidToIndex.get(n.uid)}
         {@const p = idx !== undefined ? doc?.paths[idx] : undefined}
         {#if p && idx !== undefined}
-          {@render pathRow(p, idx, depth > 0, false)}
+          {@render pathRow(p, idx, depth > 0, n.uid)}
         {/if}
       {:else if kind === "group"}
-        <li class="grouphead" oncontextmenu={(e) => openTreeGroupMenu(e, n)}>
+        <li
+          class="grouphead"
+          class:dropbefore={dropUid === n.uid && dropPos === "before"}
+          class:dropafter={dropUid === n.uid && dropPos === "after"}
+          class:dropinside={dropUid === n.uid && dropPos === "inside"}
+          draggable="true"
+          ondragstart={(e) => onRowDragStart(n.uid, e)}
+          ondragover={(e) => onRowDragOver(n.uid, true, e)}
+          ondragleave={() => (dropUid === n.uid ? (dropUid = null) : null)}
+          ondrop={onRowDrop}
+          ondragend={onRowDragEnd}
+          oncontextmenu={(e) => openTreeGroupMenu(e, n)}
+        >
           <button class="chev" aria-label="collapse group" onclick={() => toggleCollapse(n.uid)}>
             {#if collapsed.includes(n.uid)}<ChevronRight size={13} />{:else}<ChevronDown
                 size={13}
@@ -768,7 +785,18 @@
           {#each [...n.children].reverse() as c, i (i)}{@render treeRow(c, depth + 1)}{/each}
         {/if}
       {:else if kind === "leaf"}
-        <li class="pathrow" class:nested={depth > 0}>
+        <li
+          class="pathrow"
+          class:nested={depth > 0}
+          class:dropbefore={dropUid === n.uid && dropPos === "before"}
+          class:dropafter={dropUid === n.uid && dropPos === "after"}
+          draggable="true"
+          ondragstart={(e) => onRowDragStart(n.uid, e)}
+          ondragover={(e) => onRowDragOver(n.uid, false, e)}
+          ondragleave={() => (dropUid === n.uid ? (dropUid = null) : null)}
+          ondrop={onRowDrop}
+          ondragend={onRowDragEnd}
+        >
           <span class="thumb empty"></span>
           <button
             class="row-btn"
@@ -1145,9 +1173,17 @@
     color: var(--halo-error);
   }
 
-  /* drop indicator while dragging to reorder draw order */
-  .layerlist li.dragover {
+  /* drop indicators (panel is reversed, so doc-"after" = higher z = a line at the row's top). */
+  .layerlist li.dropafter {
     box-shadow: inset 0 2px 0 var(--halo-accent);
+  }
+
+  .layerlist li.dropbefore {
+    box-shadow: inset 0 -2px 0 var(--halo-accent);
+  }
+
+  .layerlist li.dropinside {
+    box-shadow: inset 0 0 0 2px var(--halo-accent);
   }
 
   .layerlist .eye,

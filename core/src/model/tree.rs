@@ -957,6 +957,28 @@ impl Tree {
         }
     }
 
+    /// Move the node `uid` relative to `ref_uid`: `"before"`/`"after"` places it as a sibling in
+    /// `ref_uid`'s parent (reparenting across levels); `"inside"` appends it into `ref_uid`'s
+    /// children (drop onto a group). No-op if the target is the node itself, missing, or a
+    /// descendant of the moved node (would create a cycle). The drag-drop reorder op.
+    pub fn move_node(&mut self, uid: &str, ref_uid: &str, position: &str) -> bool {
+        if uid == ref_uid {
+            return false;
+        }
+        // Validate before mutating: `uid` exists, `ref_uid` exists + isn't inside `uid` (cycle).
+        match find_uid(&self.root, uid) {
+            Some(n) if !contains_uid(n, ref_uid) => {}
+            _ => return false,
+        }
+        if find_uid(&self.root, ref_uid).is_none() {
+            return false;
+        }
+        let Some(node) = remove_node(&mut self.root, uid) else {
+            return false;
+        };
+        insert_rel(&mut self.root, ref_uid, node, position).is_ok()
+    }
+
     /// Set (`Some`) or clear (`None`) the live-boolean op on the group node `uid`. Returns whether
     /// it was found (any element node can carry the marker; the frontend only sets it on groups).
     pub fn set_boolean(&mut self, uid: &str, op: Option<String>) -> bool {
@@ -1038,6 +1060,74 @@ pub fn make_path_node(uid: &str, attributes: &IndexMap<String, String>, d: &str)
         added: true,
         boolean_op: None,
     }
+}
+
+/// Depth-first immutable lookup by uid.
+fn find_uid<'a>(node: &'a Node, uid: &str) -> Option<&'a Node> {
+    if node.uid() == Some(uid) {
+        return Some(node);
+    }
+    if let Node::Element { children, .. } = node {
+        for c in children {
+            if let Some(n) = find_uid(c, uid) {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+/// Whether `uid` is `node` or anywhere in its subtree (cycle guard for moves).
+fn contains_uid(node: &Node, uid: &str) -> bool {
+    match node {
+        Node::Element { uid: u, children, .. } => {
+            u == uid || children.iter().any(|c| contains_uid(c, uid))
+        }
+        _ => false,
+    }
+}
+
+/// Detach + return the node `uid` from wherever it sits in the tree.
+fn remove_node(node: &mut Node, uid: &str) -> Option<Node> {
+    if let Node::Element { children, .. } = node {
+        if let Some(i) = children.iter().position(|c| c.uid() == Some(uid)) {
+            return Some(children.remove(i));
+        }
+        for c in children.iter_mut() {
+            if let Some(n) = remove_node(c, uid) {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+/// Insert `new` relative to `ref_uid` (`before`/`after` as a sibling, `inside` as a child). Returns
+/// `Err(new)` if `ref_uid` isn't in this subtree, bubbling the node back so a sibling can take it.
+fn insert_rel(node: &mut Node, ref_uid: &str, new: Node, pos: &str) -> Result<(), Node> {
+    let Node::Element { children, .. } = node else {
+        return Err(new);
+    };
+    if let Some(i) = children.iter().position(|c| c.uid() == Some(ref_uid)) {
+        match pos {
+            "before" => children.insert(i, new),
+            "after" => children.insert(i + 1, new),
+            "inside" => match &mut children[i] {
+                Node::Element { children: gc, .. } => gc.push(new),
+                _ => return Err(new),
+            },
+            _ => return Err(new),
+        }
+        return Ok(());
+    }
+    let mut carry = new;
+    for c in children.iter_mut() {
+        match insert_rel(c, ref_uid, carry, pos) {
+            Ok(()) => return Ok(()),
+            Err(n) => carry = n,
+        }
+    }
+    Err(carry)
 }
 
 fn reorder_in(node: &mut Node, uid: &str, forward: bool) -> bool {

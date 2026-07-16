@@ -441,6 +441,16 @@ class DocumentStore {
     }
   }
 
+  /** Move a tree node relative to another (drag-drop): `before`/`after` = sibling of `refUid`
+   *  (reparenting across levels), `inside` = into that group. */
+  moveTreeNode(uid: string, refUid: string, position: "before" | "after" | "inside"): void {
+    if (uid === refUid) return;
+    if (this.#apply({ type: "moveTreeNode", uid, refUid, position })) {
+      this.commit();
+      this.treeVersion++;
+    }
+  }
+
   /** Set (or remove, `null`) one attribute on any tree node by uid — the generic editor for
    *  non-shape elements (text/image/use). One undo step; refreshes the render tree. */
   setNodeAttr(uid: string, key: string, value: string | null): void {
