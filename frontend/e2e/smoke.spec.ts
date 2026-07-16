@@ -778,6 +778,39 @@ test("defs (clipPath/filter) render + their contents aren't editable paths", asy
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("the colour picker has an alpha channel (fill becomes 8-digit hex)", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="10" y="10" width="80" height="80" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+  await page.locator(".layerlist .row-btn").first().click();
+
+  // The fill paint's colour picker exposes an alpha slider; setting it makes the fill 8-digit hex.
+  const alpha = page.locator(".paint").filter({ hasText: "fill" }).locator('.alpha input[type="range"]');
+  await expect(alpha).toBeVisible();
+  await alpha.fill("50");
+  await expect(page.locator("svg.canvas g.artwork path").first()).toHaveAttribute(
+    "fill",
+    /^#3b82f6[0-9a-f]{2}$/i,
+  );
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("export normalized copy downloads a paths-only SVG", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

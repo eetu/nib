@@ -129,6 +129,19 @@
     setPaint(`url(#${id})`);
   }
 
+  // The selected stop's colour for the picker, with any separate `opacity` folded into the hex so
+  // the alpha slider reflects an imported `stop-opacity` (edits then write it back as #rrggbbaa).
+  function stopColorValue(s?: GradientStop): string {
+    if (!s) return "#000000";
+    if (s.opacity != null && s.opacity < 1 && /^#[0-9a-f]{6}$/i.test(s.color)) {
+      const a = Math.round(s.opacity * 255)
+        .toString(16)
+        .padStart(2, "0");
+      return s.color + a;
+    }
+    return s.color;
+  }
+
   function updateStop(i: number, patch: Partial<GradientStop>, preview = false) {
     if (!anyGrad) return;
     const next = {
@@ -289,10 +302,10 @@
     <div class="stoprow">
       <ColorInput
         label=""
-        value={anyGrad.stops[selStop]?.color ?? "#000000"}
+        value={stopColorValue(anyGrad.stops[selStop])}
         editable
-        oninput={(v) => updateStop(selStop, { color: v }, true)}
-        onchange={(v) => updateStop(selStop, { color: v })}
+        oninput={(v) => updateStop(selStop, { color: v, opacity: undefined }, true)}
+        onchange={(v) => updateStop(selStop, { color: v, opacity: undefined })}
       />
       <button
         class="rm"
@@ -301,6 +314,22 @@
         onclick={() => removeStop(selStop)}>×</button
       >
     </div>
+    {#if anyGrad.stops[selStop]}
+      <label class="slider">
+        <span class="slbl">offset</span>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          aria-label="stop offset"
+          value={Math.round(anyGrad.stops[selStop].offset * 100)}
+          oninput={(e) =>
+            updateStop(selStop, { offset: Number(e.currentTarget.value) / 100 }, true)}
+          onchange={(e) => updateStop(selStop, { offset: Number(e.currentTarget.value) / 100 })}
+        />
+        <span class="sval">{Math.round(anyGrad.stops[selStop].offset * 100)}%</span>
+      </label>
+    {/if}
     {#if anyGrad.kind === "linear"}
       <label class="slider">
         <span class="slbl">angle</span>

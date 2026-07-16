@@ -16,6 +16,7 @@
     padBounds,
     ROTATE_KNOB_PX,
     SELECT_PAD_PX,
+    transformCursor,
     type TransformHandle,
   } from "$lib/tools/transform";
   import { loadViewBox } from "$lib/view";
@@ -440,7 +441,19 @@
       canvas.send({ type: "MOVE", docPoint: viewport.toDoc(screen), screen, event: e });
       return;
     }
-    // idle → hover feedback (not part of a gesture)
+    // idle → hover feedback (not part of a gesture). A selected element's transform box gets the
+    // directional resize / rotate / move cursors (its handles aren't in the model hit-test).
+    if (tools.active === "select" && editor.selectedElementUid) {
+      const h = elHandleHit(screen);
+      if (h) {
+        hoverCursor = h.t === "rotate" ? "grab" : transformCursor(h.handle);
+        return;
+      }
+      if (inElBox(screen)) {
+        hoverCursor = "move";
+        return;
+      }
+    }
     activeTool.hover?.(viewport.toDoc(screen));
     if (editor.doc) hoverCursor = activeTool.cursor(hitTest(screen));
   }
