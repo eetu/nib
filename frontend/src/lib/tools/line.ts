@@ -20,8 +20,17 @@ export const lineTool: Tool = {
     const ref = editor.beginShape({ shape: "line", x0: a.x, y0: a.y, x1: a.x, y1: a.y });
     let b = a;
     return {
-      move(docPoint) {
+      move(docPoint, event) {
         b = snapPoint(docPoint).point;
+        // Shift snaps the line's angle to 45° steps, keeping its length.
+        if (event.shiftKey) {
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const len = Math.hypot(dx, dy);
+          const step = Math.PI / 4;
+          const ang = Math.round(Math.atan2(dy, dx) / step) * step;
+          b = { x: a.x + Math.cos(ang) * len, y: a.y + Math.sin(ang) * len };
+        }
         editor.setShape(ref.pathIndex, ref.subpathIndex, {
           shape: "line",
           x0: a.x,

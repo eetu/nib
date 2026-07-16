@@ -20,8 +20,15 @@ export const rectTool: Tool = {
     const ref = editor.beginShape({ shape: "rect", x0: a.x, y0: a.y, x1: a.x, y1: a.y });
     let b = a;
     return {
-      move(docPoint) {
+      move(docPoint, event) {
         b = snapPoint(docPoint).point;
+        // Shift constrains to a square — the larger side sets both, keeping the drag direction.
+        if (event.shiftKey) {
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const m = Math.max(Math.abs(dx), Math.abs(dy));
+          b = { x: a.x + (dx < 0 ? -m : m), y: a.y + (dy < 0 ? -m : m) };
+        }
         editor.setShape(ref.pathIndex, ref.subpathIndex, {
           shape: "rect",
           x0: a.x,

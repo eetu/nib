@@ -420,6 +420,34 @@ class DocumentStore {
     return null;
   }
 
+  /** Group the current multi-selection into a fresh nested `<g>` (⌘G and the Inspector button both
+   *  route here, so their naming can't drift) — "group N" by the count of existing groups. No-op
+   *  for a selection smaller than two. */
+  groupSelection(): void {
+    const uids = this.selectedPaths
+      .map((i) => this.doc?.paths[i]?.uid)
+      .filter((u): u is string => !!u);
+    if (uids.length < 2) return;
+    this.groupNodes(uids, `group ${this.#countGroups(this.renderTree()) + 1}`);
+  }
+
+  /** Ungroup the actively-selected group (⌘⇧G) — dissolve it back into its parent. No-op unless a
+   *  group is selected. */
+  ungroupSelection(): void {
+    if (this.selectedGroupUid) this.ungroupNode(this.selectedGroupUid);
+  }
+
+  #countGroups(nodes: RenderNode[]): number {
+    let c = 0;
+    for (const n of nodes) {
+      if (n.kind === "element") {
+        if (n.tag === "g") c++;
+        c += this.#countGroups(n.children);
+      }
+    }
+    return c;
+  }
+
   /** Set (`op`) or clear (`null`) the live-boolean op on a group node (by uid): turn a plain `<g>`
    *  into a live boolean, flip the operation, or flatten it back to a plain group. */
   setNodeBoolean(uid: string, op: "union" | "subtract" | "intersect" | "exclude" | null): void {

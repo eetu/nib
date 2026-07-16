@@ -74,6 +74,11 @@
       } else if (k === "d") {
         e.preventDefault();
         editor.duplicateSelected();
+      } else if (k === "g" && settings.uiLevel === "advanced") {
+        // Group / ungroup the selection — a pro feature, so inert in basic (touch-up) mode.
+        e.preventDefault();
+        if (e.shiftKey) editor.ungroupSelection();
+        else editor.groupSelection();
       }
       return;
     }

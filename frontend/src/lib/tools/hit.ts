@@ -5,11 +5,10 @@ import { editor } from "$lib/stores/document.svelte";
 import { tools } from "$lib/stores/tool.svelte";
 import { viewport } from "$lib/stores/viewport.svelte";
 
-import { handlePoints, padBounds, ROTATE_KNOB_PX, SELECT_PAD_PX } from "./transform";
+import { HANDLE_HIT_PX, handlePoints, padBounds, ROTATE_KNOB_PX, SELECT_PAD_PX } from "./transform";
 import type { Hit } from "./types";
 
 const ANCHOR_HIT_PX = 11;
-const HANDLE_HIT_PX = 11;
 const SEGMENT_HIT_PX = 8;
 const FLATTEN_STEPS = 12;
 

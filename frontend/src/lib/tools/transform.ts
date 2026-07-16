@@ -73,6 +73,10 @@ export function transformCursor(handle: TransformHandle): string {
 /** How far (screen px) the rotate knob sits above the box's top-centre. */
 export const ROTATE_KNOB_PX = 22;
 
+/** Hit radius (screen px) for grabbing a transform/resize handle or the rotate knob. Shared by
+ *  the path hit-test and the element transform box so identical-looking handles grab identically. */
+export const HANDLE_HIT_PX = 11;
+
 /** The box centre — the rotation pivot. */
 export function boxCenter(bb: Bounds): Point {
   return { x: (bb.minX + bb.maxX) / 2, y: (bb.minY + bb.maxY) / 2 };

@@ -69,6 +69,13 @@
   const mode = $derived<Mode>(
     displayGrad ? displayGrad.kind : value === "none" || value === "" ? "none" : "solid",
   );
+  // In basic mode the control offers only —/solid, but an existing gradient still shows its bar;
+  // append its (active) kind chip so the segmented control never reads as "nothing selected".
+  const displayModes = $derived<[Mode, string][]>(
+    displayGrad && !modes.some(([m]) => m === displayGrad.kind)
+      ? [...modes, [displayGrad.kind, displayGrad.kind]]
+      : modes,
+  );
 
   // A stop as a CSS gradient colour-stop, honouring per-stop opacity (a color→transparent fade
   // reads as solid otherwise). `color-mix` applies alpha to any colour format (hex/named/rgb).
@@ -263,7 +270,7 @@
   <div class="ptop">
     <span class="plabel">{label}</span>
     <div class="pmode">
-      {#each modes as [m, lbl] (m)}
+      {#each displayModes as [m, lbl] (m)}
         <button class:active={mode === m} onclick={() => setMode(m)}>{lbl}</button>
       {/each}
     </div>

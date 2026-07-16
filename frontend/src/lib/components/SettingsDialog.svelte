@@ -12,6 +12,12 @@
   function onKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") onClose();
   }
+
+  // Focus the dialog on open so its Escape handler fires (the +page window handler is inert while
+  // the dialog is up) — mirrors ImportDialog focusing its field.
+  function autofocus(node: HTMLElement) {
+    node.focus();
+  }
 </script>
 
 {#if open}
@@ -23,6 +29,7 @@
       aria-modal="true"
       aria-label="Settings"
       tabindex="-1"
+      use:autofocus
       onkeydown={onKeydown}
     >
       <h2>settings</h2>

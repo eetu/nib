@@ -235,35 +235,24 @@
       { label: "bring forward", run: () => editor.reorderNode(uid, true) },
       { label: "send backward", run: () => editor.reorderNode(uid, false) },
     ];
-    for (const op of ["union", "subtract", "intersect", "exclude"] as const) {
-      const mark = n.booleanOp === op ? "• " : "";
-      items.push({ label: `${mark}${op}`, run: () => editor.setNodeBoolean(uid, op) });
+    // Live-boolean ops are a pro (advanced) path-craft feature — hidden in basic (touch-up) mode,
+    // matching the multi-select boolean buttons + palette.
+    if (advanced) {
+      for (const op of ["union", "subtract", "intersect", "exclude"] as const) {
+        const mark = n.booleanOp === op ? "• " : "";
+        items.push({ label: `${mark}${op}`, run: () => editor.setNodeBoolean(uid, op) });
+      }
+      if (n.booleanOp)
+        items.push({ label: "flatten (plain group)", run: () => editor.setNodeBoolean(uid, null) });
     }
-    if (n.booleanOp)
-      items.push({ label: "flatten (plain group)", run: () => editor.setNodeBoolean(uid, null) });
     items.push({ label: "ungroup", danger: false, run: () => editor.ungroupNode(uid) });
     menu = { x: e.clientX, y: e.clientY, items };
   }
 
-  // Count group nodes anywhere in the render tree — for a friendly incrementing group name.
-  function countGroups(nodes: RenderNode[]): number {
-    let c = 0;
-    for (const n of nodes) {
-      if (n.kind === "element") {
-        if (treeKind(n) === "group") c++;
-        c += countGroups(n.children);
-      }
-    }
-    return c;
-  }
-
-  // Group the current selection into a nested `<g>` on the tree (every path — imported or drawn —
-  // has a tree uid, so it's one path). Members must share a parent (top-level selections do).
+  // Group the current selection into a nested `<g>` on the tree. Delegates to the facade so the
+  // button and the ⌘G shortcut share one behaviour (naming, guards).
   function groupSelected() {
-    const uids = editor.selectedPaths
-      .map((i) => editor.doc?.paths[i]?.uid)
-      .filter((u): u is string => !!u);
-    if (uids.length > 1) editor.groupNodes(uids, `group ${countGroups(panelTree) + 1}`);
+    editor.groupSelection();
   }
 
   // Right-click context menu for a row (path or group) — an action list at the cursor.

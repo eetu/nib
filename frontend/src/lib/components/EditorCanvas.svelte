@@ -11,6 +11,7 @@
   import {
     type Bounds,
     boxCenter,
+    HANDLE_HIT_PX,
     handleAnchor,
     handlePoints,
     padBounds,
@@ -264,11 +265,12 @@
     if (!elBounds) return null;
     const bb = padBounds(elBounds, viewport.toDocLength(SELECT_PAD_PX));
     const top = viewport.toScreen({ x: (bb.minX + bb.maxX) / 2, y: bb.minY });
-    if (Math.hypot(screen.x - top.x, screen.y - (top.y - ROTATE_KNOB_PX)) <= 8)
+    if (Math.hypot(screen.x - top.x, screen.y - (top.y - ROTATE_KNOB_PX)) <= HANDLE_HIT_PX)
       return { t: "rotate" };
     for (const { handle, point } of handlePoints(bb)) {
       const s = viewport.toScreen(point);
-      if (Math.hypot(screen.x - s.x, screen.y - s.y) <= 8) return { t: "scale", handle };
+      if (Math.hypot(screen.x - s.x, screen.y - s.y) <= HANDLE_HIT_PX)
+        return { t: "scale", handle };
     }
     return null;
   }
