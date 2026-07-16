@@ -400,7 +400,8 @@
       <h2>{elTag}</h2>
       {#if elTag === "text"}
         <label class="row">
-          text <input
+          <span class="rlbl">text</span>
+          <input
             class="dash"
             type="text"
             aria-label="text content"
@@ -438,7 +439,8 @@
       {/if}
       {#if elTag === "text"}
         <label class="row">
-          size <input
+          <span class="rlbl">size</span>
+          <input
             type="number"
             min="0"
             step="1"
@@ -503,7 +505,7 @@
         setPaint={(v) => setStyle("fill", v)}
         previewPaint={(v) => previewStyle("fill", v)}
       />
-      {@render seg("fill rule", "fill-rule", ["nonzero", "evenodd"], "nonzero")}
+      {@render seg("rule", "fill-rule", ["nonzero", "evenodd"], "nonzero")}
       <PaintInput
         label="stroke"
         value={style.stroke ?? "none"}
@@ -511,7 +513,8 @@
         previewPaint={(v) => previewStyle("stroke", v)}
       />
       <label class="row">
-        width <input
+        <span class="rlbl">width</span>
+        <input
           type="number"
           min="0"
           step="0.5"
@@ -522,7 +525,8 @@
       {@render seg("cap", "stroke-linecap", ["butt", "round", "square"], "butt")}
       {@render seg("join", "stroke-linejoin", ["miter", "round", "bevel"], "miter")}
       <label class="row">
-        dash <input
+        <span class="rlbl">dash</span>
+        <input
           class="dash"
           type="text"
           value={style["stroke-dasharray"] ?? ""}
@@ -532,7 +536,7 @@
         />
       </label>
       <label class="row">
-        opacity
+        <span class="rlbl">opacity</span>
         <input
           type="range"
           min="0"
@@ -875,6 +879,15 @@
     margin-bottom: 6px;
   }
 
+  /* The shared STYLE-panel label column — keeps every control aligned at one x. Matches
+     `.seglbl` + PaintInput's `.plabel`/`.slbl`. */
+  .rlbl {
+    width: 50px;
+    flex: none;
+    color: var(--halo-text-muted);
+    white-space: nowrap;
+  }
+
   .row input[type="number"] {
     width: 56px;
   }
@@ -900,7 +913,8 @@
   }
 
   .seglbl {
-    width: 44px;
+    width: 50px;
+    flex: none;
     color: var(--halo-text-muted);
   }
 

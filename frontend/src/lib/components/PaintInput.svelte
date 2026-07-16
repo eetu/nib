@@ -158,18 +158,20 @@
     if (grad) editor.setGradient(grad); // commit the previewed offset as one undo step
   }
 
-  // Linear direction as an angle (deg) ↔ the objectBoundingBox vector, centred on 0.5,0.5.
+  // Linear direction as an angle in 0–360° ↔ the objectBoundingBox vector, centred on 0.5,0.5.
   const angle = $derived(
     grad && grad.kind === "linear"
-      ? Math.round((Math.atan2(grad.y2 - grad.y1, grad.x2 - grad.x1) * 180) / Math.PI)
+      ? (Math.round((Math.atan2(grad.y2 - grad.y1, grad.x2 - grad.x1) * 180) / Math.PI) + 360) % 360
       : 0,
   );
-  function setAngle(deg: number) {
+  function setAngle(deg: number, preview = false) {
     if (!grad) return;
     const t = (deg * Math.PI) / 180;
     const c = Math.cos(t) / 2;
     const s = Math.sin(t) / 2;
-    editor.setGradient({ ...grad, x1: 0.5 - c, y1: 0.5 - s, x2: 0.5 + c, y2: 0.5 + s });
+    const next = { ...grad, x1: 0.5 - c, y1: 0.5 - s, x2: 0.5 + c, y2: 0.5 + s };
+    if (preview) editor.previewGradient(next);
+    else editor.setGradient(next);
   }
 
   // Radial gradient centre / radius (objectBoundingBox fractions).
@@ -229,17 +231,21 @@
     </div>
     <div class="grow">
       <button class="addstop" onclick={addStop}>+ stop</button>
-      {#if grad.kind === "linear"}
-        <label class="angle">
-          angle
-          <input
-            type="number"
-            value={angle}
-            onchange={(e) => setAngle(Number(e.currentTarget.value))}
-          />
-        </label>
-      {/if}
     </div>
+    {#if grad.kind === "linear"}
+      <label class="slider">
+        <span class="slbl">angle</span>
+        <input
+          type="range"
+          min="0"
+          max="360"
+          value={angle}
+          oninput={(e) => setAngle(Number(e.currentTarget.value), true)}
+          onchange={(e) => setAngle(Number(e.currentTarget.value))}
+        />
+        <span class="sval">{angle}°</span>
+      </label>
+    {/if}
     {#if grad.kind === "radial"}
       <div class="radial">
         <label
@@ -299,7 +305,8 @@
   }
 
   .plabel {
-    width: 44px;
+    width: 50px;
+    flex: none;
     color: var(--halo-text-muted);
   }
 
@@ -396,7 +403,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-top: 2px;
+    margin: 2px 0 6px;
   }
 
   .addstop {
@@ -408,16 +415,31 @@
     font-size: 12px;
   }
 
-  .angle {
+  /* angle: a slider row aligned to the panel's label column (matches Inspector .row) */
+  .slider {
     display: flex;
     align-items: center;
-    gap: 5px;
-    color: var(--halo-text-muted);
-    font-size: 12px;
+    gap: 6px;
+    margin-bottom: 6px;
   }
 
-  .angle input {
-    width: 52px;
+  .slbl {
+    width: 50px;
+    flex: none;
+    color: var(--halo-text-muted);
+  }
+
+  .slider input[type="range"] {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .sval {
+    width: 34px;
+    flex: none;
+    text-align: right;
+    color: var(--halo-text-muted);
+    font-variant-numeric: tabular-nums;
   }
 
   .radial {
