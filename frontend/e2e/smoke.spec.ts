@@ -811,6 +811,105 @@ test("the colour picker has an alpha channel (fill becomes 8-digit hex)", async 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("undo then redo restores a drawn shape", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "new drawing" }).click();
+  await page.keyboard.press("r");
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("no canvas");
+  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.6);
+  await page.mouse.up();
+  const path = page.locator("svg.canvas g.artwork path");
+  await expect(path).toHaveCount(1);
+
+  await page.keyboard.press("v");
+  const run = async (cmd: string) => {
+    await page.keyboard.press("Meta+k");
+    await page.locator(".palette .q").fill(cmd);
+    await page.keyboard.press("Enter");
+  };
+  await run("Undo");
+  await expect(path).toHaveCount(0);
+  await run("Redo");
+  await expect(path).toHaveCount(1);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
+test("editing the SOURCE drawer re-parses the document", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="0" y="0" width="20" height="20"/></svg>`);
+  await page.keyboard.press("Meta+Enter");
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(1);
+
+  // Edit the source to two rects + apply → the canvas re-parses to two paths.
+  await page.getByRole("button", { name: "source" }).click();
+  await page
+    .locator(".sourceview textarea")
+    .fill(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="0" y="0" width="20" height="20"/><rect x="40" y="0" width="20" height="20"/></svg>`);
+  await page.locator(".sourceview .apply").click();
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(2);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
+test("flattening a live boolean group renders its operands again", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><path d="M10 10 H70 V70 H10 Z" fill="#3b82f6"/><path d="M50 50 H110 V110 H50 Z" fill="#ef4444"/></svg>`);
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const rows = page.locator(".layerlist .row-btn");
+  await rows.nth(0).click();
+  await rows.nth(1).click({ modifiers: ["Shift"] });
+  await page.getByLabel("live (non-destructive)").check();
+  await page.getByRole("button", { name: "subtract", exact: true }).click();
+  // A live boolean group → one baked result path in the tree.
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(1);
+
+  // Flatten via the group header menu → plain group → both operands render again.
+  await page.locator(".layerlist .grouphead").click({ button: "right" });
+  await page.getByRole("button", { name: "flatten (plain group)" }).click();
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(2);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("drag-drop in the Layers panel reorders z-order", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
