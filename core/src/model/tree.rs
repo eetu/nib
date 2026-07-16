@@ -1345,6 +1345,10 @@ mod tests {
         include_str!("../../tests/fixtures/prolog.svg"),
         include_str!("../../tests/fixtures/shapes.svg"),
         include_str!("../../tests/fixtures/defs.svg"),
+        include_str!("../../tests/fixtures/entities.svg"),
+        include_str!("../../tests/fixtures/cdata.svg"),
+        include_str!("../../tests/fixtures/use-symbol.svg"),
+        include_str!("../../tests/fixtures/text-tspan.svg"),
     ];
 
     #[test]
