@@ -84,6 +84,10 @@ class DocumentStore {
    *  the select tool moves whole shapes; when set, that path's anchors/handles are editable.
    *  Client-only editing mode — not persisted (reload starts in object mode). */
   nodeEditIndex = $state<number | null>(null);
+  /** A non-shape element (text/image/use/…) selected by its tree `uid` — the object-selection for
+   *  elements that aren't editable paths. Orthogonal to path selection (setting one clears the
+   *  other). Client-only. */
+  selectedElementUid = $state<string | null>(null);
   /** Computed render geometry of each live-boolean group (mirrored from the core snapshot). */
   booleanResults = $state<BooleanResult[]>([]);
   /** Bumped by structural tree ops (hide/group/ungroup/reorder) — the canvas keys its cached
@@ -412,6 +416,31 @@ class DocumentStore {
     }
   }
 
+  /** Set (or remove, `null`) one attribute on any tree node by uid — the generic editor for
+   *  non-shape elements (text/image/use). One undo step; refreshes the render tree. */
+  setNodeAttr(uid: string, key: string, value: string | null): void {
+    if (this.#apply({ type: "setNodeAttr", uid, key, value: value ?? undefined })) {
+      this.commit();
+      this.treeVersion++;
+    }
+  }
+
+  /** Live-preview a node attribute change (a drag / colour pick) without committing an undo step;
+   *  a following `setNodeAttr` (on settle) records the single step. */
+  previewNodeAttr(uid: string, key: string, value: string | null): void {
+    this.#apply({ type: "setNodeAttr", uid, key, value: value ?? undefined });
+    this.treeVersion++;
+    this.#sync();
+  }
+
+  /** Replace a text element's content string (editing a `<text>` label). One undo step. */
+  setNodeText(uid: string, text: string): void {
+    if (this.#apply({ type: "setNodeText", uid, text })) {
+      this.commit();
+      this.treeVersion++;
+    }
+  }
+
   markSaved(): void {
     this.dirty = false;
     this.#persist();
@@ -419,8 +448,39 @@ class DocumentStore {
 
   // --- selection ---------------------------------------------------------
 
+  /** The selected non-shape element's render node (found by uid in the render tree), or null.
+   *  Recomputed when the selection or tree changes. */
+  selectedElement = $derived.by((): RenderNode | null => {
+    const uid = this.selectedElementUid;
+    void this.treeVersion;
+    void this.doc?.source;
+    if (!uid || !this.doc) return null;
+    const find = (nodes: RenderNode[]): RenderNode | null => {
+      for (const n of nodes) {
+        if (n.kind !== "element") continue;
+        if (n.uid === uid) return n;
+        const hit = find(n.children);
+        if (hit) return hit;
+      }
+      return null;
+    };
+    return find(this.renderTree());
+  });
+
+  /** Object-select a non-shape element by its tree uid (text/image/use). Clears path selection —
+   *  the two are mutually exclusive. `null` deselects. */
+  selectElement(uid: string | null): void {
+    this.nodeEditIndex = null;
+    this.selectedPaths = [];
+    this.#wasm?.deselect();
+    this.selectedElementUid = uid;
+    this.#sync();
+    this.#persist();
+  }
+
   select(ref: NodeRef | null): void {
     // Selecting a node implies node-editing that path; clears any multi-selection.
+    this.selectedElementUid = null;
     this.nodeEditIndex = ref ? ref.pathIndex : null;
     this.selectedPaths = ref ? [ref.pathIndex] : [];
     this.#wasm?.select(ref);
@@ -429,6 +489,7 @@ class DocumentStore {
   }
 
   selectPath(pathIndex: number | null): void {
+    this.selectedElementUid = null;
     this.nodeEditIndex = null; // object mode
     this.selectedPaths = pathIndex == null ? [] : [pathIndex];
     this.#wasm?.selectPath(pathIndex ?? undefined);
@@ -438,6 +499,7 @@ class DocumentStore {
 
   /** Toggle a path in/out of the object selection (shift-click). */
   togglePath(pathIndex: number): void {
+    this.selectedElementUid = null;
     this.nodeEditIndex = null;
     this.selectedPaths = this.selectedPaths.includes(pathIndex)
       ? this.selectedPaths.filter((i) => i !== pathIndex)
@@ -450,6 +512,7 @@ class DocumentStore {
 
   /** Replace the object selection with a set of paths (marquee). */
   setSelectedPaths(indices: number[]): void {
+    this.selectedElementUid = null;
     this.nodeEditIndex = null;
     this.selectedPaths = [...indices];
     this.#wasm?.selectPath(indices[0] ?? undefined);
@@ -458,6 +521,7 @@ class DocumentStore {
   }
 
   deselect(): void {
+    this.selectedElementUid = null;
     this.nodeEditIndex = null;
     this.selectedPaths = [];
     this.#wasm?.deselect();
@@ -468,6 +532,7 @@ class DocumentStore {
   /** Enter node-editing mode for a path (double-click): select it as the object, then flag
    *  its nodes as editable so the overlay shows anchors and the select tool edits them. */
   enterNodeEdit(pathIndex: number): void {
+    this.selectedElementUid = null;
     this.#wasm?.selectPath(pathIndex);
     this.selectedPaths = [pathIndex];
     this.nodeEditIndex = pathIndex;

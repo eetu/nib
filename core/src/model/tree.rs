@@ -845,6 +845,55 @@ impl Tree {
         reorder_in(&mut self.root, uid, forward)
     }
 
+    /// Set (`Some`) or remove (`None`) an attribute on the element `uid`, marking it edited so it
+    /// regenerates on emit. Returns whether the node was found + changed.
+    pub fn set_node_attr(&mut self, uid: &str, key: &str, value: Option<&str>) -> bool {
+        match self.root.find_by_uid_mut(uid) {
+            Some(Node::Element { attrs, edited, .. }) => {
+                match value {
+                    Some(v) => match attrs.iter_mut().find(|(k, _)| k == key) {
+                        Some((_, val)) => *val = v.to_string(),
+                        None => attrs.push((key.to_string(), v.to_string())),
+                    },
+                    None => {
+                        let before = attrs.len();
+                        attrs.retain(|(k, _)| k != key);
+                        if attrs.len() == before {
+                            return false; // nothing to remove
+                        }
+                    }
+                }
+                *edited = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Replace a text-bearing element's content with `text` (one child text node) — e.g. editing a
+    /// `<text>` label. Marks it edited. Returns whether the node was found.
+    pub fn set_node_text(&mut self, uid: &str, text: &str) -> bool {
+        match self.root.find_by_uid_mut(uid) {
+            Some(Node::Element {
+                tag,
+                children,
+                edited,
+                original_close,
+                ..
+            }) => {
+                // A self-closing element (no close tag) needs a real open/close pair to hold text,
+                // else the regenerated open would be `<tag/>` and the child would fall outside it.
+                if original_close.is_empty() {
+                    *original_close = format!("</{tag}>");
+                }
+                *children = vec![Node::Text(text.to_string())];
+                *edited = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Set (`Some`) or clear (`None`) the live-boolean op on the group node `uid`. Returns whether
     /// it was found (any element node can carry the marker; the frontend only sets it on groups).
     pub fn set_boolean(&mut self, uid: &str, op: Option<String>) -> bool {
@@ -1244,6 +1293,46 @@ mod tests {
         // Unhiding restores byte-for-byte.
         assert!(tree.set_hidden(&uid, false));
         assert_eq!(serialize_tree(&tree), CORPUS[1]);
+    }
+
+    #[test]
+    fn set_node_attr_and_text_edit_a_non_shape_element() {
+        let mut tree = parse_tree(
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><text x="10" y="20" font-size="12">hi</text></svg>"#,
+        )
+        .unwrap();
+        fn uid_of<'a>(n: &'a Node, tag: &str) -> Option<&'a str> {
+            if let Node::Element {
+                tag: t,
+                uid,
+                children,
+                ..
+            } = n
+            {
+                if t == tag {
+                    return Some(uid);
+                }
+                for c in children {
+                    if let Some(u) = uid_of(c, tag) {
+                        return Some(u);
+                    }
+                }
+            }
+            None
+        }
+        let uid = uid_of(&tree.root, "text").unwrap().to_string();
+        // Edit a geometry attr + the text content.
+        assert!(tree.set_node_attr(&uid, "x", Some("30")));
+        assert!(tree.set_node_text(&uid, "world"));
+        let out = serialize_tree(&tree);
+        assert!(out.contains("x=\"30\""), "{out}");
+        assert!(out.contains(">world</text>"), "{out}");
+        assert!(!out.contains("hi"), "{out}");
+        // Removing an attr drops it; a missing attr is a no-op.
+        assert!(tree.set_node_attr(&uid, "font-size", None));
+        assert!(!serialize_tree(&tree).contains("font-size"));
+        assert!(!tree.set_node_attr(&uid, "font-size", None));
+        assert!(!tree.set_node_attr("nope", "x", Some("1")));
     }
 
     #[test]

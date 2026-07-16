@@ -746,6 +746,57 @@ test("declarative render keeps gradient defs functional (SVG namespace) + fill r
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("a <text> element is selectable and its content + attributes are editable", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="20" y="50" font-size="14" fill="#000000">hello</text></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+
+  // The <text> is a leaf row in the panel (not a shape/group). Selecting it opens the element
+  // section (there are no shape rows — text isn't an editable path).
+  const row = page.locator(".layerlist .row-btn").filter({ hasText: "text" });
+  await expect(row).toHaveCount(1);
+  await row.click();
+  await expect(page.getByRole("heading", { name: "text", exact: true })).toBeVisible();
+
+  // Edit the content → the canvas <text> updates.
+  const canvasText = page.locator("svg.canvas g.artwork text");
+  await expect(canvasText).toHaveText("hello");
+  const content = page.getByLabel("text content");
+  await content.fill("world");
+  await content.press("Tab");
+  await expect(canvasText).toHaveText("world");
+
+  // Edit x → the attribute updates in place, and export keeps a <text> (not a <path>).
+  const xField = page.getByLabel("x", { exact: true });
+  await xField.fill("40");
+  await xField.press("Tab");
+  await expect(canvasText).toHaveAttribute("x", "40");
+
+  await page.getByRole("button", { name: "source" }).click();
+  const src = await page.locator(".sourceview textarea").inputValue();
+  expect(src).toContain("<text");
+  expect(src).toContain(">world</text>");
+  expect(src).toContain('x="40"');
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("a source-defined gradient fill (url(#id)) shows its stops, not the raw url", async ({
   page,
 }) => {

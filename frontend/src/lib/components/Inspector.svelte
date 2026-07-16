@@ -24,6 +24,7 @@
   import { tools } from "$lib/stores/tool.svelte";
   import { scaleSubpaths, shearSubpaths } from "$lib/tools/transform";
 
+  import ColorInput from "./ColorInput.svelte";
   import PaintInput from "./PaintInput.svelte";
 
   // Basic (touch-up) mode hides pro sections (arrange/align, path craft, booleans, skew,
@@ -37,6 +38,24 @@
   const path = $derived(editor.selectedPathElement);
   const pathIndex = $derived(editor.selectedPathIndex);
   const isCreateTool = $derived(tools.active === "pen" || tools.active === "circle");
+
+  // A selected non-shape element (text/image/use) — its render node, edited generically by attr.
+  const elementSel = $derived(editor.selectedElement);
+  const elTag = $derived(elementSel?.kind === "element" ? elementSel.tag : "");
+  const elAttr = (k: string) => (elementSel?.kind === "element" ? (elementSel.attrs[k] ?? "") : "");
+  const elText = $derived(
+    elementSel?.kind === "element"
+      ? (elementSel.children.find((c) => c.kind === "text")?.text ?? "")
+      : "",
+  );
+  function setElAttr(key: string, e: Event) {
+    const v = (e.currentTarget as HTMLInputElement).value.trim();
+    if (elementSel?.kind === "element") editor.setNodeAttr(elementSel.uid, key, v || null);
+  }
+  function setElText(e: Event) {
+    if (elementSel?.kind === "element")
+      editor.setNodeText(elementSel.uid, (e.currentTarget as HTMLInputElement).value);
+  }
 
   // Effective style being edited: a selected path (drawn = attributes, imported
   // = attributes + override), else the new-shape defaults when a create tool is
@@ -376,6 +395,71 @@
     </section>
   {/if}
 
+  {#if elementSel && elementSel.kind === "element"}
+    <section>
+      <h2>{elTag}</h2>
+      {#if elTag === "text"}
+        <label class="row">
+          text <input
+            class="dash"
+            type="text"
+            aria-label="text content"
+            value={elText}
+            onchange={setElText}
+            spellcheck="false"
+          />
+        </label>
+      {/if}
+      <div class="coords">
+        <label
+          >x <input type="text" value={elAttr("x")} onchange={(e) => setElAttr("x", e)} /></label
+        >
+        <label
+          >y <input type="text" value={elAttr("y")} onchange={(e) => setElAttr("y", e)} /></label
+        >
+      </div>
+      {#if elTag === "image" || elAttr("width") || elAttr("height")}
+        <div class="coords">
+          <label
+            >w <input
+              type="text"
+              value={elAttr("width")}
+              onchange={(e) => setElAttr("width", e)}
+            /></label
+          >
+          <label
+            >h <input
+              type="text"
+              value={elAttr("height")}
+              onchange={(e) => setElAttr("height", e)}
+            /></label
+          >
+        </div>
+      {/if}
+      {#if elTag === "text"}
+        <label class="row">
+          size <input
+            type="number"
+            min="0"
+            step="1"
+            value={elAttr("font-size") || "16"}
+            onchange={(e) => setElAttr("font-size", e)}
+          />
+        </label>
+        <ColorInput
+          label="fill"
+          value={elAttr("fill") || "#000000"}
+          editable
+          oninput={(v) =>
+            elementSel?.kind === "element" && editor.previewNodeAttr(elementSel.uid, "fill", v)}
+          onchange={(v) =>
+            elementSel?.kind === "element" && editor.setNodeAttr(elementSel.uid, "fill", v)}
+        />
+      {/if}
+      <p class="hint">{elTag} element · attributes edit in place</p>
+    </section>
+  {/if}
+
   {#if path || isCreateTool}
     <section>
       <div class="lhead">
@@ -682,7 +766,14 @@
       {:else if kind === "leaf"}
         <li class="pathrow" class:nested={depth > 0}>
           <span class="thumb empty"></span>
-          <span class="pid">{treeName(n)}</span>
+          <button
+            class="row-btn"
+            class:active={editor.selectedElementUid === n.uid}
+            onclick={() => editor.selectElement(n.uid)}
+            title="click to select · edit its attributes in the panel"
+          >
+            <span class="pid">{treeName(n)}</span>
+          </button>
           <button
             class="eye"
             title={n.hidden ? "show" : "hide"}

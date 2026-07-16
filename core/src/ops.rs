@@ -197,6 +197,18 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         op: Option<String>,
     },
+    /// Set (`Some`) or remove (`None`) one attribute on ANY tree node by `uid` — the generic
+    /// attribute editor for non-shape elements (text/image/use/…): geometry (x/y/width/height),
+    /// a `transform` matrix (drag/scale/rotate), or presentation (fill/font-size/…). Marks the
+    /// node edited so it regenerates on emit.
+    SetNodeAttr {
+        uid: String,
+        key: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        value: Option<String>,
+    },
+    /// Replace a text-bearing element's content (its child text) — editing a `<text>` label.
+    SetNodeText { uid: String, text: String },
 
     /// Set (`value: Some`) or clear (`value: None`) one presentation attribute. Added paths
     /// edit their own `attributes`; imported paths accumulate a `style_override`.
@@ -660,6 +672,16 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             .tree
             .as_mut()
             .map(|t| t.set_boolean(uid, op.clone()))
+            .unwrap_or(false),
+        Op::SetNodeAttr { uid, key, value } => doc
+            .tree
+            .as_mut()
+            .map(|t| t.set_node_attr(uid, key, value.as_deref()))
+            .unwrap_or(false),
+        Op::SetNodeText { uid, text } => doc
+            .tree
+            .as_mut()
+            .map(|t| t.set_node_text(uid, text))
             .unwrap_or(false),
         Op::SetStyle { path, key, value } => {
             let Some(p) = doc.paths.get_mut(*path) else {
