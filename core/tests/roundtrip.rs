@@ -31,6 +31,8 @@ const CORPUS: &[(&str, &str)] = &[
     ),
     ("nested-deep", include_str!("fixtures/nested-deep.svg")),
     ("compact-path", include_str!("fixtures/compact-path.svg")),
+    ("inkscape", include_str!("fixtures/inkscape.svg")),
+    ("illustrator", include_str!("fixtures/illustrator.svg")),
 ];
 
 /// `<defs>` content (clipPath/mask/gradient/filter contents) is not directly-editable canvas
@@ -111,4 +113,28 @@ fn editing_preserves_entity_laden_siblings() {
     assert!(out.contains("Rock &amp; Roll &lt;3&gt; &#169; &#xB5;"), "desc verbatim: {out}");
     assert!(out.contains(r#"id="a&amp;b""#), "edited path keeps its escaped id: {out}");
     assert!(out.contains("L 80 80"), "the edit applied: {out}");
+}
+
+/// Editing a path inside a real Inkscape document leaves the producer cruft intact — the
+/// `sodipodi:namedview`, the `<metadata>`/RDF block, and the layer `<g>` wrapper all re-emit
+/// verbatim; only the edited path's tag changes. This is the byte-preservation promise on the
+/// most common real-world SVG producer.
+#[test]
+fn editing_preserves_inkscape_producer_cruft() {
+    use nib_core::model::types::Point;
+    let src = include_str!("fixtures/inkscape.svg");
+    let mut doc = parse_svg(src).unwrap();
+    // path1 is the only editable projected path; nudge one of its anchors.
+    let last = doc.paths[0].subpaths[0].nodes.len() - 1;
+    doc.paths[0].subpaths[0].nodes[last].point = Point { x: 50.0, y: 50.0 };
+    doc.paths[0].edited = true;
+    let out = serialize_svg(&doc);
+    assert!(out.contains(r#"<sodipodi:namedview"#), "namedview survives: {out}");
+    assert!(out.contains(r#"inkscape:current-layer="layer1""#), "namedview attrs verbatim: {out}");
+    assert!(out.contains("<dc:format>image/svg+xml</dc:format>"), "RDF metadata verbatim: {out}");
+    assert!(
+        out.contains(r#"<g inkscape:label="Layer 1" inkscape:groupmode="layer" id="layer1">"#),
+        "layer group wrapper verbatim: {out}"
+    );
+    assert!(out.contains(r#"id="path1""#), "edited path keeps its id: {out}");
 }
