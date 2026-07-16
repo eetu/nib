@@ -1295,6 +1295,32 @@ mod tests {
     }
 
     #[test]
+    fn large_document_projects_edits_and_serializes_at_scale() {
+        use crate::model::document::{parse_svg, serialize_via_tree};
+        // 800 rects — a stress size for the linear-time invariants (project/reconcile/serialize).
+        let mut svg =
+            String::from("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1000 1000\">");
+        for i in 0..800 {
+            svg.push_str(&format!(
+                "<rect x=\"{}\" y=\"{}\" width=\"4\" height=\"4\"/>",
+                (i % 50) * 6,
+                (i / 50) * 6
+            ));
+        }
+        svg.push_str("</svg>");
+        let mut doc = parse_svg(&svg).unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        assert_eq!(doc.paths.len(), 800, "every rect projects");
+        // A full sweep of edits (each mutation is O(path), so the sweep is O(n), not O(n²)).
+        for i in 0..800 {
+            assert!(apply(&mut doc, &Op::MovePathBy { path: i, dx: 1.0, dy: 1.0 }));
+        }
+        // Serialize (reconcile onto a tree clone + emit) stays correct at scale.
+        let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert_eq!(out.matches("<rect").count(), 800, "moved rects re-fit as <rect>: {}", out.len());
+    }
+
+    #[test]
     fn move_node_reorders_across_siblings_and_into_groups() {
         use crate::model::document::{parse_svg, serialize_via_tree};
         let mut doc = parse_svg(

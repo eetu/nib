@@ -811,6 +811,45 @@ test("the colour picker has an alpha channel (fill becomes 8-digit hex)", async 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("a large document (hundreds of paths) loads + stays interactive", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  const N = 300;
+  const rects = Array.from(
+    { length: N },
+    (_, i) =>
+      `<rect x="${(i % 25) * 8}" y="${Math.floor(i / 25) * 8}" width="6" height="6" fill="#3b82f6"/>`,
+  ).join("");
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 160">${rects}</svg>`);
+  await page.keyboard.press("Meta+Enter");
+  const paths = page.locator("svg.canvas g.artwork path");
+  await expect(paths).toHaveCount(N);
+
+  // Interaction stays responsive at scale: select a row + nudge → its d changes well under a
+  // generous budget (a catastrophic O(n²) regression would blow past it).
+  await page.keyboard.press("v");
+  await page.locator(".layerlist .row-btn").first().click(); // top-of-stack = last doc path
+  const last = paths.last();
+  const d0 = await last.getAttribute("d");
+  const t = Date.now();
+  await page.keyboard.press("ArrowRight");
+  await expect(last).not.toHaveAttribute("d", d0 ?? "");
+  expect(Date.now() - t).toBeLessThan(3000);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("an SVG with a DOCTYPE/DTD (Inkscape/Illustrator) loads", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
