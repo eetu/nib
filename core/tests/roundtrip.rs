@@ -20,7 +20,19 @@ const CORPUS: &[(&str, &str)] = &[
     ("transforms", include_str!("fixtures/transforms.svg")),
     ("prolog", include_str!("fixtures/prolog.svg")),
     ("shapes", include_str!("fixtures/shapes.svg")),
+    ("defs", include_str!("fixtures/defs.svg")),
 ];
+
+/// `<defs>` content (clipPath/mask/gradient/filter contents) is not directly-editable canvas
+/// content, so it must NOT project as editable paths — only the two referencing shapes (the rect +
+/// the path) do; the `<circle>` inside the `<clipPath>` stays opaque + re-emits verbatim.
+#[test]
+fn defs_contents_do_not_project_as_editable_paths() {
+    let doc = parse_svg(include_str!("fixtures/defs.svg")).unwrap();
+    let paths = doc.tree.as_ref().unwrap().project_paths();
+    let ids: Vec<&str> = paths.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids, ["rect-0", "path-1"], "only the referencing shapes project: {ids:?}");
+}
 
 /// An unedited document must serialize back to its exact source — nib touches only what the
 /// user edits; everything else (other elements, defs, comments, whitespace) is verbatim.

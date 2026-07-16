@@ -746,6 +746,38 @@ test("declarative render keeps gradient defs functional (SVG namespace) + fill r
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("defs (clipPath/filter) render + their contents aren't editable paths", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><clipPath id="clip"><circle cx="50" cy="50" r="40"/></clipPath><filter id="blur"><feGaussianBlur stdDeviation="2"/></filter></defs><rect x="10" y="10" width="80" height="80" fill="#3b82f6" clip-path="url(#clip)"/><path d="M20 20 L80 80" stroke="#000" filter="url(#blur)"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+
+  // The defs render (so clip/filter work) — clipPath + filter exist in the canvas DOM.
+  await expect(page.locator("svg.canvas defs clipPath#clip")).toHaveCount(1);
+  await expect(page.locator("svg.canvas defs filter#blur")).toHaveCount(1);
+  // Only the two referencing shapes are editable paths — the <circle> inside the clipPath is NOT
+  // projected as a top-level path/row (it's def content, opaque).
+  await expect(page.locator("svg.canvas g.artwork > path")).toHaveCount(2);
+  await expect(page.locator(".layerlist .row-btn")).toHaveCount(2);
+  // The rect (drawn as a path) keeps its clip-path reference.
+  await expect(page.locator('svg.canvas g.artwork path[clip-path="url(#clip)"]')).toHaveCount(1);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("a <text> element is selectable and its content + attributes are editable", async ({
   page,
 }) => {

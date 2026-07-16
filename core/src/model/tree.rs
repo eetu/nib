@@ -38,6 +38,22 @@ pub const SHAPE_TAGS: [&str; 7] = [
     "path", "rect", "circle", "ellipse", "line", "polygon", "polyline",
 ];
 
+/// Container elements whose *contents* are not directly-editable canvas content — a `<defs>`
+/// subtree (gradients, `<clipPath>`, `<mask>`, `<pattern>`, `<marker>`, `<symbol>`) renders only by
+/// reference. Their inner shapes must NOT project as editable paths (else a `<circle>` inside a
+/// `<clipPath>` becomes a phantom path in the panel + `doc.paths`); they stay opaque + re-emit
+/// verbatim. The render walk still emits them so the defs keep working.
+pub const DEF_CONTAINERS: [&str; 8] = [
+    "defs",
+    "clipPath",
+    "mask",
+    "pattern",
+    "marker",
+    "symbol",
+    "linearGradient",
+    "radialGradient",
+];
+
 /// Parse a numeric attribute (SVG geometry values are plain numbers, optionally with a unit
 /// suffix like `px` — take the leading number, mirroring JS `parseFloat`).
 fn num(attrs: &[(String, String)], key: &str, default: f64) -> f64 {
@@ -634,6 +650,11 @@ fn collect_paths(node: &Node, out: &mut Vec<PathElement>) {
     else {
         return;
     };
+    // A `<defs>`/clipPath/mask/… subtree renders only by reference — never project its inner shapes
+    // as editable paths (nor recurse), or they'd become phantom rows in the panel + `doc.paths`.
+    if DEF_CONTAINERS.contains(&tag.as_str()) {
+        return;
+    }
     // `<path>` always projects (even an empty `d`, matching the flat parser); the other
     // primitives project only when they have valid geometry (else stay opaque/uneditable).
     let subpaths = if tag == "path" {
@@ -1191,6 +1212,7 @@ mod tests {
         include_str!("../../tests/fixtures/transforms.svg"),
         include_str!("../../tests/fixtures/prolog.svg"),
         include_str!("../../tests/fixtures/shapes.svg"),
+        include_str!("../../tests/fixtures/defs.svg"),
     ];
 
     #[test]
@@ -1352,9 +1374,9 @@ mod tests {
     fn project_paths_matches_the_flat_parser_for_path_only_docs() {
         // For path-only fixtures the projection reproduces the flat parser exactly (regression
         // guard). Only the new `uid` differs, so compare with uid cleared. Fixtures with
-        // primitives (mixed-elements #3, shapes #7) project extra editable paths → checked below.
+        // primitives (mixed-elements #3, shapes #7, defs #8 — a rect) project extra editable paths.
         for (i, src) in CORPUS.iter().enumerate() {
-            if i == 3 || i == 7 {
+            if i == 3 || i == 7 || i == 8 {
                 continue;
             }
             let projected: Vec<_> = parse_tree(src)
