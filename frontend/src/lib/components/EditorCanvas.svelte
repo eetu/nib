@@ -163,6 +163,47 @@
     };
   }
 
+  // Non-shape element (text/image/use) selection + drag runs outside the (path-focused) gesture
+  // machine, like pan/pinch. A drag translates the element's x/y live; commit at gesture end.
+  let elDrag: { uid: string; x0: number; y0: number; start: Point; moved: boolean } | null = null;
+
+  // The uid of a selectable opaque element (text/image/use) under the pointer, via the DOM node's
+  // data-uid — used only when the model hit-test misses (shapes take priority).
+  function elementHit(e: PointerEvent): { uid: string; el: Element } | null {
+    const el = (e.target as Element | null)?.closest("[data-uid]") ?? null;
+    if (!el) return null;
+    const uid = (el as HTMLElement).dataset.uid;
+    const tag = el.tagName.toLowerCase();
+    if (uid && !pathByUid.has(uid) && (tag === "text" || tag === "image" || tag === "use"))
+      return { uid, el };
+    return null;
+  }
+
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+
+  // Begin dragging an element: capture its current x/y (from the DOM) + the start point.
+  function startElDrag(uid: string, screen: Point): void {
+    const el = svgEl.querySelector(`[data-uid="${CSS.escape(uid)}"]`);
+    elDrag = {
+      uid,
+      x0: Number(el?.getAttribute("x") ?? "0") || 0,
+      y0: Number(el?.getAttribute("y") ?? "0") || 0,
+      start: viewport.toDoc(screen),
+      moved: false,
+    };
+  }
+
+  // Is a screen point inside the selected element's box (with a small grab tolerance)?
+  function inElBox(p: Point): boolean {
+    if (!elBox) return false;
+    return (
+      p.x >= elBox.x - 3 &&
+      p.x <= elBox.x + elBox.w + 3 &&
+      p.y >= elBox.y - 3 &&
+      p.y <= elBox.y + elBox.h + 3
+    );
+  }
+
   function onPointerDown(e: PointerEvent) {
     if (!editor.doc) return;
     setPointer(e.pointerId, screenOf(e));
@@ -178,6 +219,21 @@
     svgEl.setPointerCapture(e.pointerId);
     const screen = screenOf(e);
     const hit: Hit = pan ? { kind: "empty" } : hitTest(screen);
+    // Select tool, model hit missed → non-shape element (text/image/use). Once selected, dragging
+    // anywhere in its box moves it (forgiving, like a transform-box body); else pick one by paint.
+    if (!pan && tools.active === "select" && hit.kind === "empty") {
+      if (editor.selectedElementUid && inElBox(screen)) {
+        startElDrag(editor.selectedElementUid, screen);
+        return;
+      }
+      const el = elementHit(e);
+      if (el) {
+        editor.selectElement(el.uid);
+        startElDrag(el.uid, screen);
+        return;
+      }
+    }
+    if (!pan) editor.selectedElementUid = null; // any other click clears the element selection box
     canvas.send({ type: "DOWN", hit, docPoint: viewport.toDoc(screen), event: e, pan, screen });
   }
 
@@ -191,6 +247,14 @@
       return;
     }
     const screen = screenOf(e);
+    if (elDrag) {
+      const p = viewport.toDoc(screen);
+      const dx = p.x - elDrag.start.x;
+      const dy = p.y - elDrag.start.y;
+      if (dx || dy) elDrag.moved = true;
+      editor.previewNodeMove(elDrag.uid, round2(elDrag.x0 + dx), round2(elDrag.y0 + dy));
+      return;
+    }
     if (!canvas.idle) {
       canvas.send({ type: "MOVE", docPoint: viewport.toDoc(screen), screen, event: e });
       return;
@@ -207,8 +271,40 @@
       if (pointers.length < 2) pinch = null; // pinch owned this gesture
       return;
     }
+    if (elDrag) {
+      if (elDrag.moved) editor.commit(); // record the live-moved x/y as one undo step
+      elDrag = null;
+      return;
+    }
     canvas.send({ type: "UP", docPoint: viewport.toDoc(screenOf(e)) });
   }
+
+  // Screen-space bounding box of the selected non-shape element, measured from its rendered DOM
+  // node (getBoundingClientRect handles font metrics / transforms the model can't know). Re-measured
+  // when the selection, tree, or viewport changes; fed to the Overlay to draw its selection box.
+  let elBox = $state<{ x: number; y: number; w: number; h: number } | null>(null);
+  $effect(() => {
+    const uid = editor.selectedElementUid;
+    // deps: re-measure on tree edits + any viewport change
+    void editor.treeVersion;
+    void viewport.scale;
+    void viewport.tx;
+    void viewport.ty;
+    void pxW;
+    void pxH;
+    if (!uid || !svgEl) {
+      elBox = null;
+      return;
+    }
+    const el = svgEl.querySelector(`[data-uid="${CSS.escape(uid)}"]`);
+    if (!el) {
+      elBox = null;
+      return;
+    }
+    const r = el.getBoundingClientRect();
+    const s = svgEl.getBoundingClientRect();
+    elBox = { x: r.left - s.left, y: r.top - s.top, w: r.width, h: r.height };
+  });
 
   // Double-click a shape (select tool) to enter node-editing mode — Figma-style. Object
   // mode moves the whole shape on drag; nodes only become editable after entering here.
@@ -334,12 +430,22 @@
         {#if p}
           <!-- editable shape: drawn from the model (live geometry) in true z-order, keeping the
                source element's class/transform/fill=url(#…)/… so gradients + CSS survive -->
-          {#if shapeVisible(p)}<path {...shapeAttrs(n.attrs, p)} d={pathToD(p.subpaths)} />{/if}
+          {#if shapeVisible(p)}<path
+              {...shapeAttrs(n.attrs, p)}
+              d={pathToD(p.subpaths)}
+              data-uid={n.uid}
+            />{/if}
         {:else}
           <!-- opaque element (g / defs / text / image / …): rendered verbatim from the tree.
                Explicit SVG namespace — Svelte can't always infer it for a dynamic recursive tag,
-               and gradient/defs elements in the wrong namespace silently stop functioning. -->
-          <svelte:element this={n.tag} xmlns="http://www.w3.org/2000/svg" {...n.attrs}>
+               and gradient/defs elements in the wrong namespace silently stop functioning.
+               data-uid links the DOM node back to its tree node for click-select + bbox measure. -->
+          <svelte:element
+            this={n.tag}
+            xmlns="http://www.w3.org/2000/svg"
+            {...n.attrs}
+            data-uid={n.uid}
+          >
             {#each n.children as c, i (i)}{@render renderNode(c)}{/each}
           </svelte:element>
         {/if}
@@ -355,7 +461,7 @@
         {#each renderTree as n, i (i)}{@render renderNode(n)}{/each}
       </g>
     </g>
-    <Overlay />
+    <Overlay elementBox={elBox} />
   </svg>
 </div>
 

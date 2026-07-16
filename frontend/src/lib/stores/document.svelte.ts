@@ -433,6 +433,17 @@ class DocumentStore {
     this.#sync();
   }
 
+  /** Live-move an element to (x, y) doc coords during a drag (both attrs, one refresh); no commit
+   *  — the caller commits once at gesture end. */
+  previewNodeMove(uid: string, x: number, y: number): void {
+    const a = this.#apply({ type: "setNodeAttr", uid, key: "x", value: String(x) });
+    const b = this.#apply({ type: "setNodeAttr", uid, key: "y", value: String(y) });
+    if (a || b) {
+      this.treeVersion++;
+      this.#sync();
+    }
+  }
+
   /** Replace a text element's content string (editing a `<text>` label). One undo step. */
   setNodeText(uid: string, text: string): void {
     if (this.#apply({ type: "setNodeText", uid, text })) {

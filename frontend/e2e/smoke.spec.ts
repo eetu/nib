@@ -797,6 +797,46 @@ test("a <text> element is selectable and its content + attributes are editable",
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("a selected <text> element can be dragged on the canvas to move it", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="20" y="50" font-size="14">hello</text></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // Select via the panel row (reliable), then the overlay draws a box around the text's DOM bbox.
+  await page.locator(".layerlist .row-btn").filter({ hasText: "text" }).click();
+  const selBox = page.locator("svg.canvas g.overlay rect.sel-box");
+  await expect(selBox).toBeVisible();
+
+  // Drag inside the box → the text's x moves (drag-anywhere-in-box, forgiving of glyph gaps).
+  const box = await selBox.boundingBox();
+  if (!box) throw new Error("no element box");
+  const t = page.locator("svg.canvas g.artwork text");
+  const x0 = Number(await t.getAttribute("x"));
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 40, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  const x1 = Number(await t.getAttribute("x"));
+  expect(x1).toBeGreaterThan(x0);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("a source-defined gradient fill (url(#id)) shows its stops, not the raw url", async ({
   page,
 }) => {

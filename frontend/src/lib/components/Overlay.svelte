@@ -14,6 +14,12 @@
     SELECT_PAD_PX,
   } from "$lib/tools/transform";
 
+  // Screen-space bbox of a selected non-shape element (text/image/use), measured from the DOM by
+  // EditorCanvas — drawn as a selection box here (element geometry isn't in the model).
+  let {
+    elementBox = null,
+  }: { elementBox?: { x: number; y: number; w: number; h: number } | null } = $props();
+
   const doc = $derived(editor.doc);
   // Anchors show only while node-editing — any non-select tool, or the select tool in
   // node-edit mode (double-click). Object-mode select shows the transform box instead, so
@@ -108,6 +114,16 @@
            stroke colour (Pixelmator-style) -->
       <path class="sel-outline-casing" d={outlineD} />
       <path class="sel-outline" d={outlineD} />
+    {/if}
+    {#if elementBox}
+      <!-- selection box around a non-shape element (text/image/use), from its measured DOM bbox -->
+      <rect
+        class="sel-box"
+        x={elementBox.x - 3}
+        y={elementBox.y - 3}
+        width={elementBox.w + 6}
+        height={elementBox.h + 6}
+      />
     {/if}
     {#snippet transformBox(raw: Bounds)}
       <!-- dashed box + rotate knob + 8 resize handles, around the padded bounds. Shared by
