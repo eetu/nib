@@ -425,10 +425,13 @@ fn escape_attr(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// One gradient as a `<linearGradient>` / `<radialGradient>` element.
+/// One gradient as a `<linearGradient>` / `<radialGradient>` element. Stops are emitted in offset
+/// order — SVG (like CSS) clamps an out-of-order stop onto the previous one, so a mid stop added
+/// out of order would otherwise be dropped. (The model keeps insertion order for stable drag.)
 fn gradient_to_svg(g: &Gradient) -> String {
-    let stops: String = g
-        .stops
+    let mut ordered: Vec<&crate::model::types::GradientStop> = g.stops.iter().collect();
+    ordered.sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal));
+    let stops: String = ordered
         .iter()
         .map(|s| {
             let op = s
@@ -800,6 +803,36 @@ mod tests {
         // content within the viewBox leaves it byte-for-byte
         let within = parse_svg(SAMPLE).unwrap();
         assert!(serialize_svg(&within).contains(r#"viewBox="0 0 100 100""#));
+    }
+
+    #[test]
+    fn gradient_stops_export_in_offset_order() {
+        use crate::model::types::{Gradient, GradientStop};
+        let mut doc = parse_svg(SAMPLE).unwrap();
+        let stop = |offset: f64, color: &str| GradientStop {
+            offset,
+            color: color.into(),
+            opacity: None,
+        };
+        // A mid stop added out of order (0, 1, then 0.5) must still export between the ends —
+        // SVG clamps out-of-order stops, so an unsorted emit would drop the middle one.
+        doc.gradients.push(Gradient {
+            id: "g1".into(),
+            kind: "linear".into(),
+            stops: vec![stop(0.0, "#000000"), stop(1.0, "#ffffff"), stop(0.5, "#ff0000")],
+            x1: 0.0,
+            y1: 0.0,
+            x2: 1.0,
+            y2: 0.0,
+            cx: 0.5,
+            cy: 0.5,
+            r: 0.5,
+        });
+        let out = serialize_svg(&doc);
+        let p0 = out.find("offset=\"0\"").unwrap();
+        let phalf = out.find("offset=\"0.5\"").unwrap();
+        let p1 = out.find("offset=\"1\"").unwrap();
+        assert!(p0 < phalf && phalf < p1, "stops emit in offset order: {out}");
     }
 
     #[test]

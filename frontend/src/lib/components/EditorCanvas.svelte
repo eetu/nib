@@ -552,16 +552,19 @@
     {/if}
     {#if editor.doc?.gradients?.length}
       <defs>
+        <!-- stops sorted by offset: SVG (like CSS) clamps out-of-order stops, so a mid stop added
+             out of order would otherwise vanish. Model keeps insertion order (stable drag index). -->
         {#each editor.doc.gradients as g (g.id)}
+          {@const stops = [...g.stops].sort((a, b) => a.offset - b.offset)}
           {#if g.kind === "radial"}
             <radialGradient id={g.id} cx={g.cx} cy={g.cy} r={g.r}>
-              {#each g.stops as s, i (i)}
+              {#each stops as s, i (i)}
                 <stop offset={s.offset} stop-color={s.color} stop-opacity={s.opacity ?? 1} />
               {/each}
             </radialGradient>
           {:else}
             <linearGradient id={g.id} x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2}>
-              {#each g.stops as s, i (i)}
+              {#each stops as s, i (i)}
                 <stop offset={s.offset} stop-color={s.color} stop-opacity={s.opacity ?? 1} />
               {/each}
             </linearGradient>

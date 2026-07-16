@@ -60,7 +60,17 @@
         : s.color;
     return `${c} ${Math.round(s.offset * 100)}%`;
   }
-  const stopsCss = $derived(anyGrad ? anyGrad.stops.map(stopCss).join(", ") : "");
+  // CSS (+ SVG) gradients clamp out-of-order stops — a stop whose offset is less than the previous
+  // one collapses onto it — so a mid gradient added out of order vanishes. Sort by offset for the
+  // preview (the model keeps insertion order so a stop's index stays stable while dragging).
+  const stopsCss = $derived(
+    anyGrad
+      ? [...anyGrad.stops]
+          .sort((a, b) => a.offset - b.offset)
+          .map(stopCss)
+          .join(", ")
+      : "",
+  );
   const previewBg = $derived(
     anyGrad
       ? anyGrad.kind === "radial"
