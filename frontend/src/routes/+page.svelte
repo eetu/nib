@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { BACKEND } from "$lib/backend/flag";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
   import EditorCanvas from "$lib/components/EditorCanvas.svelte";
   import FileList from "$lib/components/FileList.svelte";
@@ -193,6 +194,13 @@
   {/if}
 
   <div class="body">
+    <!-- Connected-mode projects list (dynamically imported so the standalone build ships none of
+         the backend code). -->
+    {#if BACKEND}
+      {#await import("$lib/components/BackendPanel.svelte") then M}
+        <M.default />
+      {/await}
+    {/if}
     {#if workspace.files.length}
       <FileList />
     {/if}

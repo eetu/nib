@@ -2,10 +2,9 @@ import { sveltekit } from "@sveltejs/kit/vite";
 import { defineConfig } from "vite";
 
 // Vite dev server (:5173). Output goes to dist/ (wired in svelte.config.js via
-// adapter-static). nib is a fully client-side tool today, so there is no
-// backend to talk to — the /api + /status proxy below is dormant, kept ready
-// for the day the rust-axum serve-shell lands (see the plan). Harmless now:
-// nothing hits those paths.
+// adapter-static). In connected mode (`PUBLIC_NIB_BACKEND=1`, e.g. `just dev`) the SPA talks to
+// the rust-axum backend on :4321 via the same-origin proxy below (REST + the sync WebSocket).
+// Standalone builds never hit these paths.
 export default defineConfig({
   plugins: [sveltekit()],
   // The nib-core WASM engine is a `link:` dep resolving to ../core/pkg (a sibling of
@@ -21,8 +20,9 @@ export default defineConfig({
       allow: [".."],
     },
     proxy: {
-      "/api": "http://localhost:3010",
-      "/status": "http://localhost:3010",
+      "/api": "http://localhost:4321",
+      "/mcp": "http://localhost:4321",
+      "/ws": { target: "ws://localhost:4321", ws: true },
     },
   },
 });

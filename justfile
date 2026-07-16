@@ -35,9 +35,9 @@ test-backend:
 install: build-core
     cd frontend && node .yarn/releases/yarn-*.cjs install
 
-# Dev server (:5173).
+# Dev server (:5173). Connected mode on (talks to the backend on :4321 via the Vite proxy).
 dev: build-core
-    cd frontend && node .yarn/releases/yarn-*.cjs dev
+    cd frontend && VITE_NIB_BACKEND=1 node .yarn/releases/yarn-*.cjs dev
 
 # Production build → frontend/dist (size-optimized core .wasm).
 build: opt-core

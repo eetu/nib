@@ -10,3 +10,9 @@ core/pkg/
 
 # The backend's runtime document folder (`just backend`) — user .svg files, not source.
 /docs/
+
+# The backend's SQLite database (Phase C) — runtime data, not source.
+nib.db
+nib.db-shm
+nib.db-wal
+

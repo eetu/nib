@@ -107,6 +107,11 @@ class DocumentStore {
   fileName = $state<string | null>(null);
 
   #clipboard: Clipboard[] | null = null;
+
+  // Backend live-sync (connected mode): a sink receives each commit's ops; the buffer collects the
+  // ops applied since the last commit. A null sink = standalone (no sync).
+  #syncSink: ((ops: unknown[]) => void) | null = null;
+  #syncBuffer: unknown[] = [];
   #persist = debounce(() => {
     saveState<Session>(SESSION_KEY, {
       doc: this.doc,
@@ -193,7 +198,9 @@ class DocumentStore {
 
   /** Apply one op to the core (live edit, no commit). Returns whether it mutated. */
   #apply(op: unknown): boolean {
-    return this.#wasm ? this.#wasm.applyOp(op) : false;
+    const ok = this.#wasm ? this.#wasm.applyOp(op) : false;
+    if (ok && this.#syncSink) this.#syncBuffer.push(op); // stream to the backend on commit
+    return ok;
   }
 
   /** A friendly, unique path id/name — `base`, else `base 2`, `base 3`, … (drawn paths get a
@@ -932,13 +939,35 @@ class DocumentStore {
     this.dirty = true;
     this.#sync();
     this.#persist();
+    // Stream this commit's ops to the backend (connected mode), then clear the buffer.
+    if (this.#syncSink && this.#syncBuffer.length) {
+      this.#syncSink(this.#syncBuffer);
+      this.#syncBuffer = [];
+    }
   }
 
   /** Abandon an in-flight gesture, restoring the last committed state. */
   revert(): void {
+    this.#syncBuffer = []; // the gesture is discarded → don't stream its ops
     this.#wasm?.revert();
     this.#sync();
     this.treeVersion++; // the restored tree may differ (a mid-gesture add) → re-fetch
+  }
+
+  /** Wire (or clear, `null`) a sink that receives each commit's ops — for backend live-sync. */
+  setSyncSink(sink: ((ops: unknown[]) => void) | null): void {
+    this.#syncSink = sink;
+    this.#syncBuffer = [];
+  }
+
+  /** Apply ops received from a remote peer (backend sync): mutate + re-render. Doesn't buffer (they
+   *  bypass `#apply`) or persist locally — the backend is authoritative. */
+  applyRemote(ops: unknown[]): void {
+    if (!this.#wasm) return;
+    this.#wasm.applyOps(ops);
+    this.#wasm.commit();
+    this.#sync();
+    this.treeVersion++;
   }
 
   undo(): void {
