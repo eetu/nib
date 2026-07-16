@@ -917,7 +917,7 @@ test("a selected <text> can be resized + rotated with the transform box", async 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
-test("a source-defined gradient fill (url(#id)) shows its stops, not the raw url", async ({
+test("a source-defined gradient fill is editable in place (adopts on edit, keeps its id)", async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -940,17 +940,24 @@ test("a source-defined gradient fill (url(#id)) shows its stops, not the raw url
   await page.keyboard.press("v");
   await page.locator(".layerlist .row-btn").first().click();
 
-  // The fill paint resolves the imported gradient: its "linear" mode is active + a read-only
-  // preview bar shows (instead of a solid ColorInput holding the literal "url(#a)" string).
+  // A plain objectBoundingBox gradient is now editable in place: "linear" mode active + the
+  // editable bar with its two stops (not a read-only preview of the raw url string).
   const fill = page.locator(".paint").filter({ hasText: "fill" });
   await expect(fill.getByRole("button", { name: "linear", exact: true })).toHaveClass(/active/);
-  await expect(fill.locator(".bar.readonly")).toBeVisible();
-
-  // Adopting it (pick linear) seeds an editable model gradient from the imported stops → the
-  // fill repoints to a nib `grad-…` id and the editable stop bar appears.
-  await fill.getByRole("button", { name: "linear", exact: true }).click();
-  await expect(page.locator('svg.canvas g.artwork path[fill^="url(#grad-"]')).toHaveCount(1);
+  const bar = fill.locator(".bar.editable");
+  await expect(bar).toBeVisible();
   await expect(fill.locator(".marker")).toHaveCount(2);
+
+  // Editing it (click the bar to add a stop) adopts it into the model — same id, so the fill
+  // still references url(#a); the export defines #a exactly once (source def deduped).
+  const bb = (await bar.boundingBox())!;
+  await page.mouse.click(bb.x + bb.width / 2, bb.y + bb.height / 2);
+  await expect(fill.locator(".marker")).toHaveCount(3);
+  await expect(page.locator('svg.canvas g.artwork path[fill="url(#a)"]')).toHaveCount(1);
+
+  await page.getByRole("button", { name: "source" }).click();
+  const src = await page.locator(".sourceview textarea").inputValue();
+  expect(src.match(/id="a"/g)?.length).toBe(1);
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });

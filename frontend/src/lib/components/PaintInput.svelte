@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { GradientStop } from "$lib/model/types";
+  import type { Gradient, GradientStop, ImportedGradient } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
   import { settings } from "$lib/stores/settings.svelte";
 
@@ -39,16 +39,35 @@
 
   const gradId = $derived(value.startsWith("url(#") ? value.slice(5, -1) : null);
   const grad = $derived(gradId ? editor.gradientById(gradId) : null);
-  // A gradient referenced by the fill but defined in the imported source `<defs>` (not nib's
-  // editable model) — resolved from the render tree so we show its actual stops, not the raw
-  // `url(#id)` string. Read-only; switching mode adopts its stops into an editable gradient.
-  const importedGrad = $derived(
-    gradId && !grad ? (editor.importedGradients.get(gradId) ?? null) : null,
+  // A gradient referenced by the fill but defined in the imported source `<defs>` (not yet in nib's
+  // editable model), resolved from the render tree.
+  const info = $derived(gradId && !grad ? (editor.importedGradients.get(gradId) ?? null) : null);
+  // …expressed as a full model Gradient when it fits nib's model — editing it adopts it into
+  // `doc.gradients` (setGradient upserts by id; export dedupes the source def), so it's editable in
+  // place. Byte-for-byte holds until that first edit. Non-editable imports stay read-only.
+  const importedGrad = $derived<Gradient | null>(
+    info?.editable && gradId
+      ? {
+          id: gradId,
+          kind: info.kind,
+          stops: info.stops.map((s) => ({ ...s })),
+          x1: info.x1,
+          y1: info.y1,
+          x2: info.x2,
+          y2: info.y2,
+          cx: info.cx,
+          cy: info.cy,
+          r: info.r,
+        }
+      : null,
   );
-  // Whichever gradient backs the current value (editable model first, else imported source).
-  const anyGrad = $derived(grad ?? importedGrad);
-  const mode = $derived<"none" | "solid" | "linear" | "radial">(
-    anyGrad ? anyGrad.kind : value === "none" || value === "" ? "none" : "solid",
+  const readonlyGrad = $derived(info && !info.editable ? info : null);
+  // The gradient the controls edit (model gradient, else an adoptable imported one).
+  const anyGrad = $derived<Gradient | null>(grad ?? importedGrad);
+  // What the bar previews — the editable gradient, else a read-only imported one.
+  const displayGrad = $derived<Gradient | ImportedGradient | null>(anyGrad ?? readonlyGrad);
+  const mode = $derived<Mode>(
+    displayGrad ? displayGrad.kind : value === "none" || value === "" ? "none" : "solid",
   );
 
   // A stop as a CSS gradient colour-stop, honouring per-stop opacity (a color→transparent fade
@@ -64,16 +83,16 @@
   // one collapses onto it — so a mid gradient added out of order vanishes. Sort by offset for the
   // preview (the model keeps insertion order so a stop's index stays stable while dragging).
   const stopsCss = $derived(
-    anyGrad
-      ? [...anyGrad.stops]
+    displayGrad
+      ? [...displayGrad.stops]
           .sort((a, b) => a.offset - b.offset)
           .map(stopCss)
           .join(", ")
       : "",
   );
   const previewBg = $derived(
-    anyGrad
-      ? anyGrad.kind === "radial"
+    displayGrad
+      ? displayGrad.kind === "radial"
         ? `radial-gradient(circle, ${stopsCss})`
         : `linear-gradient(90deg, ${stopsCss})`
       : "",
@@ -82,17 +101,15 @@
   function setMode(m: "none" | "solid" | "linear" | "radial") {
     if (m === "none") return setPaint("none");
     if (m === "solid") {
-      return setPaint(anyGrad?.stops[0]?.color ?? (value.startsWith("#") ? value : "#000000"));
+      const c = anyGrad?.stops[0]?.color ?? readonlyGrad?.stops[0]?.color;
+      return setPaint(c ?? (value.startsWith("#") ? value : "#000000"));
     }
-    if (grad) return editor.setGradient({ ...grad, kind: m });
+    // An editable gradient (model or adoptable import) just switches kind — adopting on the way.
+    if (anyGrad) return editor.setGradient({ ...anyGrad, kind: m });
+    // Otherwise create a fresh gradient, seeding from a read-only import's stops if present.
     const id = `grad-${crypto.randomUUID().slice(0, 8)}`;
-    // Adopt an imported gradient's stops into an editable model gradient; else a fresh two-stop.
-    const stops = importedGrad
-      ? importedGrad.stops.map((s) => ({
-          offset: s.offset,
-          color: s.color,
-          ...(s.opacity != null ? { opacity: s.opacity } : {}),
-        }))
+    const stops = readonlyGrad
+      ? readonlyGrad.stops.map((s) => ({ ...s }))
       : [
           { offset: 0, color: value.startsWith("#") ? value : "#4b7bec" },
           { offset: 1, color: "#ffffff" },
@@ -113,8 +130,11 @@
   }
 
   function updateStop(i: number, patch: Partial<GradientStop>, preview = false) {
-    if (!grad) return;
-    const next = { ...grad, stops: grad.stops.map((s, j) => (j === i ? { ...s, ...patch } : s)) };
+    if (!anyGrad) return;
+    const next = {
+      ...anyGrad,
+      stops: anyGrad.stops.map((s, j) => (j === i ? { ...s, ...patch } : s)),
+    };
     if (preview) editor.previewGradient(next);
     else editor.setGradient(next);
   }
@@ -155,21 +175,21 @@
 
   // Click the bar (not a marker) to add a stop at that offset, coloured by interpolation.
   function addStopFromClick(e: MouseEvent) {
-    if (!grad || !barEl || e.target !== barEl) return;
+    if (!anyGrad || !barEl || e.target !== barEl) return;
     const r = barEl.getBoundingClientRect();
     const offset = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-    const sorted = [...grad.stops].sort((a, b) => a.offset - b.offset);
+    const sorted = [...anyGrad.stops].sort((a, b) => a.offset - b.offset);
     const stops = [
-      ...grad.stops,
+      ...anyGrad.stops,
       { offset: Math.round(offset * 100) / 100, color: colorAt(sorted, offset) },
     ];
-    editor.setGradient({ ...grad, stops });
+    editor.setGradient({ ...anyGrad, stops });
     selStop = stops.length - 1;
   }
 
   function removeStop(i: number) {
-    if (!grad || grad.stops.length <= 2) return;
-    editor.setGradient({ ...grad, stops: grad.stops.filter((_, j) => j !== i) });
+    if (!anyGrad || anyGrad.stops.length <= 2) return;
+    editor.setGradient({ ...anyGrad, stops: anyGrad.stops.filter((_, j) => j !== i) });
   }
 
   // Draggable stop markers along the gradient bar.
@@ -178,7 +198,7 @@
   let selStop = $state(0);
 
   $effect(() => {
-    if (grad && selStop >= grad.stops.length) selStop = grad.stops.length - 1;
+    if (displayGrad && selStop >= displayGrad.stops.length) selStop = displayGrad.stops.length - 1;
   });
 
   function stopDown(i: number, e: PointerEvent) {
@@ -196,29 +216,33 @@
   function stopUp() {
     if (dragStop === null) return;
     dragStop = null;
-    if (grad) editor.setGradient(grad); // commit the previewed offset as one undo step
+    if (anyGrad) editor.setGradient(anyGrad); // commit the previewed offset as one undo step
   }
 
   // Linear direction as an angle in 0–360° ↔ the objectBoundingBox vector, centred on 0.5,0.5.
   const angle = $derived(
-    grad && grad.kind === "linear"
-      ? (Math.round((Math.atan2(grad.y2 - grad.y1, grad.x2 - grad.x1) * 180) / Math.PI) + 360) % 360
+    anyGrad && anyGrad.kind === "linear"
+      ? (Math.round(
+          (Math.atan2(anyGrad.y2 - anyGrad.y1, anyGrad.x2 - anyGrad.x1) * 180) / Math.PI,
+        ) +
+          360) %
+          360
       : 0,
   );
   function setAngle(deg: number, preview = false) {
-    if (!grad) return;
+    if (!anyGrad) return;
     const t = (deg * Math.PI) / 180;
     const c = Math.cos(t) / 2;
     const s = Math.sin(t) / 2;
-    const next = { ...grad, x1: 0.5 - c, y1: 0.5 - s, x2: 0.5 + c, y2: 0.5 + s };
+    const next = { ...anyGrad, x1: 0.5 - c, y1: 0.5 - s, x2: 0.5 + c, y2: 0.5 + s };
     if (preview) editor.previewGradient(next);
     else editor.setGradient(next);
   }
 
   // Radial gradient centre / radius (objectBoundingBox fractions).
   function setRadial(key: "cx" | "cy" | "r", v: number) {
-    if (!grad || !Number.isFinite(v)) return;
-    editor.setGradient({ ...grad, [key]: v });
+    if (!anyGrad || !Number.isFinite(v)) return;
+    editor.setGradient({ ...anyGrad, [key]: v });
   }
 </script>
 
@@ -240,7 +264,7 @@
       oninput={(v) => previewPaint(v)}
       onchange={(v) => setPaint(v)}
     />
-  {:else if grad}
+  {:else if anyGrad}
     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
     <div
       class="bar editable"
@@ -249,7 +273,7 @@
       title="click to add a stop"
       onclick={addStopFromClick}
     >
-      {#each grad.stops as s, i (i)}
+      {#each anyGrad.stops as s, i (i)}
         <button
           class="marker"
           class:sel={selStop === i}
@@ -265,19 +289,19 @@
     <div class="stoprow">
       <ColorInput
         label=""
-        value={grad.stops[selStop]?.color ?? "#000000"}
+        value={anyGrad.stops[selStop]?.color ?? "#000000"}
         editable
         oninput={(v) => updateStop(selStop, { color: v }, true)}
         onchange={(v) => updateStop(selStop, { color: v })}
       />
       <button
         class="rm"
-        disabled={grad.stops.length <= 2}
+        disabled={anyGrad.stops.length <= 2}
         aria-label="remove stop"
         onclick={() => removeStop(selStop)}>×</button
       >
     </div>
-    {#if grad.kind === "linear"}
+    {#if anyGrad.kind === "linear"}
       <label class="slider">
         <span class="slbl">angle</span>
         <input
@@ -291,7 +315,7 @@
         <span class="sval">{angle}°</span>
       </label>
     {/if}
-    {#if grad.kind === "radial"}
+    {#if anyGrad.kind === "radial"}
       <div class="radial">
         <label
           >cx <input
@@ -299,7 +323,7 @@
             min="0"
             max="1"
             step="0.05"
-            value={grad.cx}
+            value={anyGrad.cx}
             onchange={(e) => setRadial("cx", Number(e.currentTarget.value))}
           /></label
         >
@@ -309,7 +333,7 @@
             min="0"
             max="1"
             step="0.05"
-            value={grad.cy}
+            value={anyGrad.cy}
             onchange={(e) => setRadial("cy", Number(e.currentTarget.value))}
           /></label
         >
@@ -319,21 +343,21 @@
             min="0"
             max="2"
             step="0.05"
-            value={grad.r}
+            value={anyGrad.r}
             onchange={(e) => setRadial("r", Number(e.currentTarget.value))}
           /></label
         >
       </div>
     {/if}
-  {:else if importedGrad}
-    <!-- gradient defined in the imported source <defs>: show its actual stops (read-only);
-         pick linear/radial above to adopt it into an editable gradient -->
+  {:else if readonlyGrad}
+    <!-- gradient defined in the imported source <defs> that nib can't model yet (userSpaceOnUse /
+         gradientTransform / …): show its actual stops read-only; pick a mode to build a fresh one -->
     <div
       class="bar readonly"
       style:background={previewBg}
       title="imported gradient #{gradId}"
     ></div>
-    <p class="imported-note">imported gradient · pick a mode above to make it editable</p>
+    <p class="imported-note">imported gradient (read-only) · pick a mode to replace it</p>
   {/if}
 </div>
 

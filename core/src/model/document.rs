@@ -627,6 +627,12 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
 pub fn serialize_via_tree(doc: &SvgDocument, base: &Tree, precision: usize) -> String {
     let mut tree = base.clone();
     tree.reconcile_paths(&doc.paths, precision);
+    // A source gradient the model has adopted (same id in `doc.gradients`) is dropped from the tree
+    // so it isn't defined twice — it re-emits from the model via `inject_defs`. No-op (byte-for-byte)
+    // until something is adopted.
+    let model_ids: std::collections::HashSet<String> =
+        doc.gradients.iter().map(|g| g.id.clone()).collect();
+    tree.remove_gradient_defs(&model_ids);
     // Drawn paths + live-boolean groups now live in the tree, so `serialize_tree_prec` emits the
     // whole document (imported verbatim, edited/drawn regenerated, booleans baked) — no separate
     // drawn-path append step. Gradient defs are still injected (a `<defs>` head-injection).
@@ -833,6 +839,43 @@ mod tests {
         let phalf = out.find("offset=\"0.5\"").unwrap();
         let p1 = out.find("offset=\"1\"").unwrap();
         assert!(p0 < phalf && phalf < p1, "stops emit in offset order: {out}");
+    }
+
+    #[test]
+    fn adopted_source_gradient_emits_once_from_the_model() {
+        use crate::model::types::{Gradient, GradientStop};
+        let src = include_str!("../../tests/fixtures/defs.svg");
+        let mut doc = parse_svg(src).unwrap();
+        // Adopting the source gradient = adding it to the model with the same id (here recoloured).
+        doc.gradients.push(Gradient {
+            id: "grad".into(),
+            kind: "linear".into(),
+            stops: vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: "#00ff00".into(),
+                    opacity: None,
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: "#0000ff".into(),
+                    opacity: None,
+                },
+            ],
+            x1: 0.0,
+            y1: 0.0,
+            x2: 1.0,
+            y2: 0.0,
+            cx: 0.5,
+            cy: 0.5,
+            r: 0.5,
+        });
+        let tree = doc.tree.clone().unwrap();
+        let out = serialize_via_tree(&doc, &tree, 3);
+        assert_eq!(out.matches("id=\"grad\"").count(), 1, "gradient defined once: {out}");
+        assert!(out.contains("#00ff00"), "model version emitted: {out}");
+        assert!(!out.contains("#ff0000"), "source gradient dropped (deduped): {out}");
+        assert!(out.contains("url(#grad)"), "reference intact: {out}");
     }
 
     #[test]

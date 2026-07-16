@@ -84,6 +84,23 @@ export type BooleanResult = {
 
 export type GradientStop = { offset: number; color: string; opacity?: number };
 
+/** A gradient parsed from the imported source `<defs>` (via the render tree). `editable` = it fits
+ *  nib's model (objectBoundingBox units, no gradientTransform/spreadMethod/focal point) → can be
+ *  adopted into `doc.gradients` + edited in place; otherwise it's shown read-only. Coords mirror
+ *  the `Gradient` model (objectBoundingBox fractions). */
+export type ImportedGradient = {
+  kind: "linear" | "radial";
+  stops: GradientStop[];
+  editable: boolean;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  cx: number;
+  cy: number;
+  r: number;
+};
+
 /** A gradient paint, referenced by fill/stroke as `url(#id)` and injected into `<defs>` on
  *  export. Coords are objectBoundingBox fractions (0..1). Matches the Rust `Gradient`. */
 export type Gradient = {

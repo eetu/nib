@@ -4,6 +4,8 @@ import { tightBounds } from "$lib/model/geometry";
 import type {
   BooleanResult,
   Gradient,
+  GradientStop,
+  ImportedGradient,
   NodeRef,
   NodeType,
   PathElement,
@@ -327,39 +329,56 @@ class DocumentStore {
   importedGradients = $derived.by(() => {
     void this.treeVersion; // deps: re-parse when the tree changes
     void this.doc?.source;
-    type Info = {
-      kind: "linear" | "radial";
-      stops: { offset: number; color: string; opacity?: number }[];
-    };
-    const num = (s: string | undefined): number => {
-      if (!s) return 0;
+    const num = (s: string | undefined, dflt: number): number => {
+      if (s == null || s === "") return dflt;
       const t = s.trim();
       return t.endsWith("%") ? Number(t.slice(0, -1)) / 100 : Number(t);
     };
     // Read a presentation value from the `stop-*` attr or an inline `style` fallback.
     const prop = (attrs: Record<string, string>, key: string): string | undefined =>
       attrs[key] ?? attrs.style?.match(new RegExp(`${key}:\\s*([^;]+)`))?.[1]?.trim();
-    const stopOf = (attrs: Record<string, string>) => {
+    const stopOf = (attrs: Record<string, string>): GradientStop => {
       const op = prop(attrs, "stop-opacity");
       return {
-        offset: num(attrs.offset),
+        offset: num(attrs.offset, 0),
         color: prop(attrs, "stop-color") ?? "#000000",
         // Carry opacity when explicit (a color→transparent fade) so the preview + adopt keep it.
         ...(op != null && op !== "" ? { opacity: Number(op) } : {}),
       };
     };
-    const entries: [string, Info][] = [];
+    const entries: [string, ImportedGradient][] = [];
     const walk = (nodes: RenderNode[]): void => {
       for (const n of nodes) {
         if (n.kind !== "element") continue;
         if ((n.tag === "linearGradient" || n.tag === "radialGradient") && n.attrs.id) {
+          const a = n.attrs;
           const stops = n.children
             .filter((c) => c.kind === "element" && c.tag === "stop")
             .map((c) => stopOf((c as { attrs: Record<string, string> }).attrs));
+          // Adoptable only if it fits nib's model: objectBoundingBox units, no gradientTransform /
+          // non-pad spread / focal point. Others still show read-only (their coords need defs work).
+          const editable =
+            (!a.gradientUnits || a.gradientUnits === "objectBoundingBox") &&
+            !a.gradientTransform &&
+            (!a.spreadMethod || a.spreadMethod === "pad") &&
+            !a.fx &&
+            !a.fy &&
+            !a.fr;
           if (stops.length)
             entries.push([
-              n.attrs.id,
-              { kind: n.tag === "radialGradient" ? "radial" : "linear", stops },
+              a.id,
+              {
+                kind: n.tag === "radialGradient" ? "radial" : "linear",
+                stops,
+                editable,
+                x1: num(a.x1, 0),
+                y1: num(a.y1, 0),
+                x2: num(a.x2, 1),
+                y2: num(a.y2, 0),
+                cx: num(a.cx, 0.5),
+                cy: num(a.cy, 0.5),
+                r: num(a.r, 0.5),
+              },
             ]);
         }
         walk(n.children);

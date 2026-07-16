@@ -915,6 +915,29 @@ impl Tree {
         }
     }
 
+    /// Remove `<linearGradient>`/`<radialGradient>` nodes whose `id` is in `ids` — the model has
+    /// adopted them into `doc.gradients` (editable), so they re-emit from there via `inject_defs`;
+    /// dropping the source node avoids a duplicate id. A no-op when `ids` is empty, so an unedited
+    /// document (nothing adopted) still round-trips byte-for-byte.
+    pub fn remove_gradient_defs(&mut self, ids: &std::collections::HashSet<String>) {
+        fn is_adopted(n: &Node, ids: &std::collections::HashSet<String>) -> bool {
+            matches!(n, Node::Element { tag, attrs, .. }
+                if (tag == "linearGradient" || tag == "radialGradient")
+                    && attrs.iter().any(|(k, v)| k == "id" && ids.contains(v)))
+        }
+        fn walk(node: &mut Node, ids: &std::collections::HashSet<String>) {
+            if let Node::Element { children, .. } = node {
+                children.retain(|c| !is_adopted(c, ids));
+                for c in children.iter_mut() {
+                    walk(c, ids);
+                }
+            }
+        }
+        if !ids.is_empty() {
+            walk(&mut self.root, ids);
+        }
+    }
+
     /// Set (`Some`) or clear (`None`) the live-boolean op on the group node `uid`. Returns whether
     /// it was found (any element node can carry the marker; the frontend only sets it on groups).
     pub fn set_boolean(&mut self, uid: &str, op: Option<String>) -> bool {
