@@ -1,6 +1,11 @@
 //! A generic snapshot-based undo/redo stack — ported from `stores/history.svelte.ts`. The
 //! `Editor` owns one and decides what a snapshot is + how to restore it.
 
+/// Cap on retained undo steps. Each snapshot clones the full document (paths + tree), so an
+/// uncapped stack grows memory without bound over a long session on a large doc; drop the oldest
+/// beyond this. Generous enough that hitting it during real editing is unlikely.
+const MAX_HISTORY: usize = 200;
+
 pub struct History<T> {
     past: Vec<T>,
     future: Vec<T>,
@@ -40,6 +45,9 @@ impl<T: Clone> History<T> {
     pub fn commit(&mut self, next: T) {
         if let Some(present) = self.present.take() {
             self.past.push(present);
+            if self.past.len() > MAX_HISTORY {
+                self.past.drain(0..self.past.len() - MAX_HISTORY);
+            }
         }
         self.present = Some(next);
         self.future.clear();

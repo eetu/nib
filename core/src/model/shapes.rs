@@ -8,6 +8,11 @@ use super::types::{NodeType, PathNode, Point, Subpath};
 /// The magic constant for approximating a quarter circle with a cubic bezier.
 const KAPPA: f64 = 0.5522847498307936;
 
+/// Upper bound on polygon sides / star points. The op surface is untrusted (UI + MCP), and an
+/// unbounded count would allocate a huge node Vec (OOM) — `star_nodes`' `2 * points` would also
+/// overflow `u32`. No real shape needs more than this; clamp instead of trusting the input.
+const MAX_SHAPE_POINTS: u32 = 1024;
+
 fn corner(x: f64, y: f64) -> PathNode {
     PathNode::corner(Point::new(x, y))
 }
@@ -33,7 +38,7 @@ pub fn line_nodes(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<PathNode> {
 /// `sides` corner nodes of a regular polygon on a circle of radius `r`, `rotation` radians
 /// from the +x axis (callers pass -PI/2 to put a vertex up).
 pub fn polygon_nodes(cx: f64, cy: f64, r: f64, sides: u32, rotation: f64) -> Vec<PathNode> {
-    let n = sides.max(3);
+    let n = sides.clamp(3, MAX_SHAPE_POINTS);
     (0..n)
         .map(|i| {
             let a = rotation + 2.0 * PI * (i as f64) / (n as f64);
@@ -51,7 +56,7 @@ pub fn star_nodes(
     points: u32,
     rotation: f64,
 ) -> Vec<PathNode> {
-    let n = points.max(2);
+    let n = points.clamp(2, MAX_SHAPE_POINTS);
     (0..2 * n)
         .map(|i| {
             let r = if i % 2 == 0 { outer } else { inner };

@@ -440,7 +440,45 @@ fn build(node: roxmltree::Node, source: &str, next_uid: &mut usize) -> Node {
 
 /// Parse an SVG source string into the full document tree. Errors on markup with no `<svg>`
 /// root or that fails to parse (mirrors `parse_svg`).
+/// Max element nesting depth accepted by the parser. nib's tree walks (build / emit /
+/// collect_paths / render / reconcile) are recursive, and roxmltree's own parse recurses too — a
+/// pathologically deep document (thousands of nested `<g>`) would overflow the stack and abort the
+/// WASM instance. No real SVG nests anywhere near this; reject deeper input gracefully.
+pub const MAX_NESTING_DEPTH: usize = 256;
+
+/// Cheap **streaming** (non-recursive) check for over-deep nesting, run *before* any recursive
+/// parse/walk touches the source. Uses the same tokenizer roxmltree does, so comments, CDATA, and
+/// quoted `>` inside attributes don't fool the depth count.
+pub fn nesting_too_deep(source: &str) -> bool {
+    use xmlparser::{ElementEnd, Token, Tokenizer};
+    let mut depth: usize = 0;
+    for tok in Tokenizer::from(source) {
+        match tok {
+            Ok(Token::ElementEnd {
+                end: ElementEnd::Open,
+                ..
+            }) => {
+                depth += 1;
+                if depth > MAX_NESTING_DEPTH {
+                    return true;
+                }
+            }
+            Ok(Token::ElementEnd {
+                end: ElementEnd::Close(..),
+                ..
+            }) => depth = depth.saturating_sub(1),
+            // ElementEnd::Empty (self-closing `/>`) is net-zero depth.
+            Err(_) => break, // malformed — let roxmltree produce the real parse error
+            _ => {}
+        }
+    }
+    false
+}
+
 pub fn parse_tree(source: &str) -> Result<Tree, String> {
+    if nesting_too_deep(source) {
+        return Err("SVG nesting is too deep".to_string());
+    }
     // Allow a DTD/`<!DOCTYPE svg …>` — Inkscape/Illustrator exports commonly carry one, and
     // roxmltree rejects it by default (the doctype stays in the verbatim prolog on re-emit).
     let opts = roxmltree::ParsingOptions {

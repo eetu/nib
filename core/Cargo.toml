@@ -16,6 +16,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde-wasm-bindgen = "0.6.5"
 kurbo = "0.13.1"
 roxmltree = "0.21.1"
+xmlparser = "0.13.6"
 indexmap = { version = "2.14.0", features = ["serde"] }
 i_overlay = "7.0.2"
 

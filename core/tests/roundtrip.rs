@@ -101,6 +101,22 @@ fn malformed_input_errors_without_panicking() {
     assert_eq!(serialize_svg(&parse_svg(empty).unwrap()), empty);
 }
 
+/// Nesting past the depth cap is rejected with `Err`, not a stack overflow. The streaming
+/// pre-scan runs before roxmltree's (recursive) parse and nib's recursive tree walks, so even
+/// 5000-deep — which overflowed the stack before — is caught cheaply.
+#[test]
+fn deeply_nested_svg_errors_without_overflowing() {
+    let mut s = String::from(r#"<svg xmlns="http://www.w3.org/2000/svg">"#);
+    for _ in 0..5000 {
+        s.push_str("<g>");
+    }
+    for _ in 0..5000 {
+        s.push_str("</g>");
+    }
+    s.push_str("</svg>");
+    assert!(parse_svg(&s).is_err(), "over-deep nesting must Err, not panic/overflow");
+}
+
 /// Editing one path leaves entity-laden siblings byte-for-byte — the surgical splice touches only
 /// the edited tag; `&amp;`/`&#169;`/CDATA elsewhere are preserved verbatim.
 #[test]

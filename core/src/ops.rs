@@ -374,9 +374,69 @@ fn reproject_paths(doc: &mut SvgDocument) {
     doc.paths = fresh;
 }
 
+/// Every coordinate an op carries is finite (no NaN/±Infinity). The op surface is untrusted —
+/// the human UI, but also the MCP/sync clients — and a non-finite coord would serialize into `d`
+/// as `"NaN"`/`"inf"` (invalid SVG written back to the user's file) and can destabilize the
+/// geometry kernels. Reject the whole op rather than corrupt the document.
+fn point_finite(p: &Point) -> bool {
+    p.x.is_finite() && p.y.is_finite()
+}
+fn node_finite(n: &PathNode) -> bool {
+    point_finite(&n.point)
+        && n.handle_in.as_ref().is_none_or(point_finite)
+        && n.handle_out.as_ref().is_none_or(point_finite)
+}
+fn subpaths_finite(sps: &[Subpath]) -> bool {
+    sps.iter().all(|sp| sp.nodes.iter().all(node_finite))
+}
+fn spec_finite(spec: &ShapeSpec) -> bool {
+    match *spec {
+        ShapeSpec::Ellipse { cx, cy, rx, ry } => [cx, cy, rx, ry].iter().all(|v| v.is_finite()),
+        ShapeSpec::Rect { x0, y0, x1, y1 } | ShapeSpec::Line { x0, y0, x1, y1 } => {
+            [x0, y0, x1, y1].iter().all(|v| v.is_finite())
+        }
+        ShapeSpec::Polygon {
+            cx, cy, r, rotation, ..
+        } => [cx, cy, r, rotation].iter().all(|v| v.is_finite()),
+        ShapeSpec::Star {
+            cx,
+            cy,
+            outer,
+            inner,
+            rotation,
+            ..
+        } => [cx, cy, outer, inner, rotation].iter().all(|v| v.is_finite()),
+    }
+}
+/// Whether every coordinate/scalar an op carries is finite. Ops with no geometry are always OK.
+fn op_is_finite(op: &Op) -> bool {
+    match op {
+        Op::MoveNode { to, .. }
+        | Op::MoveHandle { to, .. }
+        | Op::SetPenHandles { out: to, .. } => point_finite(to),
+        Op::SetSubpaths { subpaths, .. } | Op::AddPath { subpaths, .. } => {
+            subpaths_finite(subpaths)
+        }
+        Op::MovePathBy { dx, dy, .. } => dx.is_finite() && dy.is_finite(),
+        Op::InsertNode { t, .. } => t.is_finite(),
+        Op::AppendNode { point, .. } => point_finite(point),
+        Op::SetShape { spec, .. } | Op::AddShape { spec, .. } => spec_finite(spec),
+        Op::OutlineStroke { width, .. } => width.is_finite(),
+        Op::OffsetPath { distance, .. } => distance.is_finite(),
+        Op::SimplifyPath { tolerance, .. } => tolerance.is_finite(),
+        _ => true,
+    }
+}
+
 /// Apply an op to the document in place. Returns `true` if it found its target and mutated,
-/// `false` if it was a no-op (missing target / invalid) — leaving the document untouched.
+/// `false` if it was a no-op (missing target / invalid / non-finite input) — leaving the
+/// document untouched.
 pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
+    // The op surface is untrusted (UI + MCP/sync); reject non-finite geometry up front so it can
+    // never reach the model, the serializer (invalid `d`), or the geometry kernels.
+    if !op_is_finite(op) {
+        return false;
+    }
     match op {
         Op::MoveNode { node, to } => {
             let Some(n) = node_mut(doc, *node) else {
@@ -493,7 +553,11 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             let Some(sp) = subpath_mut(doc, *path, *subpath) else {
                 return false;
             };
-            insert_node_at(sp, *segment, *t);
+            // Bounds-check the segment (empty subpath → `% 0` panic; out-of-range → OOB index).
+            if sp.nodes.is_empty() || *segment >= sp.nodes.len() {
+                return false;
+            }
+            insert_node_at(sp, *segment, t.clamp(0.0, 1.0));
             mark_edited(doc, *path);
             true
         }
@@ -1779,5 +1843,80 @@ mod tests {
             }
         ));
         assert_eq!(doc, before);
+    }
+
+    #[test]
+    fn insert_node_rejects_out_of_range_segment() {
+        let mut doc = doc_from("M 0 0 L 10 0 L 10 10", true); // 3 nodes, 2 real segments
+        let before = doc.clone();
+        // A segment index past the end must be a no-op, not an out-of-bounds panic.
+        assert!(!apply(
+            &mut doc,
+            &Op::InsertNode {
+                path: 0,
+                subpath: 0,
+                segment: 99,
+                t: 0.5,
+            }
+        ));
+        assert_eq!(doc, before);
+    }
+
+    #[test]
+    fn insert_node_rejects_an_empty_subpath() {
+        let mut doc = doc_from("M 0 0 L 10 0", true);
+        doc.paths[0].subpaths[0].nodes.clear(); // would `% 0` panic in insert_node_at
+        assert!(!apply(
+            &mut doc,
+            &Op::InsertNode {
+                path: 0,
+                subpath: 0,
+                segment: 0,
+                t: 0.5,
+            }
+        ));
+    }
+
+    #[test]
+    fn non_finite_coordinates_are_rejected_untouched() {
+        let mut doc = doc_from("M 0 0 L 10 0", true);
+        let before = doc.clone();
+        assert!(!apply(
+            &mut doc,
+            &Op::MoveNode {
+                node: nref(0, 0, 0),
+                to: Point::new(f64::INFINITY, 0.0),
+            }
+        ));
+        assert!(!apply(
+            &mut doc,
+            &Op::MoveNode {
+                node: nref(0, 0, 0),
+                to: Point::new(0.0, f64::NAN),
+            }
+        ));
+        assert!(!apply(&mut doc, &Op::MovePathBy { path: 0, dx: f64::NAN, dy: 0.0 }));
+        assert_eq!(doc, before, "non-finite ops leave the document untouched");
+    }
+
+    #[test]
+    fn absurd_shape_count_is_clamped_not_ooming() {
+        let mut doc = doc_from("M 0 0 L 10 0", false);
+        assert!(apply(
+            &mut doc,
+            &Op::AddShape {
+                id: "poly".into(),
+                spec: ShapeSpec::Polygon {
+                    cx: 0.0,
+                    cy: 0.0,
+                    r: 10.0,
+                    sides: 1_000_000_000,
+                    rotation: 0.0,
+                },
+                attributes: IndexMap::new(),
+            }
+        ));
+        // Clamped to the cap — not a multi-gigabyte node Vec.
+        assert!(doc.paths[1].subpaths[0].nodes.len() <= 1024);
     }
 }

@@ -160,6 +160,11 @@ fn extract_path_tags(source: &str) -> Vec<String> {
 /// Parse an SVG source string into the editable document model. Errors on markup with no
 /// `<svg>` root or that fails to parse.
 pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
+    // Reject pathologically deep nesting up front (streaming, non-recursive) — before roxmltree's
+    // own recursive parse and nib's recursive tree walks can overflow the stack + abort the WASM.
+    if super::tree::nesting_too_deep(source) {
+        return Err("SVG nesting is too deep".to_string());
+    }
     // Allow a DTD/`<!DOCTYPE>` (Inkscape/Illustrator exports carry one); roxmltree rejects it by
     // default. It's preserved in the verbatim prolog by the tree serializer.
     let opts = roxmltree::ParsingOptions {
