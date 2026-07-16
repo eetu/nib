@@ -65,14 +65,19 @@ class Workspace {
     }
   }
 
+  /** Clear the current error banner (dismiss). */
+  dismissError(): void {
+    this.error = null;
+  }
+
   /** Pick a folder and list its SVGs (Chromium only). */
   async openFolder(): Promise<void> {
     if (!this.foldersSupported) return;
     this.error = null;
-    const dir = await pickDirectory();
-    if (!dir) return;
-    this.busy = true;
     try {
+      const dir = await pickDirectory();
+      if (!dir) return;
+      this.busy = true;
       this.files = await listSvgFiles(dir);
       this.dirName = dir.name;
       void saveHandle(ACTIVE_DIR, dir);
@@ -92,9 +97,16 @@ class Workspace {
   /** Fallback: open a single file directly (no folder). */
   async openSingleFile(): Promise<void> {
     if (!this.filePickerSupported) return;
-    const file = await pickSvgFile();
-    if (!file) return;
-    await this.#loadFrom(file.handle, file.name, true);
+    this.error = null;
+    try {
+      const file = await pickSvgFile();
+      if (!file) return;
+      await this.#loadFrom(file.handle, file.name, true);
+    } catch (e) {
+      // A non-abort picker error (e.g. SecurityError) would otherwise escape as an unhandled
+      // rejection via the un-awaited onclick — surface it instead.
+      this.error = errMessage(e);
+    }
   }
 
   /** Load a plain File (input picker or drag-drop) — works in every browser.

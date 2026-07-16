@@ -139,6 +139,10 @@
       if (e.code === "Space" && !typing()) {
         interaction.spaceHeld = true;
         e.preventDefault();
+      } else if (e.key === "Escape" && elXf) {
+        // Cancel an in-flight element transform — it runs outside the gesture machine, so +page's
+        // machine-cancel never reaches it. (+page's Escape still deselects: a coherent cancel.)
+        cancelElXf();
       }
     }
     function up(e: KeyboardEvent) {
@@ -154,6 +158,14 @@
 
   function cancelDrag(): void {
     canvas.send({ type: "CANCEL" });
+  }
+
+  /** Abandon an in-flight element transform, reverting its live preview. Used when a second
+   *  pointer / Escape / pointer-cancel interrupts it — so it doesn't commit a stray jump. */
+  function cancelElXf(): void {
+    if (!elXf) return;
+    if (elXf.moved) editor.revert();
+    elXf = null;
   }
 
   // Multi-touch pinch: track active pointers (screen coords, keyed by id); with
@@ -389,6 +401,7 @@
     if (pointers.length >= 2) {
       svgEl.setPointerCapture(e.pointerId);
       cancelDrag();
+      cancelElXf(); // and revert an in-flight element transform, else it commits a jump on release
       if (pointers.length === 2) pinch = pinchState();
       return;
     }
@@ -462,6 +475,7 @@
 
   function onPointerUp(e: PointerEvent) {
     pointers = pointers.filter((q) => q.id !== e.pointerId);
+    if (pointers.length === 0) pinch = null; // no fingers left → never leave a stale pinch
     if (svgEl.hasPointerCapture(e.pointerId)) svgEl.releasePointerCapture(e.pointerId);
     if (pinch) {
       if (pointers.length < 2) pinch = null; // pinch owned this gesture
@@ -473,6 +487,17 @@
       return;
     }
     canvas.send({ type: "UP", docPoint: viewport.toDoc(screenOf(e)) });
+  }
+
+  // A cancelled pointer (OS gesture takeover, lost capture) must not commit — revert an in-flight
+  // element transform / machine gesture and drop the pointer so a stale id can't wedge a phantom
+  // pinch. (pointerup commits; pointercancel abandons — hence a separate handler.)
+  function onPointerCancel(e: PointerEvent) {
+    pointers = pointers.filter((q) => q.id !== e.pointerId);
+    if (pointers.length < 2) pinch = null;
+    if (svgEl.hasPointerCapture(e.pointerId)) svgEl.releasePointerCapture(e.pointerId);
+    if (elXf) cancelElXf();
+    else if (!canvas.idle) cancelDrag();
   }
 
   // Double-click a shape (select tool) to enter node-editing mode — Figma-style. Object
@@ -544,7 +569,7 @@
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
-    onpointercancel={onPointerUp}
+    onpointercancel={onPointerCancel}
     ondblclick={onDblClick}
     onwheel={onWheel}
     {...gestureHandlers}

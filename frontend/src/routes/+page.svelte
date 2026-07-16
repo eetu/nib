@@ -181,6 +181,17 @@
     onSettings={() => (settingsOpen = true)}
   />
 
+  <!-- A workspace error (failed save/open, permission denied, bad markup) — shown regardless of
+       whether a document is loaded, so save-back failures aren't silent. Clears on the next op. -->
+  {#if workspace.error}
+    <div class="errbar" role="alert">
+      <span>{workspace.error}</span>
+      <button class="errclose" aria-label="dismiss error" onclick={() => workspace.dismissError()}
+        >×</button
+      >
+    </div>
+  {/if}
+
   <div class="body">
     {#if workspace.files.length}
       <FileList />
@@ -213,7 +224,6 @@
                 >load sample</button
               >
             </div>
-            {#if workspace.error}<p class="err">{workspace.error}</p>{/if}
           </div>
         </div>
       {/if}
@@ -335,8 +345,25 @@
     color: var(--halo-accent);
   }
 
-  .err {
-    margin: 12px 0 0;
+  .errbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 12px;
+    background: var(--halo-error-soft, rgb(220 50 50 / 0.12));
     color: var(--halo-error);
+    border-bottom: 1px solid var(--halo-error);
+    font-size: 13px;
+  }
+
+  .errclose {
+    flex: none;
+    border: none;
+    background: none;
+    color: inherit;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
   }
 </style>

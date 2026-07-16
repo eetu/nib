@@ -1078,15 +1078,6 @@ class DocumentStore {
     this.commit();
   }
 
-  /** Move a path within the ordered list (drag-drop in PATHS) — later = drawn on top. Selects
-   *  the moved path at its new index. */
-  reorderPath(from: number, to: number): void {
-    if (from === to || !this.#apply({ type: "reorderPath", from, to })) return;
-    this.commit();
-    const last = (this.doc?.paths.length ?? 1) - 1;
-    this.selectPath(Math.max(0, Math.min(to, last)));
-  }
-
   // --- drawing (pen / circle) --------------------------------------------
 
   beginPath(point: Point): NodeRef {
