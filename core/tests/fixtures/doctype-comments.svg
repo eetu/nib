@@ -1,0 +1,6 @@
+<!-- a leading comment before the root -->
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+  <path d="M 0 0 L 10 10"/>
+</svg>
+<!-- a trailing comment after the root -->

@@ -160,8 +160,14 @@ fn extract_path_tags(source: &str) -> Vec<String> {
 /// Parse an SVG source string into the editable document model. Errors on markup with no
 /// `<svg>` root or that fails to parse.
 pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
-    let doc =
-        roxmltree::Document::parse(source).map_err(|e| format!("could not parse SVG: {e}"))?;
+    // Allow a DTD/`<!DOCTYPE>` (Inkscape/Illustrator exports carry one); roxmltree rejects it by
+    // default. It's preserved in the verbatim prolog by the tree serializer.
+    let opts = roxmltree::ParsingOptions {
+        allow_dtd: true,
+        ..Default::default()
+    };
+    let doc = roxmltree::Document::parse_with_options(source, opts)
+        .map_err(|e| format!("could not parse SVG: {e}"))?;
     let root = doc.root_element();
     if root.tag_name().name() != "svg" {
         return Err("no <svg> root element found".to_string());

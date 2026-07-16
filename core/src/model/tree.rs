@@ -441,8 +441,14 @@ fn build(node: roxmltree::Node, source: &str, next_uid: &mut usize) -> Node {
 /// Parse an SVG source string into the full document tree. Errors on markup with no `<svg>`
 /// root or that fails to parse (mirrors `parse_svg`).
 pub fn parse_tree(source: &str) -> Result<Tree, String> {
-    let doc =
-        roxmltree::Document::parse(source).map_err(|e| format!("could not parse SVG: {e}"))?;
+    // Allow a DTD/`<!DOCTYPE svg …>` — Inkscape/Illustrator exports commonly carry one, and
+    // roxmltree rejects it by default (the doctype stays in the verbatim prolog on re-emit).
+    let opts = roxmltree::ParsingOptions {
+        allow_dtd: true,
+        ..Default::default()
+    };
+    let doc = roxmltree::Document::parse_with_options(source, opts)
+        .map_err(|e| format!("could not parse SVG: {e}"))?;
     let root_el = doc.root_element();
     if root_el.tag_name().name() != "svg" {
         return Err("no <svg> root element found".to_string());
@@ -1349,6 +1355,9 @@ mod tests {
         include_str!("../../tests/fixtures/cdata.svg"),
         include_str!("../../tests/fixtures/use-symbol.svg"),
         include_str!("../../tests/fixtures/text-tspan.svg"),
+        include_str!("../../tests/fixtures/doctype-comments.svg"),
+        include_str!("../../tests/fixtures/nested-deep.svg"),
+        include_str!("../../tests/fixtures/compact-path.svg"),
     ];
 
     #[test]

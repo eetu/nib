@@ -25,6 +25,12 @@ const CORPUS: &[(&str, &str)] = &[
     ("cdata", include_str!("fixtures/cdata.svg")),
     ("use-symbol", include_str!("fixtures/use-symbol.svg")),
     ("text-tspan", include_str!("fixtures/text-tspan.svg")),
+    (
+        "doctype-comments",
+        include_str!("fixtures/doctype-comments.svg"),
+    ),
+    ("nested-deep", include_str!("fixtures/nested-deep.svg")),
+    ("compact-path", include_str!("fixtures/compact-path.svg")),
 ];
 
 /// `<defs>` content (clipPath/mask/gradient/filter contents) is not directly-editable canvas
