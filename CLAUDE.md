@@ -207,7 +207,9 @@ Per-area detail in `frontend/CLAUDE.md`.
 ## Roadmap (post-Phase-0)
 
 There is an approved roadmap to grow nib to a pro-tier vector editor on the
-Rust/WASM core. **Phases A + B have landed.** Phase A (the core-first rewrite):
+Rust/WASM core. **Phases A, B, and E have landed — the editor is feature-complete; the remaining
+editor work is finalization (real-SVG corpus coverage, robustness, large-doc perf, UX polish → 1.0).
+Phase C (backend/MCP/sync) is the parallel/after track.** Phase A (the core-first rewrite):
 model, ops, geometry, parse/serialize, snap, undo in `nib-core`. Phase B (the
 client-side pro pillars, all running on the core):
 
@@ -272,7 +274,11 @@ client-side pro pillars, all running on the core):
   **editable in place** — the first edit adopts them into `doc.gradients` keeping their id, and
   `serialize_via_tree` drops the source def (`Tree::remove_gradient_defs`) so it defines once
   (byte-for-byte until adoption); ones that don't fit (userSpaceOnUse/gradientTransform/…) stay
-  read-only. **Remaining:** "export normalized copy" · then finalize.
+  read-only. **"Export normalized copy" LANDED** — `serialize_normalized`/`toSvgNormalized` (+ the
+  palette's "Export normalized copy" / "Copy normalized SVG") emit a clean, fully-regenerated,
+  paths-only copy (every shape forced to `<path>`, all tags canonical) alongside the byte-preserving
+  save. **E5 — and the editor track (A→B→E) — is complete; what remains is finalization**
+  (coverage/fidelity on a real-SVG corpus, robustness + large-doc perf, UX polish, ship 1.0).
   Full plan: `~/.claude/plans/nib-full-svg-dom.md`.
   Paired UX **(landed early, ahead of E):** a persisted **basic/advanced** UI preference
   (`settings.uiLevel`, default **advanced**) — *basic* is the opt-in that declutters to
