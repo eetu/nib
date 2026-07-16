@@ -256,8 +256,15 @@ client-side pro pillars, all running on the core):
     id, shared registry). Every edit funnels through `apply_ops` → mutate → **broadcast** → persist.
   - **MCP** (`mcp.rs`, `rmcp` 0.5) nested at **`/mcp`** (Streamable-HTTP): token-authed +
     project-scoped. Tools: `list_projects`/`create_project`/`open_project`, `get_document`
-    (structured, paths by integer `index`), `get_svg`, **`apply_op`** (full op vocabulary), +
-    ergonomic wrappers `add_shape`/`set_style`/`boolean_op`.
+    (a **cheap text outline** — one line per path: `#index`, name, bounds, fill/stroke), `get_svg`,
+    **`render_document`** (rasterize to a PNG via `resvg` + return it as an **image** so the LLM can
+    *see*/verify its work; opt-in `width` cost knob), **`apply_op`** (full op vocabulary), + ergonomic
+    wrappers `add_shape` (optional `name`)/`set_style`/`boolean_op`/**`group`** (indices→`GroupNodes`
+    by tree uid)/**`rename`**. The surface is **shaped to coach the model** (mirrors the sibling
+    `../maquette`): a workflow playbook in the server `instructions`, per-tool descriptions that say
+    when *not* to spend an expensive call, and mutations that return a **one-line ack** (never the
+    whole doc) — so the LLM names + groups shapes into a labeled hierarchy and spends few tokens per
+    step. Structural ops (group/boolean/reorder) renumber `#index`, so the acks say "call get_document".
   - **C2 live sync** (`sync.rs`): `GET /ws/projects/{id}?token=…` — the browser + the LLM edit the
     **same project live**; MCP `apply_op` broadcasts to the WS, and WS ops broadcast back
     (echo-guarded by `clientId`).
