@@ -1081,6 +1081,88 @@ impl Tree {
         }
     }
 
+    /// Create a **component**: lift the sibling `members` out of their shared parent into a new
+    /// `<g id=name>` (uid `comp_uid`) placed inside the document's `<defs>` (created with `defs_uid`
+    /// if none exists), and drop a `<use href="#name">` (uid `use_uid`) where they were. Returns
+    /// false if `members` aren't co-siblings, `name` is blank, or `name` collides with an existing id.
+    pub fn make_component(
+        &mut self,
+        members: &[String],
+        comp_uid: &str,
+        use_uid: &str,
+        defs_uid: &str,
+        name: &str,
+    ) -> bool {
+        if name.trim().is_empty() {
+            return false;
+        }
+        let mut ids = std::collections::HashSet::new();
+        all_ids(&self.root, &mut ids);
+        if ids.contains(name) {
+            return false; // the `<use href="#name">` target must be unique
+        }
+        let use_node = make_element_node(
+            use_uid,
+            "use",
+            vec![("href".to_string(), format!("#{name}"))],
+            Vec::new(),
+        );
+        let grabbed = match lift_into(&mut self.root, members, use_node) {
+            Ok(g) => g,
+            Err(_) => return false, // members weren't all co-siblings → nothing moved
+        };
+        let g = make_element_node(
+            comp_uid,
+            "g",
+            vec![("id".to_string(), name.to_string())],
+            grabbed,
+        );
+        append_into_defs(&mut self.root, defs_uid, g);
+        true
+    }
+
+    /// Append a `<use>` instance (uid `uid`) with `attributes` (typically `href` + `x`/`y`) as the
+    /// last child of the root `<svg>` — a new instance of a component, at the top of z-order.
+    pub fn append_instance(&mut self, uid: &str, attributes: &IndexMap<String, String>) {
+        let attrs: Vec<(String, String)> = attributes
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        self.append_drawn(make_element_node(uid, "use", attrs, Vec::new()));
+    }
+
+    /// Rename the component `<g uid>`: set its `id` to `name` AND rewrite every `<use>` whose `href`
+    /// pointed at the old id — `<use>` is id-coupled, so a plain attr edit would dangle instances.
+    /// Returns false if the uid isn't a component, `name` is blank, or collides with another id.
+    pub fn rename_component(&mut self, uid: &str, name: &str) -> bool {
+        if name.trim().is_empty() {
+            return false;
+        }
+        let old = match self.root.find_by_uid_mut(uid) {
+            Some(Node::Element { attrs, .. }) => attr(attrs, "id").map(str::to_string),
+            _ => return false,
+        };
+        let Some(old) = old else { return false };
+        if old == name {
+            return true;
+        }
+        let mut ids = std::collections::HashSet::new();
+        all_ids(&self.root, &mut ids);
+        if ids.contains(name) {
+            return false;
+        }
+        if let Some(Node::Element { attrs, edited, .. }) = self.root.find_by_uid_mut(uid) {
+            for (k, v) in attrs.iter_mut() {
+                if k == "id" {
+                    *v = name.to_string();
+                }
+            }
+            *edited = true;
+        }
+        rewrite_hrefs(&mut self.root, &old, name);
+        true
+    }
+
     /// A fresh globally-unique uid for a drawn node/group created without a caller-supplied one
     /// (standalone/local use). Sync producers instead carry the uid in the op so all clients agree;
     /// this is the fallback when none is given. UUID-backed, so no scan for collisions is needed.
@@ -1108,6 +1190,49 @@ pub fn make_path_node(uid: &str, attributes: &IndexMap<String, String>, d: &str)
         hidden: false,
         added: true,
         boolean_op: None,
+    }
+}
+
+/// Build a drawn element node of ANY tag (`<use>`, `<g>`, `<defs>`, …) from attrs + children — the
+/// general constructor beside `make_path_node` (which is `<path>`-only). `edited + added` so it has
+/// no verbatim source and regenerates on emit; the open/close tags derive from whether it has
+/// children (a childless node like `<use/>` self-closes).
+pub fn make_element_node(
+    uid: &str,
+    tag: &str,
+    attrs: Vec<(String, String)>,
+    children: Vec<Node>,
+) -> Node {
+    let self_closing = children.is_empty();
+    Node::Element {
+        uid: uid.to_string(),
+        tag: tag.to_string(),
+        original_open: regen_open(tag, &attrs, self_closing),
+        original_close: if self_closing {
+            String::new()
+        } else {
+            format!("</{tag}>")
+        },
+        attrs,
+        children,
+        edited: true,
+        hidden: false,
+        added: true,
+        boolean_op: None,
+    }
+}
+
+/// Every `id` attribute anywhere in the tree — components must not collide with an existing id (the
+/// `<use href="#id">` reference target), and the reserved `nib-` prefix is off-limits (the canvas
+/// injects `nib-grid`/gradient ids into the same live `<svg>`).
+fn all_ids(node: &Node, out: &mut std::collections::HashSet<String>) {
+    if let Node::Element { attrs, children, .. } = node {
+        if let Some(id) = attr(attrs, "id") {
+            out.insert(id.to_string());
+        }
+        for c in children {
+            all_ids(c, out);
+        }
     }
 }
 
@@ -1202,6 +1327,105 @@ fn reorder_in(node: &mut Node, uid: &str, forward: bool) -> bool {
         }
     }
     false
+}
+
+/// Lift the sibling `members` out of their shared parent (like `group_in`), inserting `replacement`
+/// at the first member's slot, and return the grabbed member nodes (order preserved). `Err` carries
+/// `replacement` back if the members aren't all direct children of one node (so a sibling can retry).
+fn lift_into(node: &mut Node, members: &[String], replacement: Node) -> Result<Vec<Node>, Node> {
+    if let Node::Element { children, .. } = node {
+        let positions: Vec<usize> = children
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.uid().is_some_and(|u| members.iter().any(|x| x == u)))
+            .map(|(i, _)| i)
+            .collect();
+        if !members.is_empty() && positions.len() == members.len() {
+            let at = positions[0];
+            let mut grabbed: Vec<Node> = positions.iter().rev().map(|&i| children.remove(i)).collect();
+            grabbed.reverse();
+            children.insert(at.min(children.len()), replacement);
+            return Ok(grabbed);
+        }
+        let mut carry = replacement;
+        for c in children.iter_mut() {
+            match lift_into(c, members, carry) {
+                Ok(g) => return Ok(g),
+                Err(n) => carry = n,
+            }
+        }
+        return Err(carry);
+    }
+    Err(replacement)
+}
+
+/// Append `child` into the document's `<defs>` — the first `<defs>` child of the root, created (with
+/// `defs_uid`) as the root's first element child if none exists. A self-closing `<defs/>` is
+/// regenerated into an open/close pair so the child lands inside it.
+fn append_into_defs(root: &mut Node, defs_uid: &str, child: Node) {
+    let Node::Element { children, .. } = root else {
+        return;
+    };
+    match children
+        .iter()
+        .position(|c| matches!(c, Node::Element { tag, .. } if tag == "defs"))
+    {
+        Some(i) => {
+            if let Node::Element {
+                tag,
+                attrs,
+                children: dc,
+                original_open,
+                original_close,
+                edited,
+                ..
+            } = &mut children[i]
+            {
+                if original_close.is_empty() {
+                    *original_open = regen_open(tag, attrs, false);
+                    *original_close = format!("</{tag}>");
+                    *edited = true;
+                }
+                dc.push(Node::Text("\n    ".to_string()));
+                dc.push(child);
+            }
+        }
+        None => {
+            // No <defs> yet: create one holding the child, as the root's first element child.
+            let defs = make_element_node(defs_uid, "defs", Vec::new(), vec![child]);
+            let at = children
+                .iter()
+                .position(|c| matches!(c, Node::Element { .. }))
+                .unwrap_or(0);
+            children.insert(at, defs);
+            children.insert(at + 1, Node::Text("\n  ".to_string()));
+        }
+    }
+}
+
+/// Rewrite every `<use>` whose `href` referenced `old` (as `#old` or `old`) to `#new`, marking each
+/// edited — keeps instances pointing at a renamed component.
+fn rewrite_hrefs(node: &mut Node, old: &str, new: &str) {
+    if let Node::Element {
+        tag,
+        attrs,
+        children,
+        edited,
+        ..
+    } = node
+    {
+        if tag == "use" {
+            for (k, v) in attrs.iter_mut() {
+                if (k == "href" || k == "xlink:href") && (v == &format!("#{old}") || v == old) {
+                    *v = format!("#{new}");
+                    *edited = true;
+                }
+            }
+        }
+        for c in children {
+            rewrite_hrefs(c, old, new);
+        }
+    }
 }
 
 fn group_in(node: &mut Node, uids: &[String], new_uid: &str, name: &str) -> bool {

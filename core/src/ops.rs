@@ -224,6 +224,33 @@ pub enum Op {
     /// Replace a text-bearing element's content (its child text) — editing a `<text>` label.
     SetNodeText { uid: String, text: String },
 
+    /// Create a **component** from `members` (co-siblings): wrap them in a `<g id=name>` placed in
+    /// `<defs>` and drop a `<use href="#name">` where they were. `uid`/`use_uid`/`defs_uid` (the new
+    /// `<g>`, the `<use>`, and a `<defs>` if one must be created) are carried so every client agrees;
+    /// minted if absent. Reprojects the paths (members become editable *definition* paths).
+    CreateComponent {
+        members: Vec<String>,
+        #[serde(default)]
+        uid: Option<String>,
+        #[serde(rename = "useUid", default)]
+        use_uid: Option<String>,
+        #[serde(rename = "defsUid", default)]
+        defs_uid: Option<String>,
+        name: String,
+    },
+    /// Stamp a new `<use>` instance of a component (referenced by `href`, e.g. `#die`), with
+    /// placement `attributes` (typically `x`/`y`). `uid` carried (minted if absent).
+    StampInstance {
+        href: String,
+        #[serde(default)]
+        uid: Option<String>,
+        #[serde(default)]
+        attributes: IndexMap<String, String>,
+    },
+    /// Rename a component: set its `<g id>` to `name` AND rewrite every instance `<use href>` (which
+    /// is id-coupled). One atomic op = one undo step.
+    RenameComponent { uid: String, name: String },
+
     /// Set (`value: Some`) or clear (`value: None`) one presentation attribute. Added paths
     /// edit their own `attributes`; imported paths accumulate a `style_override`.
     SetStyle {
@@ -816,6 +843,48 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             .tree
             .as_mut()
             .map(|t| t.set_node_text(uid, text))
+            .unwrap_or(false),
+        Op::CreateComponent {
+            members,
+            uid,
+            use_uid,
+            defs_uid,
+            name,
+        } => {
+            let cu = uid.clone().unwrap_or_else(crate::model::tree::new_id);
+            let uu = use_uid.clone().unwrap_or_else(crate::model::tree::new_id);
+            let du = defs_uid.clone().unwrap_or_else(crate::model::tree::new_id);
+            let ok = doc
+                .tree
+                .as_mut()
+                .map(|t| t.make_component(members, &cu, &uu, &du, name))
+                .unwrap_or(false);
+            if ok {
+                reproject_paths(doc); // members became definition paths; a <use> appeared
+            }
+            ok
+        }
+        Op::StampInstance {
+            href,
+            uid,
+            attributes,
+        } => {
+            let u = uid.clone().unwrap_or_else(crate::model::tree::new_id);
+            let mut attrs = attributes.clone();
+            attrs.shift_remove("href"); // href is authoritative from the op field
+            attrs.insert("href".to_string(), href.clone());
+            doc.tree
+                .as_mut()
+                .map(|t| {
+                    t.append_instance(&u, &attrs);
+                    true
+                })
+                .unwrap_or(false)
+        }
+        Op::RenameComponent { uid, name } => doc
+            .tree
+            .as_mut()
+            .map(|t| t.rename_component(uid, name))
             .unwrap_or(false),
         Op::SetStyle { path, key, value } => {
             let Some(p) = doc.paths.get_mut(*path) else {
@@ -1835,6 +1904,82 @@ mod tests {
                 path: last,
                 ids: vec!["x".into()],
                 uids: vec![],
+            }
+        ));
+    }
+
+    #[test]
+    fn create_component_wraps_selection_in_a_defs_group_and_places_a_use() {
+        use crate::model::document::{parse_svg, serialize_via_tree};
+        let mut doc = parse_svg(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="0" y="0" width="9" height="9"/><rect x="20" y="0" width="9" height="9"/></svg>"##,
+        )
+        .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        let (u0, u1) = (doc.paths[0].uid.clone(), doc.paths[1].uid.clone());
+
+        assert!(apply(
+            &mut doc,
+            &Op::CreateComponent {
+                members: vec![u0, u1],
+                uid: Some("g-die".into()),
+                use_uid: Some("u-1".into()),
+                defs_uid: Some("d-1".into()),
+                name: "die".into(),
+            }
+        ));
+        // The two rects now live in <defs><g id="die"> (as editable definition paths); a <use>
+        // instance sits where they were.
+        let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(out.contains("<defs"), "defs created: {out}");
+        assert!(out.contains(r##"<g id="die""##), "component group: {out}");
+        assert!(out.contains(r##"<use href="#die""##), "instance placed: {out}");
+        assert_eq!(out.matches("<rect").count(), 2, "both rects inside the def: {out}");
+        assert_eq!(doc.paths.len(), 2, "the def's 2 shapes project as editable paths");
+
+        // Stamp a second instance → two <use href="#die">.
+        assert!(apply(
+            &mut doc,
+            &Op::StampInstance {
+                href: "#die".into(),
+                uid: Some("u-2".into()),
+                attributes: [("x".to_string(), "40".to_string())].into_iter().collect(),
+            }
+        ));
+        let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert_eq!(out.matches(r##"href="#die""##).count(), 2, "two instances: {out}");
+
+        // Rename → the <g id> AND every <use href> update (no dangling #die).
+        assert!(apply(
+            &mut doc,
+            &Op::RenameComponent {
+                uid: "g-die".into(),
+                name: "cube".into(),
+            }
+        ));
+        let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(out.contains(r##"<g id="cube""##), "renamed group: {out}");
+        assert_eq!(out.matches(r##"href="#cube""##).count(), 2, "instances re-point: {out}");
+        assert!(!out.contains("#die"), "no dangling old ref: {out}");
+    }
+
+    #[test]
+    fn create_component_rejects_a_name_that_collides_with_an_existing_id() {
+        use crate::model::document::parse_svg;
+        let mut doc = parse_svg(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="taken" x="0" y="0" width="9" height="9"/><rect x="20" y="0" width="9" height="9"/></svg>"##,
+        )
+        .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        let (u0, u1) = (doc.paths[0].uid.clone(), doc.paths[1].uid.clone());
+        assert!(!apply(
+            &mut doc,
+            &Op::CreateComponent {
+                members: vec![u0, u1],
+                uid: None,
+                use_uid: None,
+                defs_uid: None,
+                name: "taken".into(), // collides with the existing id
             }
         ));
     }
