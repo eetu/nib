@@ -391,10 +391,30 @@ fn build(node: roxmltree::Node, source: &str) -> Node {
     let uid = new_id();
     let r = node.range();
     let tag = node.tag_name().name().to_string();
-    let attrs: Vec<(String, String)> = node
-        .attributes()
-        .map(|a| (a.name().to_string(), a.value().to_string()))
+    // roxmltree exposes namespace declarations (`xmlns`, `xmlns:xlink`) separately from attributes,
+    // so capture the ones DECLARED on this node (its in-scope set minus the parent's) as leading
+    // attrs. Without this a *regenerated* (canonical) `<svg>` open tag drops `xmlns`, and the file no
+    // longer renders standalone / imports into Illustrator/Inkscape. Byte-preserving save is
+    // unaffected (it re-emits the verbatim span); this only feeds the regenerated form.
+    let parent_ns: Vec<(Option<&str>, &str)> = node
+        .parent_element()
+        .map(|p| p.namespaces().map(|n| (n.name(), n.uri())).collect())
+        .unwrap_or_default();
+    let mut attrs: Vec<(String, String)> = node
+        .namespaces()
+        .filter(|n| !parent_ns.contains(&(n.name(), n.uri())))
+        .map(|n| {
+            let key = match n.name() {
+                Some(prefix) => format!("xmlns:{prefix}"),
+                None => "xmlns".to_string(),
+            };
+            (key, n.uri().to_string())
+        })
         .collect();
+    attrs.extend(
+        node.attributes()
+            .map(|a| (a.name().to_string(), a.value().to_string())),
+    );
     let kids: Vec<roxmltree::Node> = node.children().collect();
 
     if kids.is_empty() {

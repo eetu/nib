@@ -538,10 +538,46 @@ mod tests {
         assert!(!ed.can_undo());
         let out = ed.to_svg();
         assert!(out.contains("M 10 10"), "geometry preserved: {out}");
+        // The root namespace MUST survive regeneration — without it the file isn't a valid
+        // standalone SVG (browsers/Illustrator/Inkscape won't open it). roxmltree hides `xmlns` as a
+        // namespace (not an attr), so the canonical (regenerated) open tag would drop it if we didn't
+        // capture declared namespaces at parse.
+        assert!(
+            out.contains(r#"xmlns="http://www.w3.org/2000/svg""#),
+            "canonical export keeps the SVG namespace: {out}"
+        );
         // Re-loading the export and re-exporting yields the same bytes (no drift each save).
         let mut ed2 = Editor::new();
         ed2.load_source(&out).unwrap();
         assert_eq!(ed2.to_svg(), out, "canonical export is a fixed point");
+    }
+
+    #[test]
+    fn canonical_export_keeps_namespaces_without_leaking_them_to_children() {
+        // A doc that declares both the SVG default namespace AND xmlns:xlink on the root: canonical
+        // export must re-emit both on <svg> exactly once, and NOT sprinkle xmlns onto child elements
+        // (the default namespace is inherited, so children must not re-declare it).
+        let mut ed = Editor::new();
+        ed.load_source(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100"><rect x="1" y="1" width="8" height="8"/></svg>"##,
+        )
+        .unwrap();
+        // Force a regenerate (canonical) by editing the rect's fill.
+        ed.apply(&crate::ops::Op::SetStyle {
+            path: 0,
+            key: "fill".into(),
+            value: Some("#f00".into()),
+        });
+        let out = ed.to_svg();
+        assert_eq!(
+            out.matches(r#"xmlns="http://www.w3.org/2000/svg""#).count(),
+            1,
+            "default namespace declared exactly once, on the root: {out}"
+        );
+        assert!(
+            out.contains(r#"xmlns:xlink="http://www.w3.org/1999/xlink""#),
+            "xlink namespace preserved: {out}"
+        );
     }
 
     #[test]
