@@ -581,6 +581,64 @@ mod tests {
     }
 
     #[test]
+    fn canonical_export_gives_use_old_illustrator_xlink_backcompat() {
+        // A component + a <use> written with SVG2 bare `href`. Canonical export must ADD `xlink:href`
+        // (old Illustrator only resolves that) + declare `xmlns:xlink`, keep the `href`, and stay a
+        // fixed point (no duplicate attrs/decls on the round-trip).
+        let mut ed = Editor::new();
+        ed.load_source(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><g id="die"><rect x="0" y="0" width="9" height="9"/></g></defs><use href="#die" x="10" y="10"/></svg>"##,
+        )
+        .unwrap();
+        let out = ed.to_svg();
+        assert!(
+            out.contains(r#"xmlns:xlink="http://www.w3.org/1999/xlink""#),
+            "root declares xlink: {out}"
+        );
+        assert!(
+            out.contains(r##"xlink:href="#die""##),
+            "use mirrors href → xlink:href: {out}"
+        );
+        assert!(
+            out.contains(r##"href="#die""##),
+            "keeps the SVG2 href too: {out}"
+        );
+        assert_eq!(
+            out.matches("xlink:href").count(),
+            1,
+            "no dup xlink:href: {out}"
+        );
+        assert_eq!(
+            out.matches("xmlns:xlink").count(),
+            1,
+            "one xmlns:xlink: {out}"
+        );
+        let mut ed2 = Editor::new();
+        ed2.load_source(&out).unwrap();
+        assert_eq!(
+            ed2.to_svg(),
+            out,
+            "canonical export with xlink compat is a fixed point"
+        );
+    }
+
+    #[test]
+    fn canonical_export_preserves_namespaced_attribute_prefixes() {
+        // roxmltree drops attribute prefixes (`xlink:href` → `href`); canonical regeneration must
+        // reconstruct them, or an `<image xlink:href>` (or inkscape:*/sodipodi:*) would be mangled.
+        let mut ed = Editor::new();
+        ed.load_source(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100"><image xlink:href="pic.png" x="0" y="0" width="10" height="10"/><rect x="1" y="1" width="2" height="2"/></svg>"##,
+        )
+        .unwrap();
+        let out = ed.to_svg();
+        assert!(
+            out.contains(r#"xlink:href="pic.png""#),
+            "namespaced attr prefix preserved (not mangled to bare href): {out}"
+        );
+    }
+
+    #[test]
     fn model_json_round_trip_preserves_uids_and_svg() {
         // The native model is the source of truth: loading it must reproduce identical node uids
         // (so structural ops replay across clients) and the same document — no SVG re-parse.

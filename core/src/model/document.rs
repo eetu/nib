@@ -663,6 +663,11 @@ fn serialize_via_tree_opt(
 ) -> String {
     let mut tree = base.clone();
     tree.reconcile_paths_opt(&doc.paths, precision, regenerate_all);
+    // Canonical export targets "opens anywhere": add old-Illustrator `<use>` back-compat (mirror
+    // href → xlink:href + declare xmlns:xlink). Byte-preserving save leaves the source verbatim.
+    if regenerate_all {
+        tree.add_use_xlink_compat();
+    }
     // A source gradient the model has adopted (same id in `doc.gradients`) is dropped from the tree
     // so it isn't defined twice — it re-emits from the model via `inject_defs`. No-op (byte-for-byte)
     // until something is adopted.

@@ -411,10 +411,18 @@ fn build(node: roxmltree::Node, source: &str) -> Node {
             (key, n.uri().to_string())
         })
         .collect();
-    attrs.extend(
-        node.attributes()
-            .map(|a| (a.name().to_string(), a.value().to_string())),
-    );
+    // roxmltree's `attributes()` returns the LOCAL name (`href`), dropping the prefix — so a
+    // *regenerated* (canonical) tag would mangle `xlink:href`/`inkscape:label`/`sodipodi:*` into
+    // bare `href`/`label`/…, losing the namespace binding. Reconstruct `prefix:local` from the
+    // attribute's namespace URI + the in-scope prefix. Byte-preserving save re-emits verbatim, so
+    // this only feeds the regenerated form.
+    attrs.extend(node.attributes().map(|a| {
+        let key = match a.namespace().and_then(|uri| node.lookup_prefix(uri)) {
+            Some(prefix) if !prefix.is_empty() => format!("{prefix}:{}", a.name()),
+            _ => a.name().to_string(),
+        };
+        (key, a.value().to_string())
+    }));
     let kids: Vec<roxmltree::Node> = node.children().collect();
 
     if kids.is_empty() {
@@ -1260,6 +1268,61 @@ impl Tree {
         }
         remove_uses_of(&mut self.root, &name);
         true
+    }
+
+    /// Canonical-export back-compat: mirror each `<use>`'s `href` to `xlink:href` and declare
+    /// `xmlns:xlink` on the root if any `<use>` needs it. Old Illustrator only resolves the xlink
+    /// form of `<use>`; modern renderers use bare `href`, so this only *adds* compatibility (nib
+    /// authors `href`). Idempotent — a `<use>` that already carries `xlink:href` is left alone, and
+    /// the root decl is inserted right after `xmlns` (where a re-parse re-captures it) so canonical
+    /// export stays a fixed point.
+    pub fn add_use_xlink_compat(&mut self) {
+        fn walk(node: &mut Node, any: &mut bool) {
+            if let Node::Element {
+                tag,
+                attrs,
+                children,
+                edited,
+                ..
+            } = node
+            {
+                if tag == "use" {
+                    let href = attrs
+                        .iter()
+                        .find(|(k, _)| k == "href")
+                        .map(|(_, v)| v.clone());
+                    let has_xlink = attrs.iter().any(|(k, _)| k == "xlink:href");
+                    if let (Some(h), false) = (href, has_xlink) {
+                        attrs.push(("xlink:href".to_string(), h));
+                        *edited = true;
+                        *any = true;
+                    }
+                }
+                for c in children {
+                    walk(c, any);
+                }
+            }
+        }
+        let mut any = false;
+        walk(&mut self.root, &mut any);
+        if any {
+            if let Node::Element { attrs, edited, .. } = &mut self.root {
+                if !attrs.iter().any(|(k, _)| k == "xmlns:xlink") {
+                    let pos = attrs
+                        .iter()
+                        .position(|(k, _)| k == "xmlns")
+                        .map_or(0, |i| i + 1);
+                    attrs.insert(
+                        pos,
+                        (
+                            "xmlns:xlink".to_string(),
+                            "http://www.w3.org/1999/xlink".to_string(),
+                        ),
+                    );
+                    *edited = true;
+                }
+            }
+        }
     }
 
     /// A fresh globally-unique uid for a drawn node/group created without a caller-supplied one
