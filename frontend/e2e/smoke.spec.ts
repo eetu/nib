@@ -276,7 +276,7 @@ test("layers: group two shapes, then hide the group", async ({ page }) => {
   await expect(rows).toHaveCount(2);
   await rows.nth(0).click();
   await rows.nth(1).click({ modifiers: ["Shift"] });
-  await page.locator(".lhead .ghost-btn").click();
+  await page.getByRole("button", { name: "group selection" }).click();
   await expect(page.locator(".layerlist .grouphead")).toHaveCount(1);
 
   // Hiding the group removes its shapes from the render.
@@ -1375,6 +1375,56 @@ test("clicking a filled shape's interior selects it (fill hit-test)", async ({ p
     .getByRole("button", { name: "round" })
     .click();
   await expect(page.locator("svg.canvas g.artwork path")).toHaveAttribute("stroke-linecap", "round");
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
+test("create a component from a selection, then stamp an instance", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+  // The "create component" flow prompts for a name.
+  page.on("dialog", (d) => void d.accept("die"));
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="0" y="0" width="20" height="20" fill="#f00"/><rect x="40" y="0" width="20" height="20" fill="#00f"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // Select both rects, then create a component from them.
+  const rows = page.locator(".layerlist .row-btn");
+  await expect(rows).toHaveCount(2);
+  await rows.nth(0).click();
+  await rows.nth(1).click({ modifiers: ["Shift"] });
+  await page.getByRole("button", { name: "create component from selection" }).click();
+
+  // The def group + a single instance exist; both rects moved into the definition.
+  await page.getByRole("button", { name: "source" }).click();
+  const src1 = await page.locator(".sourceview textarea").inputValue();
+  expect(src1).toContain("<defs");
+  expect(src1).toContain('<g id="die"');
+  expect(src1.match(/<use[^>]*href="#die"/g)?.length).toBe(1);
+  expect(src1.match(/<rect/g)?.length).toBe(2);
+  // A component row is listed in the panel.
+  await expect(page.locator(".complist .comprow")).toHaveCount(1);
+
+  // Stamp a second instance → two <use href="#die">.
+  await page.locator(".comprow .stamp").click();
+  const src2 = await page.locator(".sourceview textarea").inputValue();
+  expect(src2.match(/<use[^>]*href="#die"/g)?.length).toBe(2);
+  // Still one definition + two rects (the instance references the def, doesn't copy it).
+  expect(src2.match(/<g id="die"/g)?.length).toBe(1);
+  expect(src2.match(/<rect/g)?.length).toBe(2);
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });

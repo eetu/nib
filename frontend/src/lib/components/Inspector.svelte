@@ -269,6 +269,15 @@
     editor.groupSelection();
   }
 
+  function createComponentFromSelection() {
+    const name = prompt("component name:", `component ${editor.components.length + 1}`);
+    if (name?.trim()) editor.createComponentFromSelection(name.trim());
+  }
+  function renameComp(uid: string, current: string) {
+    const name = prompt("rename component:", current);
+    if (name?.trim() && name.trim() !== current) editor.renameComponent(uid, name.trim());
+  }
+
   // Right-click context menu for a row (path or group) — an action list at the cursor.
   type Menu = {
     x: number;
@@ -878,6 +887,47 @@
     {/if}
   {/snippet}
 
+  {#if advanced && (editor.components.length || editor.selectedPaths.length >= 1)}
+    <section class="components">
+      <div class="lhead">
+        <h2>components</h2>
+        {#if editor.selectedPaths.length >= 1}
+          <button
+            class="ghost-btn"
+            title="create a reusable component from the selection"
+            aria-label="create component from selection"
+            onclick={createComponentFromSelection}
+          >
+            <Group size={13} /> create
+          </button>
+        {/if}
+      </div>
+      {#if editor.components.length}
+        <ul class="complist">
+          {#each editor.components as c (c.uid)}
+            <li class="comprow">
+              <button
+                class="row-btn"
+                ondblclick={() => renameComp(c.uid, c.name)}
+                title="double-click to rename (updates every instance)"
+              >
+                <span class="pid">{c.name}</span>
+                <span class="meta">{c.partUids.length} parts · {c.instanceCount}×</span>
+              </button>
+              <button
+                class="stamp"
+                title="stamp an instance"
+                onclick={() => editor.stampInstance(c.name)}>+ stamp</button
+              >
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="empty">select shapes, then “create”</p>
+      {/if}
+    </section>
+  {/if}
+
   <section class="layers">
     <div class="lhead">
       <h2>layers</h2>
@@ -1203,6 +1253,60 @@
   /* a style row whose paint is "none" — its sub-controls are inert, so dim them */
   .dim {
     opacity: 0.45;
+  }
+
+  .complist {
+    list-style: none;
+    margin: 0 0 6px;
+    padding: 0;
+  }
+
+  .comprow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 2px;
+  }
+
+  .comprow .row-btn {
+    flex: 1;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px;
+    min-width: 0;
+    padding: 3px 6px;
+    border: none;
+    border-radius: var(--halo-radius-pill);
+    background: transparent;
+    color: var(--halo-text-main);
+    text-align: left;
+    font-size: 12px;
+  }
+
+  .comprow .row-btn:hover {
+    background: var(--halo-bg-main);
+  }
+
+  .comprow .meta {
+    flex: none;
+    font-size: 10px;
+    color: var(--halo-text-muted);
+  }
+
+  .comprow .stamp {
+    flex: none;
+    padding: 2px 7px;
+    border: 1px solid var(--halo-border);
+    border-radius: var(--halo-radius-pill);
+    background: var(--halo-bg-main);
+    color: var(--halo-text-main);
+    font-size: 11px;
+  }
+
+  .comprow .stamp:hover {
+    border-color: var(--halo-accent);
+    color: var(--halo-accent);
   }
 
   .layerlist {

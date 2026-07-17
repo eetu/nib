@@ -48,6 +48,18 @@
       run: () => editor.ungroupSelection(),
       enabled: () => editor.selectedGroupUid !== null,
     },
+    {
+      label: "create component from selection",
+      enabled: () => editor.selectedPaths.length >= 1,
+      run: () => {
+        const name = prompt("component name:", `component ${editor.components.length + 1}`);
+        if (name?.trim()) editor.createComponentFromSelection(name.trim());
+      },
+    },
+    ...editor.components.map((c) => ({
+      label: `stamp component: ${c.name}`,
+      run: () => editor.stampInstance(c.name),
+    })),
     ...(
       [
         ["left", "align left"],

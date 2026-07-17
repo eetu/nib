@@ -33,13 +33,18 @@ function stampCreateUid(op: unknown): void {
     const n = Array.isArray(o.ids) ? o.ids.length : 0;
     if (n > 0 && !(Array.isArray(o.uids) && o.uids.length))
       o.uids = Array.from({ length: n }, () => crypto.randomUUID());
+  } else if (t === "createComponent") {
+    if (!o.uid) o.uid = crypto.randomUUID();
+    if (!o.useUid) o.useUid = crypto.randomUUID();
+    if (!o.defsUid) o.defsUid = crypto.randomUUID();
   } else if (
     (t === "addPath" ||
       t === "addShape" ||
       t === "booleanOp" ||
       t === "combinePaths" ||
       t === "outlineStroke" ||
-      t === "offsetPath") &&
+      t === "offsetPath" ||
+      t === "stampInstance") &&
     !o.uid
   ) {
     o.uid = crypto.randomUUID();
@@ -427,6 +432,138 @@ class DocumentStore {
     if (this.doc) walk(this.renderTree());
     return new Map(entries);
   });
+
+  /** Uids of every element inside a `<defs>` subtree (component-definition parts + inert defs). The
+   *  hit-test skips these — they paint only via `<use>`, never directly, so they must not be phantom
+   *  click targets at their def-space coords. */
+  defPathUids = $derived.by<Set<string>>(() => {
+    void this.treeVersion;
+    const uids: string[] = [];
+    const collectAll = (nodes: RenderNode[]): void => {
+      for (const n of nodes) {
+        if (n.kind !== "element") continue;
+        uids.push(n.uid);
+        collectAll(n.children);
+      }
+    };
+    const walk = (nodes: RenderNode[]): void => {
+      for (const n of nodes) {
+        if (n.kind !== "element") continue;
+        if (n.tag === "defs") collectAll(n.children);
+        else walk(n.children);
+      }
+    };
+    if (this.doc) walk(this.renderTree());
+    return new Set(uids);
+  });
+
+  /** The document's components — each `<g id>` directly inside a `<defs>`: its name (id), the uids of
+   *  its part shapes, and how many `<use>` instances reference it. Drives the Components panel. */
+  components = $derived.by<
+    { uid: string; name: string; partUids: string[]; instanceCount: number }[]
+  >(() => {
+    void this.treeVersion;
+    if (!this.doc) return [];
+    const tree = this.renderTree();
+    const useHrefs: string[] = [];
+    const countUses = (nodes: RenderNode[]): void => {
+      for (const n of nodes) {
+        if (n.kind !== "element") continue;
+        if (n.tag === "use") {
+          const h = (n.attrs.href ?? n.attrs["xlink:href"] ?? "").replace(/^#/, "");
+          if (h) useHrefs.push(h);
+        }
+        countUses(n.children);
+      }
+    };
+    countUses(tree);
+    const partsOf = (g: RenderNode): string[] => {
+      const out: string[] = [];
+      const rec = (m: RenderNode): void => {
+        if (m.kind !== "element") return;
+        out.push(m.uid);
+        m.children.forEach(rec);
+      };
+      if (g.kind === "element") g.children.forEach(rec);
+      return out;
+    };
+    const comps: { uid: string; name: string; partUids: string[]; instanceCount: number }[] = [];
+    const findDefs = (nodes: RenderNode[]): void => {
+      for (const n of nodes) {
+        if (n.kind !== "element") continue;
+        if (n.tag === "defs") {
+          for (const c of n.children)
+            if (c.kind === "element" && c.tag === "g" && c.attrs.id)
+              comps.push({
+                uid: c.uid,
+                name: c.attrs.id,
+                partUids: partsOf(c),
+                instanceCount: useHrefs.filter((h) => h === c.attrs.id).length,
+              });
+        } else findDefs(n.children);
+      }
+    };
+    findDefs(tree);
+    return comps;
+  });
+
+  /** Create a component from `memberUids` (co-siblings): they move into a `<g id=name>` in `<defs>`
+   *  and a `<use>` instance takes their place (rendered where they were). Selects the new instance. */
+  createComponent(memberUids: string[], name: string): void {
+    if (!memberUids.length || !name.trim()) return;
+    const useUid = crypto.randomUUID();
+    const ok = this.#apply({
+      type: "createComponent",
+      members: memberUids,
+      uid: crypto.randomUUID(),
+      useUid,
+      defsUid: crypto.randomUUID(),
+      name: name.trim(),
+    });
+    if (ok) {
+      this.commit();
+      this.#resetClientSelection();
+      this.treeVersion++;
+      this.selectElement(useUid); // land on the new instance where the selection was
+    }
+  }
+
+  /** Create a component from the current path selection (Inspector/palette entry) — mirrors
+   *  `groupSelection`. */
+  createComponentFromSelection(name: string): void {
+    const uids = this.selectedPaths
+      .map((i) => this.doc?.paths[i]?.uid)
+      .filter((u): u is string => !!u);
+    if (uids.length) this.createComponent(uids, name);
+  }
+
+  /** Stamp a new `<use>` instance of component `name`, offset from prior instances so it's visible +
+   *  draggable (transform-box move is free via E4). Selects it. */
+  stampInstance(name: string): void {
+    const uid = crypto.randomUUID();
+    const n = (this.components.find((c) => c.name === name)?.instanceCount ?? 0) + 1;
+    const d = n * 10;
+    const ok = this.#apply({
+      type: "stampInstance",
+      href: `#${name}`,
+      uid,
+      attributes: { transform: `translate(${d} ${d})` },
+    });
+    if (ok) {
+      this.commit();
+      this.#resetClientSelection();
+      this.treeVersion++;
+      this.selectElement(uid);
+    }
+  }
+
+  /** Rename a component (its `<g id>`) — cascades to every instance's `href`. */
+  renameComponent(uid: string, name: string): void {
+    if (name.trim() && this.#apply({ type: "renameComponent", uid, name: name.trim() })) {
+      this.commit();
+      this.treeVersion++;
+    }
+  }
 
   /** Show/hide any node in the document tree by its stable uid — a group, opaque element, or
    *  shape, at any depth (structural op). */
