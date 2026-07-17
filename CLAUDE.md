@@ -45,10 +45,30 @@ Per-area detail in `frontend/CLAUDE.md`.
   pure client render + hit-test + snap helpers the canvas/tools need locally, plus
   the TS type contract for the untyped WASM boundary — the authoritative engine is
   the Rust core.
-- **Byte-for-byte preservation.** The original SVG source is kept; on export
-  only *edited* paths get their `d` re-serialized (spliced in place). Everything
-  else — other elements, attributes, unedited paths — is preserved verbatim.
-  Arcs in an *edited* path convert to cubics (lossy); untouched paths never change.
+- **Native document model = the single source of truth (Phase C).** The engine's
+  `SvgDocument` + structural `Tree` (nodes, geometry, styles, gradients, and every node's
+  stable `uid`) is the authoritative model, serialized as **versioned JSON**
+  (`Editor::toModel`/`loadModel`, `schemaVersion`). The backend persists + serves *this*
+  (SQLite `projects.model`; the `svg` column is a cached export), and a client **loads the
+  model** — it never re-parses SVG to sync. **SVG (and any future format) is import/export
+  only.** This is what makes co-editing correct: identity is shared, so ops (structural
+  uid-ops included) replay on every client. Standalone/browser-only still round-trips SVG
+  fine; the model just rides in localStorage. *(JSON now; a binary serde encoding or a CRDT
+  are documented future swaps behind the same types.)*
+- **Dual identity — every node carries a `uid` AND a `name`.** `uid` = a stable, globally-
+  unique (UUID) machine id, minted **once** at creation by whoever makes the node, **carried
+  in the op** (create-ops carry it; the op funnels — frontend `stampCreateUid`, backend
+  `ensure_create_uid` — stamp one if absent) and stored in the model, so no client ever
+  re-invents it. `name` (the SVG `id`) = the human-facing label a co-author refers to ("the
+  hand"): semantic, mutable, may collide. The MCP **`find`** tool resolves a name to candidate
+  object(s) so the LLM disambiguates ("left or right?") instead of guessing. Rename changes
+  `name`, never `uid`. This is the load-bearing invariant for human↔LLM co-authorship.
+- **SVG export (byte-preserving by default; canonical on demand).** SVG is an *export*
+  format now, not the store of record. The default exporter (`to_svg`) preserves unedited
+  markup verbatim + re-serializes only *edited* paths (arcs in an edited path → cubics,
+  lossy; untouched paths never change); the normalized exporter (`toSvgNormalized` /
+  "export normalized copy") regenerates everything canonically, paths-only. Neither is the
+  identity substrate — the native model is.
 - **One representation: the document tree** (`core/src/model/tree.rs`, `Node`/`Tree`).
   Imported *and* drawn content are nodes in the same tree — imported nodes parse from
   source (verbatim spans, byte-for-byte re-emit); **drawn (added) paths** are `<path>`
@@ -247,16 +267,21 @@ client-side pro pillars, all running on the core):
   **projects** in **SQLite** (sqlx), owned by **token-authed users** — a real multiuser scaffold
   (a seeded `developer` user + per-user bearer token; no login yet). **The op vocabulary the
   editor already runs on IS the surface** (`moveNode` … `booleanOp` … `groupNodes`). What's live:
-  - **Persistence + auth** (`db.rs`, `auth.rs`): `migrations/` (users, projects; the SVG source is
-    a `projects.svg` column), `Authorization: Bearer <token>` (an `AuthUser` extractor + an MCP
-    helper). REST (retired the C1 file API): `/api/me`, `/api/projects` (list/create),
-    `/api/projects/{id}` (get/put svg) — token-authed + ownership-scoped, writes validated through
-    the parser.
+  - **Persistence + auth** (`db.rs`, `auth.rs`): `migrations/` (users, projects). The store of
+    record is the **native model JSON** (`projects.model`, migration `0002`; the `projects.svg`
+    column is a cached export). `Authorization: Bearer <token>` (an `AuthUser` extractor + an MCP
+    helper). REST: `/api/me`, `/api/projects` (list/create), `/api/projects/{id}` (get → model+svg /
+    put imports svg → model) — token-authed + ownership-scoped, validated through the parser.
   - **Sessions** (`session.rs`): one authoritative in-memory `Editor` per open project (keyed by
-    id, shared registry). Every edit funnels through `apply_ops` → mutate → **broadcast** → persist.
+    id, shared registry), hydrated **from the model** (legacy svg-only rows import once). Every edit
+    funnels through `apply_ops` → `ensure_create_uid` (stamp a uid on create-ops that lack one) →
+    mutate → **broadcast ops** → persist model. All clients share the model (identical `uid`s), so
+    ops — structural uid-ops included — replay correctly; no snapshot resync.
   - **MCP** (`mcp.rs`, `rmcp` 0.5) nested at **`/mcp`** (Streamable-HTTP): token-authed +
     project-scoped. Tools: `list_projects`/`create_project`/`open_project`, `get_document`
-    (a **cheap text outline** — one line per path: `#index`, name, bounds, fill/stroke), `get_svg`,
+    (a **cheap text outline** — one line per path: `#index`, name, bounds, fill/stroke),
+    **`find`** (resolve a co-author's *name* — "the hand" — to candidate objects with #index +
+    bounds so the LLM disambiguates "left or right?" instead of guessing), `get_svg`,
     **`render_document`** (rasterize to a PNG via `resvg` + return it as an **image** so the LLM can
     *see*/verify its work; opt-in `width` cost knob), **`apply_op`** (full op vocabulary), + ergonomic
     wrappers `add_shape` (optional `name`)/`set_style`/`boolean_op`/**`group`** (indices→`GroupNodes`
