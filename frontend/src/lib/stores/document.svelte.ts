@@ -1224,6 +1224,16 @@ class DocumentStore {
     this.#sync();
   }
 
+  /** Rotate a path `degrees` clockwise about a pivot (default = its bbox centre) as one committed
+   *  step — the semantic rotate for numeric entry, the palette, and the LLM/MCP surface. */
+  rotatePath(pathIndex: number, degrees: number, pivot?: Point): void {
+    if (!Number.isFinite(degrees) || degrees === 0) return;
+    if (this.#apply({ type: "rotatePath", path: pathIndex, degrees, cx: pivot?.x, cy: pivot?.y })) {
+      this.commit();
+      this.#sync();
+    }
+  }
+
   moveNode(ref: NodeRef, to: Point): void {
     this.#apply({ type: "moveNode", node: ref, to });
     this.#sync();

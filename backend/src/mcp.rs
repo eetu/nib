@@ -47,8 +47,9 @@ document's viewBox units. Z-order = list order: the LAST path draws on top, so b
 fill/stroke). No image. Use it to plan, to measure, and to resync #indices. Prefer it over rendering \
 for anything that isn't 'I need to see what it looks like'.\n\
 3. Edit with add_shape (rect/ellipse/line/polygon/star by bounding box), apply_op (the full op \
-vocabulary), set_style, boolean_op, group, rename. Mutations return a ONE-LINE ack, not the document \
-— that's deliberate; call get_document when you need the current #indices.\n\
+vocabulary), set_style, boolean_op, group, rename, rotate (degrees clockwise about a shape's centre). \
+Mutations return a ONE-LINE ack, not the document — that's deliberate; call get_document when you \
+need the current #indices.\n\
 4. NAME every shape by its role (add_shape's `name`, or rename afterwards) and GROUP related shapes \
 (group) so the result is a labeled, editable hierarchy a human can navigate — e.g. a 'face' group of \
 'left-eye'/'right-eye'/'mouth' — not an anonymous pile of paths. get_document echoes names back, so \
@@ -507,6 +508,20 @@ pub struct StampParams {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct RotateParams {
+    /// The path's #index (from get_document).
+    pub index: usize,
+    /// Rotation in degrees, clockwise (like SVG `rotate()`).
+    pub degrees: f64,
+    /// Optional pivot (viewBox units). Defaults to the shape's own bounding-box centre; pass a
+    /// shared pivot to rotate several shapes as one rigid group.
+    #[serde(default)]
+    pub cx: Option<f64>,
+    #[serde(default)]
+    pub cy: Option<f64>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct RenderParams {
     /// Target longest-side in px (default 512, clamped 128–1024). Smaller = cheaper (fewer tokens).
     #[serde(default)]
@@ -901,6 +916,26 @@ impl NibMcp {
             return Err(bad("rename failed (bad #index or empty name)"));
         }
         Ok(format!("renamed #{} → \"{}\"", p.index, p.name))
+    }
+
+    #[tool(
+        description = "Rotate a shape (by #index) `degrees` clockwise about its own centre — or an explicit cx/cy pivot (pass the same pivot to several shapes to rotate them as one). Use it to tilt, tumble, or orient a shape."
+    )]
+    async fn rotate(
+        &self,
+        Parameters(p): Parameters<RotateParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let op = json!({ "type": "rotatePath", "path": p.index, "degrees": p.degrees, "cx": p.cx, "cy": p.cy });
+        let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
+        if n == 0 {
+            return Err(bad(
+                "rotate did not apply (bad #index, deleted path, or non-finite degrees)",
+            ));
+        }
+        Ok(format!("rotated #{} by {}°", p.index, p.degrees))
     }
 }
 

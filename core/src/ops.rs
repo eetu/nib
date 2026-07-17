@@ -121,6 +121,18 @@ pub enum Op {
     SetSubpaths { path: usize, subpaths: Vec<Subpath> },
     /// Translate an entire path (all subpaths' nodes + handles) by a delta.
     MovePathBy { path: usize, dx: f64, dy: f64 },
+    /// Rotate a path's geometry `degrees` clockwise about a pivot — default pivot is the path's
+    /// bounding-box centre; `cx`/`cy` override it (e.g. a shared centre to rotate a multi-selection
+    /// as one rigid group). The semantic rotate the transform box, a numeric field, and the MCP
+    /// `rotate` tool all funnel through — so the LLM/programmatic path can rotate, not just the drag.
+    RotatePath {
+        path: usize,
+        degrees: f64,
+        #[serde(default)]
+        cx: Option<f64>,
+        #[serde(default)]
+        cy: Option<f64>,
+    },
 
     /// Insert a node on the segment leaving `segment` at parameter `t` (shape-preserving).
     InsertNode {
@@ -497,6 +509,9 @@ fn op_is_finite(op: &Op) -> bool {
             subpaths_finite(subpaths)
         }
         Op::MovePathBy { dx, dy, .. } => dx.is_finite() && dy.is_finite(),
+        Op::RotatePath {
+            degrees, cx, cy, ..
+        } => degrees.is_finite() && cx.is_none_or(f64::is_finite) && cy.is_none_or(f64::is_finite),
         Op::InsertNode { t, .. } => t.is_finite(),
         Op::AppendNode { point, .. } => point_finite(point),
         Op::SetShape { spec, .. } | Op::AddShape { spec, .. } => spec_finite(spec),
@@ -621,6 +636,32 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 }
             }
             p.edited = true;
+            true
+        }
+        Op::RotatePath {
+            path,
+            degrees,
+            cx,
+            cy,
+        } => {
+            let rot = {
+                let Some(p) = doc.paths.get(*path) else {
+                    return false;
+                };
+                if p.deleted {
+                    return false;
+                }
+                let (px, py) = match (cx, cy) {
+                    (Some(x), Some(y)) => (*x, *y),
+                    _ => match crate::model::geometry::subpaths_bounds(&p.subpaths) {
+                        Some(b) => ((b.min_x + b.max_x) / 2.0, (b.min_y + b.max_y) / 2.0),
+                        None => return false,
+                    },
+                };
+                crate::model::geometry::rotate_subpaths(&p.subpaths, px, py, degrees.to_radians())
+            };
+            doc.paths[*path].subpaths = rot;
+            doc.paths[*path].edited = true;
             true
         }
         Op::InsertNode {
@@ -1267,6 +1308,59 @@ mod tests {
             gradients: Vec::new(),
             tree: None,
         }
+    }
+
+    #[test]
+    fn rotate_path_turns_geometry_about_a_pivot() {
+        // A 2×2 square from (0,0). Rotating 90° clockwise about its centre (1,1) maps it onto
+        // itself, sending node 0 (0,0) → (2,0).
+        let mut doc = doc_from("M 0 0 L 2 0 L 2 2 L 0 2 Z", true);
+        assert!(apply(
+            &mut doc,
+            &Op::RotatePath {
+                path: 0,
+                degrees: 90.0,
+                cx: None,
+                cy: None
+            }
+        ));
+        let n0 = doc.paths[0].subpaths[0].nodes[0].point;
+        assert!(
+            (n0.x - 2.0).abs() < 1e-6 && n0.y.abs() < 1e-6,
+            "node0 → (2,0): {n0:?}"
+        );
+        assert!(doc.paths[0].edited);
+
+        // Explicit pivot: 180° about the origin sends node 1 (2,0) → (-2,0).
+        let mut doc2 = doc_from("M 0 0 L 2 0 L 2 2 L 0 2 Z", true);
+        assert!(apply(
+            &mut doc2,
+            &Op::RotatePath {
+                path: 0,
+                degrees: 180.0,
+                cx: Some(0.0),
+                cy: Some(0.0)
+            }
+        ));
+        let n1 = doc2.paths[0].subpaths[0].nodes[1].point;
+        assert!(
+            (n1.x + 2.0).abs() < 1e-6 && n1.y.abs() < 1e-6,
+            "node1 → (-2,0): {n1:?}"
+        );
+
+        // Non-finite degrees is a no-op (the op surface is untrusted).
+        let mut doc3 = doc_from("M 0 0 L 2 0", true);
+        let before = doc3.paths[0].subpaths[0].nodes[1].point;
+        assert!(!apply(
+            &mut doc3,
+            &Op::RotatePath {
+                path: 0,
+                degrees: f64::NAN,
+                cx: None,
+                cy: None
+            }
+        ));
+        assert_eq!(doc3.paths[0].subpaths[0].nodes[1].point, before);
     }
 
     #[test]

@@ -679,6 +679,41 @@ test("an imported <rect> is editable and stays a <rect> when moved", async ({ pa
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("rotate turns a shape 90° about its centre (bbox w/h swap)", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  // A wide rect (40×10) so a 90° turn visibly swaps width/height.
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="20" y="35" width="40" height="10" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // Select the rect → the transform panel's size row reads 40 × 10.
+  await page.locator(".layerlist .row-btn").first().click();
+  const sizeInputs = page.locator(".pairrow", { hasText: "size" }).locator("input");
+  expect(Math.round(Number(await sizeInputs.nth(0).inputValue()))).toBe(40);
+  expect(Math.round(Number(await sizeInputs.nth(1).inputValue()))).toBe(10);
+
+  // Rotate 90° clockwise about its centre → width/height swap to 10 × 40.
+  await page.locator('button[title="rotate 90° clockwise"]').click();
+  expect(Math.round(Number(await sizeInputs.nth(0).inputValue()))).toBe(10);
+  expect(Math.round(Number(await sizeInputs.nth(1).inputValue()))).toBe(40);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("declarative render draws shapes as paths and opaque elements (text) verbatim", async ({
   page,
 }) => {

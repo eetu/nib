@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::types::{Point, Subpath};
+use super::types::{PathNode, Point, Subpath};
 
 pub fn add(a: Point, b: Point) -> Point {
     Point::new(a.x + b.x, a.y + b.y)
@@ -83,6 +83,35 @@ pub fn subpaths_bounds(subpaths: &[Subpath]) -> Option<Bounds> {
     } else {
         None
     }
+}
+
+/// Rotate subpaths (each node's point + both handles) about the pivot `(cx, cy)` by `radians`,
+/// clockwise in the y-down document space (matching SVG's `rotate()` and the client transform box).
+/// Returns fresh subpaths; the input is untouched. The single rotation kernel `RotatePath` funnels
+/// through — the transform box, a numeric field, and the MCP `rotate` tool all land here.
+pub fn rotate_subpaths(subpaths: &[Subpath], cx: f64, cy: f64, radians: f64) -> Vec<Subpath> {
+    let (sin, cos) = radians.sin_cos();
+    let at = |p: Point| -> Point {
+        let dx = p.x - cx;
+        let dy = p.y - cy;
+        Point::new(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos)
+    };
+    subpaths
+        .iter()
+        .map(|sp| Subpath {
+            closed: sp.closed,
+            nodes: sp
+                .nodes
+                .iter()
+                .map(|n| PathNode {
+                    point: at(n.point),
+                    handle_in: n.handle_in.map(at),
+                    handle_out: n.handle_out.map(at),
+                    node_type: n.node_type,
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 /// Are the incoming/outgoing handles of a node collinear through the point (i.e. the node

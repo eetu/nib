@@ -195,6 +195,18 @@
     editor.commit();
   }
 
+  // Rotate the selected path a one-shot angle (deg, clockwise) about its bbox centre — the input
+  // resets to 0 so each entry applies once. Routes through the semantic `rotatePath` op.
+  function rotateBy(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const deg = evalNum(input.value);
+    input.value = "0";
+    if (deg !== null && deg !== 0 && pathIndex !== null) editor.rotatePath(pathIndex, deg);
+  }
+  function rotateQuick(deg: number) {
+    if (pathIndex !== null) editor.rotatePath(pathIndex, deg);
+  }
+
   let collapsed = $state<string[]>([]);
   function toggleCollapse(id: string) {
     collapsed = collapsed.includes(id) ? collapsed.filter((x) => x !== id) : [...collapsed, id];
@@ -688,6 +700,18 @@
             value={round(bounds.maxY - bounds.minY)}
             onchange={(e) => setBBox("h", e)}
           /></label
+        >
+      </div>
+      <div class="offsetrow">
+        <span class="seglbl">rotate°</span>
+        <input type="number" step="15" value="0" onchange={rotateBy} aria-label="rotate degrees" />
+        <button
+          class="ghost-btn"
+          title="rotate 90° counter-clockwise"
+          onclick={() => rotateQuick(-90)}>⟲</button
+        >
+        <button class="ghost-btn" title="rotate 90° clockwise" onclick={() => rotateQuick(90)}
+          >⟳</button
         >
       </div>
       {#if advanced}
