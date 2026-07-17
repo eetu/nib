@@ -22,7 +22,7 @@ pub mod snap;
 
 use history::History;
 use model::document::{
-    parse_svg, serialize_normalized, serialize_svg, serialize_via_tree, tree_boolean_results,
+    parse_svg, serialize_canonical, serialize_normalized, serialize_svg, tree_boolean_results,
 };
 use model::tree::{Tree, parse_tree};
 use model::types::{Gradient, NodeRef, PathElement, Subpath, SvgDocument};
@@ -394,14 +394,15 @@ impl Editor {
         nodes.serialize(&serializer).map_err(Into::into)
     }
 
-    /// Current document serialized back to SVG (unedited markup preserved byte-for-byte).
+    /// Current document exported to SVG — the **canonical** export (the native model is the source
+    /// of truth now): every element regenerated cleanly from the model, primitives kept as
+    /// primitives (only freeform-reshaped shapes become `<path>`). For an exact byte-preserving
+    /// export use the model's faithful path; for paths-only use `toSvgNormalized`.
     #[wasm_bindgen(js_name = toSvg)]
     pub fn to_svg(&self) -> String {
         match &self.doc {
             Some(doc) => match &doc.tree {
-                // Tree-backed serialize (Phase E): reconcile edits onto the structural tree —
-                // preserves non-path structure + exports edited primitives as `<path>`.
-                Some(tree) => serialize_via_tree(doc, tree, 3),
+                Some(tree) => serialize_canonical(doc, tree, 3),
                 // Fallback (no tree, e.g. a doc set without source): the flat splice serializer.
                 None => serialize_svg(doc),
             },
@@ -542,12 +543,20 @@ mod tests {
     }
 
     #[test]
-    fn load_then_export_round_trips_byte_for_byte() {
+    fn canonical_export_is_valid_and_a_fixed_point() {
+        // The default export is canonical (regenerated from the model), not byte-preserving — so
+        // it need not equal the source, but it must be valid + stable (parse→export→export is a
+        // fixed point) and keep the path's geometry.
         let mut ed = Editor::new();
         ed.load_source(SAMPLE).unwrap();
         assert!(ed.has_document());
         assert!(!ed.can_undo());
-        assert_eq!(ed.to_svg(), SAMPLE);
+        let out = ed.to_svg();
+        assert!(out.contains("M 10 10"), "geometry preserved: {out}");
+        // Re-loading the export and re-exporting yields the same bytes (no drift each save).
+        let mut ed2 = Editor::new();
+        ed2.load_source(&out).unwrap();
+        assert_eq!(ed2.to_svg(), out, "canonical export is a fixed point");
     }
 
     #[test]
@@ -588,8 +597,9 @@ mod tests {
     fn load_rejects_bad_markup_without_mutating() {
         let mut ed = Editor::new();
         ed.load_source(SAMPLE).unwrap();
+        let good = ed.to_svg();
         assert!(ed.load_source("<div>nope</div>").is_err());
-        assert_eq!(ed.to_svg(), SAMPLE); // untouched
+        assert_eq!(ed.to_svg(), good); // untouched by the failed load
     }
 
     #[test]

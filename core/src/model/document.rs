@@ -634,31 +634,42 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
     }
 }
 
-/// Serialize through the **document tree** (Phase E) rather than the flat splice: reconcile the
-/// flat paths' edits onto a clone of the parsed `base` tree, emit it (byte-for-byte for untouched
-/// nodes; edited primitives become `<path>`), then append drawn paths + inject gradient defs +
-/// grow the viewBox exactly as the splice path does. This is what makes editing *non-path*
-/// elements exportable — the tree carries the full structure the flat splice can't.
+/// Serialize through the **document tree** — the **faithful** export: reconcile the flat paths'
+/// edits onto a clone of the parsed `base` tree and emit it byte-for-byte for untouched nodes
+/// (only edited nodes regenerate; edited primitives that broke form become `<path>`), then append
+/// drawn paths + inject gradient defs + grow the viewBox. Retained for round-trip tests + as an
+/// exact-preservation capability; the default export is now [`serialize_canonical`].
 pub fn serialize_via_tree(doc: &SvgDocument, base: &Tree, precision: usize) -> String {
-    serialize_via_tree_opt(doc, base, precision, false)
+    serialize_via_tree_opt(doc, base, precision, false, false)
 }
 
-/// A **normalized** export: a clean, fully-regenerated copy — every element re-emitted canonically
-/// from its tag+attrs and every editable shape forced to a `<path>` (no verbatim spans, no
-/// `<rect>`/`<circle>` primitives). For downstream tools that want plain paths, vs the
-/// byte-preserving default save.
+/// The **canonical** export (the default save now that the native model is the source of truth):
+/// regenerate *every* element cleanly from the model's tag+attrs (no verbatim spans), but **keep
+/// primitives** — a `<rect>`/`<circle>`/… that still fits its form stays that primitive (via
+/// `refit`); only a freeform-reshaped shape falls to `<path>`. Clean markup without destroying the
+/// author's shape choices.
+pub fn serialize_canonical(doc: &SvgDocument, base: &Tree, precision: usize) -> String {
+    serialize_via_tree_opt(doc, base, precision, true, false)
+}
+
+/// A **normalized** export: like canonical but also forces every editable shape to a `<path>` (no
+/// primitives at all) — for downstream tools that want plain paths.
 pub fn serialize_normalized(doc: &SvgDocument, base: &Tree, precision: usize) -> String {
-    serialize_via_tree_opt(doc, base, precision, true)
+    serialize_via_tree_opt(doc, base, precision, true, true)
 }
 
+/// `regenerate_all` = re-emit every element from its tag+attrs (drop verbatim spans); `paths_only`
+/// = additionally force editable shapes to `<path>`. (false,false)=faithful, (true,false)=canonical,
+/// (true,true)=normalized.
 fn serialize_via_tree_opt(
     doc: &SvgDocument,
     base: &Tree,
     precision: usize,
-    normalize: bool,
+    regenerate_all: bool,
+    paths_only: bool,
 ) -> String {
     let mut tree = base.clone();
-    tree.reconcile_paths_opt(&doc.paths, precision, normalize);
+    tree.reconcile_paths_opt(&doc.paths, precision, regenerate_all, paths_only);
     // A source gradient the model has adopted (same id in `doc.gradients`) is dropped from the tree
     // so it isn't defined twice — it re-emits from the model via `inject_defs`. No-op (byte-for-byte)
     // until something is adopted.
