@@ -24,6 +24,8 @@ use serde::Deserialize;
 use serde_json::json;
 use sqlx::SqlitePool;
 
+use nib_core::model::types::SvgDocument;
+
 use crate::db::{self, User};
 use crate::session::{self, ProjectSession, Sessions};
 use crate::{AppState, auth};
@@ -49,7 +51,10 @@ vocabulary), set_style, boolean_op, group, rename. Mutations return a ONE-LINE a
 4. NAME every shape by its role (add_shape's `name`, or rename afterwards) and GROUP related shapes \
 (group) so the result is a labeled, editable hierarchy a human can navigate — e.g. a 'face' group of \
 'left-eye'/'right-eye'/'mouth' — not an anonymous pile of paths. get_document echoes names back, so \
-good naming compounds. This is the difference between a drawing and a mess: always do it.\n\
+good naming compounds. This is the difference between a drawing and a mess: always do it. To act on \
+what your co-author means ('make the hand bigger'), call `find` to resolve the name to object(s); if \
+more than one matches (two 'hand's), DON'T guess — show them the candidates and ask which (left or \
+right?). Names are the shared vocabulary; the #index/uid are how you then address the one they meant.\n\
 5. render_document returns a PNG so you can SEE the result and verify it actually reads correctly \
 (get_document gives structure; this gives pixels). Images are token-heavy — render at checkpoints, \
 not after every edit; pass a small `width` for a quick glance.\n\
@@ -207,6 +212,45 @@ fn outline(s: &ProjectSession) -> String {
     lines.join("\n")
 }
 
+/// Resolve a human name to the paths that match it — exact name first, then partial (contains),
+/// case-insensitive. Each candidate carries its `#index`, `name`, `uid`, and rough `bounds` so an
+/// LLM can disambiguate ("two 'hand's — left or right?"). The name-addressing cornerstone: a
+/// co-author refers by name, this maps to the object(s) they mean.
+fn find_by_name(doc: &SvgDocument, query: &str) -> Vec<serde_json::Value> {
+    let q = query.trim().to_lowercase();
+    let mut matches: Vec<serde_json::Value> = Vec::new();
+    for (i, path) in doc.paths.iter().enumerate() {
+        if path.deleted {
+            continue;
+        }
+        let name = path.id.to_lowercase();
+        let exact = name == q;
+        if !exact && !name.contains(&q) {
+            continue;
+        }
+        let (mut minx, mut miny, mut maxx, mut maxy) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for sp in &path.subpaths {
+            for n in &sp.nodes {
+                minx = minx.min(n.point.x);
+                miny = miny.min(n.point.y);
+                maxx = maxx.max(n.point.x);
+                maxy = maxy.max(n.point.y);
+            }
+        }
+        let bounds = if minx <= maxx {
+            json!({ "x": r(minx), "y": r(miny), "w": r(maxx - minx), "h": r(maxy - miny) })
+        } else {
+            serde_json::Value::Null
+        };
+        matches.push(json!({
+            "index": i, "name": path.id, "uid": path.uid, "bounds": bounds, "exact": exact,
+        }));
+    }
+    // Exact-name matches first, so a precise reference ranks above partial hits.
+    matches.sort_by_key(|m| !m.get("exact").and_then(|e| e.as_bool()).unwrap_or(false));
+    matches
+}
+
 /// Bounding-box → a `ShapeSpec` JSON for `add_shape`. `None` for an unknown shape.
 fn shape_spec(shape: &str, x: f64, y: f64, w: f64, h: f64) -> Option<serde_json::Value> {
     let (cx, cy) = (x + w / 2.0, y + h / 2.0);
@@ -331,6 +375,13 @@ pub struct RenderParams {
     pub width: Option<f64>,
 }
 
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct FindParams {
+    /// A human name/description to resolve, e.g. "hand" or "left-eye". Case-insensitive; matches a
+    /// path whose name equals or contains it.
+    pub name: String,
+}
+
 #[tool_router]
 impl NibMcp {
     #[tool(description = "List your projects (id, name, updated_at).")]
@@ -381,6 +432,25 @@ impl NibMcp {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
         Ok(outline(&sess.lock().unwrap()))
+    }
+
+    #[tool(
+        description = "Resolve a human name/description (what your co-author calls something) to the object(s) that match it. Returns candidates, each with #index, name, bounds, and uid. If 0 match, nothing has that name; if >1 (e.g. two 'hand's), DON'T guess — show the candidates and ask the human which (left or right?), then act on the one they mean by its #index. Case-insensitive; matches exact names first, then partial."
+    )]
+    async fn find(
+        &self,
+        Parameters(p): Parameters<FindParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        if p.name.trim().is_empty() {
+            return Err(bad("find needs a non-empty name"));
+        }
+        let s = sess.lock().unwrap();
+        let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+        let matches = find_by_name(doc, &p.name);
+        Ok(json!({ "query": p.name, "count": matches.len(), "matches": matches }).to_string())
     }
 
     #[tool(
@@ -623,7 +693,32 @@ impl ServerHandler for NibMcp {
 
 #[cfg(test)]
 mod tests {
-    use super::render_png;
+    use super::{find_by_name, render_png};
+
+    #[test]
+    fn find_by_name_resolves_and_disambiguates() {
+        // Two shapes a co-author might both call "hand" + an unrelated one.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect id="left-hand" x="10" y="40" width="8" height="8"/>
+  <rect id="right-hand" x="70" y="40" width="8" height="8"/>
+  <rect id="torso" x="40" y="40" width="10" height="30"/>
+</svg>"##;
+        let mut ed = nib_core::Editor::new();
+        ed.load_source(svg).unwrap();
+        let doc = ed.doc().unwrap();
+
+        // "hand" is ambiguous — both hands come back (with index/uid/bounds) so the LLM can ask which.
+        let hands = find_by_name(doc, "hand");
+        assert_eq!(hands.len(), 2, "both hands: {hands:?}");
+        assert!(hands.iter().all(|m| m["index"].is_number()
+            && m["uid"].as_str().is_some_and(|u| !u.is_empty())
+            && m["bounds"].is_object()));
+        // An exact name resolves to one; a miss to none.
+        assert_eq!(find_by_name(doc, "torso").len(), 1);
+        assert_eq!(find_by_name(doc, "dragon").len(), 0);
+        // Case-insensitive.
+        assert_eq!(find_by_name(doc, "LEFT-HAND").len(), 1);
+    }
 
     #[test]
     fn renders_svg_to_png() {
