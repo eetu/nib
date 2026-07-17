@@ -575,7 +575,10 @@ mod tests {
             .iter()
             .map(|p| p.uid.clone())
             .collect();
-        assert!(!uids0.is_empty() && !uids0[0].is_empty(), "paths carry uids");
+        assert!(
+            !uids0.is_empty() && !uids0[0].is_empty(),
+            "paths carry uids"
+        );
         assert_eq!(uids0, uids1, "uids survive the model round-trip");
         assert!(ed2.doc().unwrap().tree.is_some(), "tree rides in the model");
         assert_eq!(ed2.to_svg(), svg0, "svg round-trips through the model");

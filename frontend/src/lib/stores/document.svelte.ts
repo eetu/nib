@@ -22,6 +22,30 @@ import { tools } from "./tool.svelte";
 
 type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 
+/** Stamp a fresh globally-unique `uid` (or `uids`, for `releaseCompound`) onto a create-op that
+ *  lacks one — the creator mints the new node's identity once, so a peer replaying the op agrees on
+ *  it instead of inventing its own. Mirrors `ensure_create_uid` in the backend's session.rs. */
+function stampCreateUid(op: unknown): void {
+  if (typeof op !== "object" || op === null) return;
+  const o = op as Record<string, unknown>;
+  const t = o.type;
+  if (t === "releaseCompound") {
+    const n = Array.isArray(o.ids) ? o.ids.length : 0;
+    if (n > 0 && !(Array.isArray(o.uids) && o.uids.length))
+      o.uids = Array.from({ length: n }, () => crypto.randomUUID());
+  } else if (
+    (t === "addPath" ||
+      t === "addShape" ||
+      t === "booleanOp" ||
+      t === "combinePaths" ||
+      t === "outlineStroke" ||
+      t === "offsetPath") &&
+    !o.uid
+  ) {
+    o.uid = crypto.randomUUID();
+  }
+}
+
 type Session = {
   doc: SvgDocument | null;
   selection: NodeRef | null;
@@ -200,6 +224,7 @@ class DocumentStore {
 
   /** Apply one op to the core (live edit, no commit). Returns whether it mutated. */
   #apply(op: unknown): boolean {
+    stampCreateUid(op); // mint the new node's uid before applying, so our local + streamed op agree
     const ok = this.#wasm ? this.#wasm.applyOp(op) : false;
     if (ok && this.#syncSink) this.#syncBuffer.push(op); // stream to the backend on commit
     return ok;

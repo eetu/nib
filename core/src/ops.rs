@@ -151,18 +151,23 @@ pub enum Op {
         spec: ShapeSpec,
     },
 
-    /// Append a new drawn path (pen start, paste). The caller supplies the id (so all clients
-    /// agree) and the resolved style.
+    /// Append a new drawn path (pen start, paste). The caller supplies the display `id` (name) and
+    /// the resolved style; `uid` is the new node's stable identity — supplied so every client agrees
+    /// on it (the creator mints it once), or minted locally when absent (standalone use).
     AddPath {
         id: String,
         subpaths: Vec<Subpath>,
         attributes: IndexMap<String, String>,
+        #[serde(default)]
+        uid: Option<String>,
     },
-    /// Append a new drawn path built from a shape spec (shape tools + MCP).
+    /// Append a new drawn path built from a shape spec (shape tools + MCP). `uid` as in `AddPath`.
     AddShape {
         id: String,
         spec: ShapeSpec,
         attributes: IndexMap<String, String>,
+        #[serde(default)]
+        uid: Option<String>,
     },
     /// Rename a path (updates its display id and, on export, its `id` attr).
     RenamePath { path: usize, name: String },
@@ -239,33 +244,58 @@ pub enum Op {
         op: String,
         paths: Vec<usize>,
         id: String,
+        #[serde(default)]
+        uid: Option<String>,
     },
     /// Merge paths into one **compound path** (`id`) holding all their subpaths in draw order —
     /// the inputs are soft-deleted. Unlike `BooleanOp` this keeps the subpaths distinct (no
     /// geometry merge), so a line + a detached dome become one editable element. Inherits the
     /// style + group of the backmost member that actually fills (so a filled shape + a
     /// stroke-only one keeps the fill, not the stroke-only member's `fill="none"`).
-    CombinePaths { paths: Vec<usize>, id: String },
+    CombinePaths {
+        paths: Vec<usize>,
+        id: String,
+        #[serde(default)]
+        uid: Option<String>,
+    },
     /// Release a compound path: soft-delete it and add one path per subpath (`ids`, one per
     /// subpath) so each becomes independently styleable. Inherits the source's style + group.
-    ReleaseCompound { path: usize, ids: Vec<String> },
+    /// `uids` (optional, one per subpath) are the new nodes' stable ids; minted locally when absent.
+    ReleaseCompound {
+        path: usize,
+        ids: Vec<String>,
+        #[serde(default)]
+        uids: Vec<String>,
+    },
     /// Reduce a path's node count (Ramer–Douglas–Peucker) within `tolerance` document units.
     SimplifyPath { path: usize, tolerance: f64 },
     /// Expand a path's stroke (`width`) into a filled outline: the source is soft-deleted and a
     /// new fill path (`id`) is added, its fill taken from the source's stroke colour.
-    OutlineStroke { path: usize, width: f64, id: String },
+    OutlineStroke {
+        path: usize,
+        width: f64,
+        id: String,
+        #[serde(default)]
+        uid: Option<String>,
+    },
     /// Offset a path's outline by `distance` (outward if positive, inward if negative), adding
     /// the result as a new path (`id`) that inherits the source's style; the source is kept.
     OffsetPath {
         path: usize,
         distance: f64,
         id: String,
+        #[serde(default)]
+        uid: Option<String>,
     },
 }
 
 /// A fresh in-app-drawn `PathElement` (its `uid`/`index` are filled in by [`add_drawn`]). The
 /// standard shape for every added path — pen/shape/paste plus boolean/outline/offset results.
-fn drawn_path(id: String, subpaths: Vec<Subpath>, attributes: IndexMap<String, String>) -> PathElement {
+fn drawn_path(
+    id: String,
+    subpaths: Vec<Subpath>,
+    attributes: IndexMap<String, String>,
+) -> PathElement {
     PathElement {
         id,
         uid: String::new(),
@@ -283,17 +313,20 @@ fn drawn_path(id: String, subpaths: Vec<Subpath>, attributes: IndexMap<String, S
     }
 }
 
-/// The single funnel for adding a drawn path: mint a tree `uid`, append a `<path>` node to the
-/// tree (top of z-order), and push the flat `PathElement`. Drawn content thus lives in the tree
-/// exactly like imported content — one representation, one serializer, unified z-order + panel.
-/// Returns the new path's index in `doc.paths`.
-fn add_drawn(doc: &mut SvgDocument, mut path: PathElement) -> usize {
+/// The single funnel for adding a drawn path: use the caller-supplied `uid` (so all clients agree
+/// on the new node's identity — the creator mints it once) or mint one locally if absent, append a
+/// `<path>` node to the tree (top of z-order), and push the flat `PathElement`. Drawn content thus
+/// lives in the tree exactly like imported content — one representation, one serializer, unified
+/// z-order + panel. Returns the new path's index in `doc.paths`.
+fn add_drawn(doc: &mut SvgDocument, mut path: PathElement, uid: Option<String>) -> usize {
     let index = doc.paths.len();
     path.index = index;
     path.added = true;
+    // The node's identity: the caller-supplied uid (so all clients agree) else a fresh one. Set on
+    // the path unconditionally, and mirrored onto the tree node when there is a tree.
+    let uid = uid.unwrap_or_else(crate::model::tree::new_id);
+    path.uid = uid.clone();
     if let Some(tree) = doc.tree.as_mut() {
-        let uid = tree.fresh_uid();
-        path.uid = uid.clone();
         let attrs = path.attributes.clone().unwrap_or_default();
         let d = crate::model::path::path_to_d_prec(&path.subpaths, 3);
         tree.append_drawn(crate::model::tree::make_path_node(&uid, &attrs, &d));
@@ -396,7 +429,11 @@ fn spec_finite(spec: &ShapeSpec) -> bool {
             [x0, y0, x1, y1].iter().all(|v| v.is_finite())
         }
         ShapeSpec::Polygon {
-            cx, cy, r, rotation, ..
+            cx,
+            cy,
+            r,
+            rotation,
+            ..
         } => [cx, cy, r, rotation].iter().all(|v| v.is_finite()),
         ShapeSpec::Star {
             cx,
@@ -405,15 +442,17 @@ fn spec_finite(spec: &ShapeSpec) -> bool {
             inner,
             rotation,
             ..
-        } => [cx, cy, outer, inner, rotation].iter().all(|v| v.is_finite()),
+        } => [cx, cy, outer, inner, rotation]
+            .iter()
+            .all(|v| v.is_finite()),
     }
 }
 /// Whether every coordinate/scalar an op carries is finite. Ops with no geometry are always OK.
 fn op_is_finite(op: &Op) -> bool {
     match op {
-        Op::MoveNode { to, .. }
-        | Op::MoveHandle { to, .. }
-        | Op::SetPenHandles { out: to, .. } => point_finite(to),
+        Op::MoveNode { to, .. } | Op::MoveHandle { to, .. } | Op::SetPenHandles { out: to, .. } => {
+            point_finite(to)
+        }
         Op::SetSubpaths { subpaths, .. } | Op::AddPath { subpaths, .. } => {
             subpaths_finite(subpaths)
         }
@@ -646,14 +685,20 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             id,
             subpaths,
             attributes,
+            uid,
         } => {
-            add_drawn(doc, drawn_path(id.clone(), subpaths.clone(), attributes.clone()));
+            add_drawn(
+                doc,
+                drawn_path(id.clone(), subpaths.clone(), attributes.clone()),
+                uid.clone(),
+            );
             true
         }
         Op::AddShape {
             id,
             spec,
             attributes,
+            uid,
         } => {
             let (nodes, closed) = spec.build();
             add_drawn(
@@ -663,6 +708,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                     vec![Subpath { nodes, closed }],
                     attributes.clone(),
                 ),
+                uid.clone(),
             );
             true
         }
@@ -807,7 +853,7 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             doc.gradients.retain(|g| &g.id != id);
             doc.gradients.len() != before
         }
-        Op::BooleanOp { op, paths, id } => {
+        Op::BooleanOp { op, paths, id, uid } => {
             let mut idxs: Vec<usize> = paths
                 .iter()
                 .copied()
@@ -836,10 +882,14 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             for &i in &idxs {
                 doc.paths[i].deleted = true;
             }
-            add_drawn(doc, drawn_path(id.clone(), subpaths, attributes));
+            add_drawn(
+                doc,
+                drawn_path(id.clone(), subpaths, attributes),
+                uid.clone(),
+            );
             true
         }
-        Op::CombinePaths { paths, id } => {
+        Op::CombinePaths { paths, id, uid } => {
             let mut idxs: Vec<usize> = paths
                 .iter()
                 .copied()
@@ -886,10 +936,14 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             for &i in &idxs {
                 doc.paths[i].deleted = true;
             }
-            add_drawn(doc, drawn_path(id.clone(), subpaths, attributes));
+            add_drawn(
+                doc,
+                drawn_path(id.clone(), subpaths, attributes),
+                uid.clone(),
+            );
             true
         }
-        Op::ReleaseCompound { path, ids } => {
+        Op::ReleaseCompound { path, ids, uids } => {
             let Some(p) = doc.paths.get(*path) else {
                 return false;
             };
@@ -912,7 +966,11 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                     .get(k)
                     .cloned()
                     .unwrap_or_else(|| format!("{}-{}", base_id, k + 1));
-                add_drawn(doc, drawn_path(id, vec![sp], attributes.clone()));
+                add_drawn(
+                    doc,
+                    drawn_path(id, vec![sp], attributes.clone()),
+                    uids.get(k).cloned(),
+                );
             }
             true
         }
@@ -930,7 +988,12 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             p.edited = true;
             true
         }
-        Op::OutlineStroke { path, width, id } => {
+        Op::OutlineStroke {
+            path,
+            width,
+            id,
+            uid,
+        } => {
             let (subpaths, attributes) = {
                 let Some(p) = doc.paths.get(*path) else {
                     return false;
@@ -958,10 +1021,19 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 (subpaths, m)
             };
             doc.paths[*path].deleted = true;
-            add_drawn(doc, drawn_path(id.clone(), subpaths, attributes));
+            add_drawn(
+                doc,
+                drawn_path(id.clone(), subpaths, attributes),
+                uid.clone(),
+            );
             true
         }
-        Op::OffsetPath { path, distance, id } => {
+        Op::OffsetPath {
+            path,
+            distance,
+            id,
+            uid,
+        } => {
             let (subpaths, attributes) = {
                 let Some(p) = doc.paths.get(*path) else {
                     return false;
@@ -981,7 +1053,11 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 }
                 (subpaths, m)
             };
-            add_drawn(doc, drawn_path(id.clone(), subpaths, attributes));
+            add_drawn(
+                doc,
+                drawn_path(id.clone(), subpaths, attributes),
+                uid.clone(),
+            );
             true
         }
     }
@@ -1254,6 +1330,7 @@ mod tests {
             &mut doc,
             &Op::AddPath {
                 id: "drawn-1".into(),
+                uid: None,
                 subpaths: parse_path_d("M 1 1 L 2 2"),
                 attributes: attrs,
             }
@@ -1266,12 +1343,30 @@ mod tests {
     }
 
     #[test]
+    fn add_path_honors_a_caller_supplied_uid() {
+        // The creator mints the node's uid once + carries it in the op; the reducer must use it
+        // verbatim (not mint its own) so a peer replaying the op agrees on the identity.
+        let mut doc = doc_from("M 0 0 L 10 0", false);
+        assert!(apply(
+            &mut doc,
+            &Op::AddPath {
+                id: "drawn".into(),
+                uid: Some("shared-uid-123".into()),
+                subpaths: parse_path_d("M 1 1 L 2 2"),
+                attributes: IndexMap::new(),
+            }
+        ));
+        assert_eq!(doc.paths.last().unwrap().uid, "shared-uid-123");
+    }
+
+    #[test]
     fn reorder_path_moves_within_the_draw_order() {
         let mut doc = doc_from("M 0 0 L 1 1", true);
         apply(
             &mut doc,
             &Op::AddPath {
                 id: "b".into(),
+                uid: None,
                 subpaths: parse_path_d("M 0 0 L 2 2"),
                 attributes: IndexMap::new(),
             },
@@ -1280,6 +1375,7 @@ mod tests {
             &mut doc,
             &Op::AddPath {
                 id: "c".into(),
+                uid: None,
                 subpaths: parse_path_d("M 0 0 L 3 3"),
                 attributes: IndexMap::new(),
             },
@@ -1377,11 +1473,23 @@ mod tests {
         assert_eq!(doc.paths.len(), 800, "every rect projects");
         // A full sweep of edits (each mutation is O(path), so the sweep is O(n), not O(n²)).
         for i in 0..800 {
-            assert!(apply(&mut doc, &Op::MovePathBy { path: i, dx: 1.0, dy: 1.0 }));
+            assert!(apply(
+                &mut doc,
+                &Op::MovePathBy {
+                    path: i,
+                    dx: 1.0,
+                    dy: 1.0
+                }
+            ));
         }
         // Serialize (reconcile onto a tree clone + emit) stays correct at scale.
         let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
-        assert_eq!(out.matches("<rect").count(), 800, "moved rects re-fit as <rect>: {}", out.len());
+        assert_eq!(
+            out.matches("<rect").count(),
+            800,
+            "moved rects re-fit as <rect>: {}",
+            out.len()
+        );
     }
 
     #[test]
@@ -1415,18 +1523,34 @@ mod tests {
             walk(&tree.root, id).unwrap().to_string()
         }
         let t = doc.tree.as_ref().unwrap();
-        let (ua, ub, ugrp, uc) = (uid_of(t, "a"), uid_of(t, "b"), uid_of(t, "grp"), uid_of(t, "c"));
+        let (ua, ub, ugrp, uc) = (
+            uid_of(t, "a"),
+            uid_of(t, "b"),
+            uid_of(t, "grp"),
+            uid_of(t, "c"),
+        );
         // Move `a` after `b` (reorder siblings) → document order b, a, <g>.
         assert!(apply(
             &mut doc,
-            &Op::MoveTreeNode { uid: ua.clone(), ref_uid: ub, position: "after".into() }
+            &Op::MoveTreeNode {
+                uid: ua.clone(),
+                ref_uid: ub,
+                position: "after".into()
+            }
         ));
         let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
-        assert!(out.find("id=\"b\"").unwrap() < out.find("id=\"a\"").unwrap(), "b before a: {out}");
+        assert!(
+            out.find("id=\"b\"").unwrap() < out.find("id=\"a\"").unwrap(),
+            "b before a: {out}"
+        );
         // Move `a` INTO the group → it becomes a child of <g id="grp"> (reparent).
         assert!(apply(
             &mut doc,
-            &Op::MoveTreeNode { uid: ua, ref_uid: ugrp.clone(), position: "inside".into() }
+            &Op::MoveTreeNode {
+                uid: ua,
+                ref_uid: ugrp.clone(),
+                position: "inside".into()
+            }
         ));
         let out2 = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
         // `a` now sits inside the group.
@@ -1437,7 +1561,11 @@ mod tests {
         // Cycle guard: moving the group inside its own child is a no-op.
         assert!(!apply(
             &mut doc,
-            &Op::MoveTreeNode { uid: ugrp, ref_uid: uc, position: "inside".into() }
+            &Op::MoveTreeNode {
+                uid: ugrp,
+                ref_uid: uc,
+                position: "inside".into()
+            }
         ));
     }
 
@@ -1455,18 +1583,25 @@ mod tests {
             &mut doc,
             &Op::AddPath {
                 id: "drawn".into(),
+                uid: None,
                 subpaths: parse_path_d("M 20 20 L 40 20 L 40 40 Z"),
                 attributes: style,
             }
         ));
         // The drawn path got a tree uid + node (not a uid-less orphan).
         let last = doc.paths.last().unwrap();
-        assert!(last.added && !last.uid.is_empty(), "drawn path is in the tree");
+        assert!(
+            last.added && !last.uid.is_empty(),
+            "drawn path is in the tree"
+        );
         // Serializing via the tree emits it (no separate append step) + keeps the rect verbatim.
         let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
         assert!(out.contains("M 20 20"), "drawn geometry emitted: {out}");
         assert!(out.contains("fill=\"#f00\""), "drawn style emitted: {out}");
-        assert!(out.contains("<rect id=\"a\""), "imported rect preserved: {out}");
+        assert!(
+            out.contains("<rect id=\"a\""),
+            "imported rect preserved: {out}"
+        );
     }
 
     #[test]
@@ -1494,6 +1629,7 @@ mod tests {
             &mut doc,
             &Op::AddPath {
                 id: "r0".into(),
+                uid: None,
                 subpaths: s0,
                 attributes: a0,
             },
@@ -1502,6 +1638,7 @@ mod tests {
             &mut doc,
             &Op::AddPath {
                 id: "r1".into(),
+                uid: None,
                 subpaths: s1,
                 attributes: a1,
             },
@@ -1526,7 +1663,10 @@ mod tests {
         let results = tree_boolean_results(&doc);
         assert_eq!(results.len(), 1, "one live-boolean result");
         assert_eq!(results[0].uid, "grp");
-        assert!(!results[0].subpaths.is_empty(), "non-empty subtract geometry");
+        assert!(
+            !results[0].subpaths.is_empty(),
+            "non-empty subtract geometry"
+        );
         assert_eq!(results[0].operand_uids.len(), 2, "two operands recorded");
         // Export bakes the group to ONE computed path (operands not emitted separately).
         let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
@@ -1586,6 +1726,7 @@ mod tests {
             &mut doc,
             &Op::AddPath {
                 id: "dome".into(),
+                uid: None,
                 subpaths: parse_path_d("M 3 -2 Q 5 -6 7 -2"),
                 attributes: IndexMap::new(),
             },
@@ -1595,6 +1736,7 @@ mod tests {
             &Op::CombinePaths {
                 paths: vec![0, 1],
                 id: "compound".into(),
+                uid: None,
             }
         ));
         assert!(doc.paths[0].deleted && doc.paths[1].deleted);
@@ -1614,6 +1756,7 @@ mod tests {
             &mut doc,
             &Op::AddPath {
                 id: "rim".into(),
+                uid: None,
                 subpaths: parse_path_d("M 0 5 Q 5 8 10 5"),
                 attributes: rim_attrs,
             },
@@ -1624,6 +1767,7 @@ mod tests {
             &mut doc,
             &Op::AddPath {
                 id: "dome".into(),
+                uid: None,
                 subpaths: parse_path_d("M 0 0 L 10 0 L 10 10 Z"),
                 attributes: dome_attrs,
             },
@@ -1634,6 +1778,7 @@ mod tests {
             &Op::CombinePaths {
                 paths: vec![1, 2],
                 id: "compound".into(),
+                uid: None,
             }
         ));
         let compound = doc.paths.last().unwrap();
@@ -1654,6 +1799,7 @@ mod tests {
             &mut doc,
             &Op::AddPath {
                 id: "dome".into(),
+                uid: None,
                 subpaths: parse_path_d("M 3 -2 Q 5 -6 7 -2"),
                 attributes: IndexMap::new(),
             },
@@ -1663,6 +1809,7 @@ mod tests {
             &Op::CombinePaths {
                 paths: vec![0, 1],
                 id: "compound".into(),
+                uid: None,
             },
         );
         let compound_idx = doc.paths.len() - 1;
@@ -1671,6 +1818,7 @@ mod tests {
             &Op::ReleaseCompound {
                 path: compound_idx,
                 ids: vec!["piece-a".into(), "piece-b".into()],
+                uids: vec![],
             }
         ));
         assert!(doc.paths[compound_idx].deleted); // source compound gone
@@ -1686,6 +1834,7 @@ mod tests {
             &Op::ReleaseCompound {
                 path: last,
                 ids: vec!["x".into()],
+                uids: vec![],
             }
         ));
     }
@@ -1800,6 +1949,7 @@ mod tests {
             &mut doc,
             &Op::AddShape {
                 id: "poly".into(),
+                uid: None,
                 spec: ShapeSpec::Polygon {
                     cx: 0.0,
                     cy: 0.0,
@@ -1895,7 +2045,14 @@ mod tests {
                 to: Point::new(0.0, f64::NAN),
             }
         ));
-        assert!(!apply(&mut doc, &Op::MovePathBy { path: 0, dx: f64::NAN, dy: 0.0 }));
+        assert!(!apply(
+            &mut doc,
+            &Op::MovePathBy {
+                path: 0,
+                dx: f64::NAN,
+                dy: 0.0
+            }
+        ));
         assert_eq!(doc, before, "non-finite ops leave the document untouched");
     }
 
@@ -1906,6 +2063,7 @@ mod tests {
             &mut doc,
             &Op::AddShape {
                 id: "poly".into(),
+                uid: None,
                 spec: ShapeSpec::Polygon {
                     cx: 0.0,
                     cy: 0.0,

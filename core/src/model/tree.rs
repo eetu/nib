@@ -363,11 +363,18 @@ fn escape_attr(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// A fresh, globally-unique node id. Minted once at creation (parse or a drawn/group op) and then
+/// carried in ops + stored in the model — so no two processes ever invent a different id for the
+/// same node (the identity cornerstone). Not emitted to SVG; a pure in-memory/model handle.
+pub fn new_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
 /// Build a node from a roxmltree node, slicing verbatim spans out of `source`. Children are
 /// walked with gap-filling so any inter-child text (whitespace roxmltree may omit as nodes) is
-/// captured — guaranteeing the slices cover every byte of the element's span. `next_uid` hands
-/// out a fresh stable id per element in walk order.
-fn build(node: roxmltree::Node, source: &str, next_uid: &mut usize) -> Node {
+/// captured — guaranteeing the slices cover every byte of the element's span. Each element gets a
+/// fresh globally-unique `uid` at parse (the import mints identity once; it's then carried).
+fn build(node: roxmltree::Node, source: &str) -> Node {
     if node.is_comment() {
         let r = node.range();
         return Node::Comment(source[r].to_string());
@@ -381,8 +388,7 @@ fn build(node: roxmltree::Node, source: &str, next_uid: &mut usize) -> Node {
         return Node::Other(source[r].to_string());
     }
 
-    let uid = format!("n{}", *next_uid);
-    *next_uid += 1;
+    let uid = new_id();
     let r = node.range();
     let tag = node.tag_name().name().to_string();
     let attrs: Vec<(String, String)> = node
@@ -420,7 +426,7 @@ fn build(node: roxmltree::Node, source: &str, next_uid: &mut usize) -> Node {
         if kr.start > cursor {
             children.push(Node::Text(source[cursor..kr.start].to_string())); // gap = whitespace
         }
-        children.push(build(k, source, next_uid));
+        children.push(build(k, source));
         cursor = kr.end;
     }
 
@@ -492,10 +498,9 @@ pub fn parse_tree(source: &str) -> Result<Tree, String> {
         return Err("no <svg> root element found".to_string());
     }
     let r = root_el.range();
-    let mut next_uid = 0;
     Ok(Tree {
         prolog: source[..r.start].to_string(),
-        root: build(root_el, source, &mut next_uid),
+        root: build(root_el, source),
         epilog: source[r.end..].to_string(),
     })
 }
@@ -721,9 +726,7 @@ fn collect_paths(node: &Node, out: &mut Vec<PathElement>) {
         let style: IndexMap<String, String> = if *added {
             attrs
                 .iter()
-                .filter(|(k, _)| {
-                    k != "id" && k != "d" && !GEOMETRY_ATTRS.contains(&k.as_str())
-                })
+                .filter(|(k, _)| k != "id" && k != "d" && !GEOMETRY_ATTRS.contains(&k.as_str()))
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect()
         } else {
@@ -894,7 +897,12 @@ impl Tree {
 
     /// Like [`reconcile_paths`], but `normalize` regenerates every node canonically and forces
     /// every editable shape to a `<path>` — the basis of the "export normalized copy" action.
-    pub fn reconcile_paths_opt(&mut self, paths: &[PathElement], precision: usize, normalize: bool) {
+    pub fn reconcile_paths_opt(
+        &mut self,
+        paths: &[PathElement],
+        precision: usize,
+        normalize: bool,
+    ) {
         let by_uid: HashMap<&str, &PathElement> = paths
             .iter()
             .filter(|p| !p.uid.is_empty())
@@ -1060,27 +1068,11 @@ impl Tree {
         }
     }
 
-    /// A stable uid not already used by any element in the tree — `u0`, `u1`, … Drawn nodes and
-    /// groups mint one so their identity is unique for reconcile/addressing.
+    /// A fresh globally-unique uid for a drawn node/group created without a caller-supplied one
+    /// (standalone/local use). Sync producers instead carry the uid in the op so all clients agree;
+    /// this is the fallback when none is given. UUID-backed, so no scan for collisions is needed.
     pub fn fresh_uid(&self) -> String {
-        let mut used = std::collections::HashSet::new();
-        fn walk<'a>(n: &'a Node, used: &mut std::collections::HashSet<&'a str>) {
-            if let Node::Element { uid, children, .. } = n {
-                used.insert(uid.as_str());
-                for c in children {
-                    walk(c, used);
-                }
-            }
-        }
-        walk(&self.root, &mut used);
-        let mut k = 0usize;
-        loop {
-            let candidate = format!("u{k}");
-            if !used.contains(candidate.as_str()) {
-                return candidate;
-            }
-            k += 1;
-        }
+        new_id()
     }
 }
 
@@ -1124,9 +1116,9 @@ fn find_uid<'a>(node: &'a Node, uid: &str) -> Option<&'a Node> {
 /// Whether `uid` is `node` or anywhere in its subtree (cycle guard for moves).
 fn contains_uid(node: &Node, uid: &str) -> bool {
     match node {
-        Node::Element { uid: u, children, .. } => {
-            u == uid || children.iter().any(|c| contains_uid(c, uid))
-        }
+        Node::Element {
+            uid: u, children, ..
+        } => u == uid || children.iter().any(|c| contains_uid(c, uid)),
         _ => false,
     }
 }
@@ -1443,9 +1435,10 @@ mod tests {
         let unique: std::collections::HashSet<_> = uids.iter().collect();
         assert_eq!(unique.len(), uids.len(), "uids must be unique: {uids:?}");
         // uids are a pure in-memory handle — never written to the SVG.
+        let out = serialize_tree(&tree);
         assert!(
-            !serialize_tree(&tree).contains("n0"),
-            "uid leaked into output"
+            uids.iter().all(|u| !out.contains(*u)),
+            "a uid leaked into output"
         );
     }
 

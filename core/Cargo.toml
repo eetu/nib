@@ -20,6 +20,9 @@ xmlparser = "0.13.6"
 indexmap = { version = "2.14.0", features = ["serde"] }
 i_overlay = "7.0.2"
 serde_json = "1.0.150"
+# Stable, globally-unique node ids minted at creation (carried in ops, stored in the model) so no
+# two processes ever invent a different id for the same node. `js` = getrandom's wasm backend.
+uuid = { version = "1.11.0", features = ["v4", "js"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.76"

@@ -309,6 +309,16 @@ mod tests {
         let m2 = rx2.recv().await.unwrap();
         assert_eq!(m1.client_id, "clientA");
         assert_eq!(m1.ops.len(), 1);
+        // The create-op is broadcast carrying a minted uid (the caller supplied none), so every
+        // peer replaying it agrees on the new node's identity instead of inventing its own.
+        assert!(
+            m1.ops[0]
+                .get("uid")
+                .and_then(|v| v.as_str())
+                .is_some_and(|u| !u.is_empty()),
+            "create-op broadcast carries a uid: {:?}",
+            m1.ops[0]
+        );
         assert_eq!(m2.client_id, "clientA");
 
         let _ = std::fs::remove_file(&path);

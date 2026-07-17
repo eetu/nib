@@ -31,6 +31,37 @@ pub struct SyncMsg {
     pub ops: Vec<serde_json::Value>,
 }
 
+/// Stamp a fresh globally-unique `uid` (or `uids`, for `releaseCompound`) onto a create-op that
+/// lacks one — so the node's identity is minted once and carried, never re-invented by a peer
+/// replaying the op. A no-op for non-create ops and for ops that already carry a uid.
+fn ensure_create_uid(op: &mut serde_json::Value) {
+    let Some(ty) = op.get("type").and_then(|t| t.as_str()) else {
+        return;
+    };
+    match ty {
+        "releaseCompound" => {
+            let n = op
+                .get("ids")
+                .and_then(|v| v.as_array())
+                .map_or(0, |a| a.len());
+            let has = op
+                .get("uids")
+                .and_then(|v| v.as_array())
+                .is_some_and(|a| !a.is_empty());
+            if n > 0 && !has {
+                let uids: Vec<String> = (0..n).map(|_| nib_core::model::tree::new_id()).collect();
+                op["uids"] = serde_json::json!(uids);
+            }
+        }
+        "addPath" | "addShape" | "booleanOp" | "combinePaths" | "outlineStroke" | "offsetPath" => {
+            if op.get("uid").and_then(|v| v.as_str()).is_none() {
+                op["uid"] = serde_json::json!(nib_core::model::tree::new_id());
+            }
+        }
+        _ => {}
+    }
+}
+
 /// The authoritative in-memory session for one open project.
 pub struct ProjectSession {
     pub project_id: i64,
@@ -79,9 +110,14 @@ pub async fn open(
 pub fn apply_ops(
     session: &Arc<Mutex<ProjectSession>>,
     pool: &SqlitePool,
-    ops: Vec<serde_json::Value>,
+    mut ops: Vec<serde_json::Value>,
     origin: &str,
 ) -> Result<usize, String> {
+    // A create-op mints a new node's identity; stamp a uid if the caller didn't (the LLM's raw
+    // apply_op, an MCP wrapper), so the applied + broadcast op carries it and every client agrees.
+    for op in ops.iter_mut() {
+        ensure_create_uid(op);
+    }
     let parsed: Vec<Op> = ops
         .iter()
         .map(|v| serde_json::from_value(v.clone()).map_err(|e| format!("invalid op: {e}")))

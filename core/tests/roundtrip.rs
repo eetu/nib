@@ -33,7 +33,10 @@ const CORPUS: &[(&str, &str)] = &[
     ("compact-path", include_str!("fixtures/compact-path.svg")),
     ("inkscape", include_str!("fixtures/inkscape.svg")),
     ("illustrator", include_str!("fixtures/illustrator.svg")),
-    ("icon-optimized", include_str!("fixtures/icon-optimized.svg")),
+    (
+        "icon-optimized",
+        include_str!("fixtures/icon-optimized.svg"),
+    ),
 ];
 
 /// `<defs>` content (clipPath/mask/gradient/filter contents) is not directly-editable canvas
@@ -44,7 +47,11 @@ fn defs_contents_do_not_project_as_editable_paths() {
     let doc = parse_svg(include_str!("fixtures/defs.svg")).unwrap();
     let paths = doc.tree.as_ref().unwrap().project_paths();
     let ids: Vec<&str> = paths.iter().map(|p| p.id.as_str()).collect();
-    assert_eq!(ids, ["rect-0", "path-1"], "only the referencing shapes project: {ids:?}");
+    assert_eq!(
+        ids,
+        ["rect-0", "path-1"],
+        "only the referencing shapes project: {ids:?}"
+    );
 }
 
 /// An unedited document must serialize back to its exact source — nib touches only what the
@@ -89,12 +96,15 @@ fn malformed_input_errors_without_panicking() {
         "   ",
         "not svg at all",
         "<div>nope</div>",
-        "<svg>",             // unclosed
+        "<svg>",                // unclosed
         "<svg><path d=></svg>", // broken attr
         "<?xml version=\"1.0\"?>",
         "<svg xmlns=\"http://www.w3.org/2000/svg\"><g></svg>", // mismatched close
     ] {
-        assert!(parse_svg(bad).is_err(), "expected Err (not panic/Ok) for {bad:?}");
+        assert!(
+            parse_svg(bad).is_err(),
+            "expected Err (not panic/Ok) for {bad:?}"
+        );
     }
     // A degenerate-but-valid empty root parses + round-trips.
     let empty = "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
@@ -114,7 +124,10 @@ fn deeply_nested_svg_errors_without_overflowing() {
         s.push_str("</g>");
     }
     s.push_str("</svg>");
-    assert!(parse_svg(&s).is_err(), "over-deep nesting must Err, not panic/overflow");
+    assert!(
+        parse_svg(&s).is_err(),
+        "over-deep nesting must Err, not panic/overflow"
+    );
 }
 
 /// Editing one path leaves entity-laden siblings byte-for-byte — the surgical splice touches only
@@ -127,8 +140,14 @@ fn editing_preserves_entity_laden_siblings() {
     doc.paths[0].subpaths[0].nodes[1].point = Point { x: 80.0, y: 80.0 };
     doc.paths[0].edited = true;
     let out = serialize_svg(&doc);
-    assert!(out.contains("Rock &amp; Roll &lt;3&gt; &#169; &#xB5;"), "desc verbatim: {out}");
-    assert!(out.contains(r#"id="a&amp;b""#), "edited path keeps its escaped id: {out}");
+    assert!(
+        out.contains("Rock &amp; Roll &lt;3&gt; &#169; &#xB5;"),
+        "desc verbatim: {out}"
+    );
+    assert!(
+        out.contains(r#"id="a&amp;b""#),
+        "edited path keeps its escaped id: {out}"
+    );
     assert!(out.contains("L 80 80"), "the edit applied: {out}");
 }
 
@@ -146,12 +165,24 @@ fn editing_preserves_inkscape_producer_cruft() {
     doc.paths[0].subpaths[0].nodes[last].point = Point { x: 50.0, y: 50.0 };
     doc.paths[0].edited = true;
     let out = serialize_svg(&doc);
-    assert!(out.contains(r#"<sodipodi:namedview"#), "namedview survives: {out}");
-    assert!(out.contains(r#"inkscape:current-layer="layer1""#), "namedview attrs verbatim: {out}");
-    assert!(out.contains("<dc:format>image/svg+xml</dc:format>"), "RDF metadata verbatim: {out}");
+    assert!(
+        out.contains(r#"<sodipodi:namedview"#),
+        "namedview survives: {out}"
+    );
+    assert!(
+        out.contains(r#"inkscape:current-layer="layer1""#),
+        "namedview attrs verbatim: {out}"
+    );
+    assert!(
+        out.contains("<dc:format>image/svg+xml</dc:format>"),
+        "RDF metadata verbatim: {out}"
+    );
     assert!(
         out.contains(r#"<g inkscape:label="Layer 1" inkscape:groupmode="layer" id="layer1">"#),
         "layer group wrapper verbatim: {out}"
     );
-    assert!(out.contains(r#"id="path1""#), "edited path keeps its id: {out}");
+    assert!(
+        out.contains(r#"id="path1""#),
+        "edited path keeps its id: {out}"
+    );
 }

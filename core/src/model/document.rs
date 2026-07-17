@@ -441,7 +441,11 @@ fn escape_attr(s: &str) -> String {
 /// out of order would otherwise be dropped. (The model keeps insertion order for stable drag.)
 fn gradient_to_svg(g: &Gradient) -> String {
     let mut ordered: Vec<&crate::model::types::GradientStop> = g.stops.iter().collect();
-    ordered.sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal));
+    ordered.sort_by(|a, b| {
+        a.offset
+            .partial_cmp(&b.offset)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let stops: String = ordered
         .iter()
         .map(|s| {
@@ -647,7 +651,12 @@ pub fn serialize_normalized(doc: &SvgDocument, base: &Tree, precision: usize) ->
     serialize_via_tree_opt(doc, base, precision, true)
 }
 
-fn serialize_via_tree_opt(doc: &SvgDocument, base: &Tree, precision: usize, normalize: bool) -> String {
+fn serialize_via_tree_opt(
+    doc: &SvgDocument,
+    base: &Tree,
+    precision: usize,
+    normalize: bool,
+) -> String {
     let mut tree = base.clone();
     tree.reconcile_paths_opt(&doc.paths, precision, normalize);
     // A source gradient the model has adopted (same id in `doc.gradients`) is dropped from the tree
@@ -848,7 +857,11 @@ mod tests {
         doc.gradients.push(Gradient {
             id: "g1".into(),
             kind: "linear".into(),
-            stops: vec![stop(0.0, "#000000"), stop(1.0, "#ffffff"), stop(0.5, "#ff0000")],
+            stops: vec![
+                stop(0.0, "#000000"),
+                stop(1.0, "#ffffff"),
+                stop(0.5, "#ff0000"),
+            ],
             x1: 0.0,
             y1: 0.0,
             x2: 1.0,
@@ -861,7 +874,10 @@ mod tests {
         let p0 = out.find("offset=\"0\"").unwrap();
         let phalf = out.find("offset=\"0.5\"").unwrap();
         let p1 = out.find("offset=\"1\"").unwrap();
-        assert!(p0 < phalf && phalf < p1, "stops emit in offset order: {out}");
+        assert!(
+            p0 < phalf && phalf < p1,
+            "stops emit in offset order: {out}"
+        );
     }
 
     #[test]
@@ -909,9 +925,16 @@ mod tests {
         });
         let tree = doc.tree.clone().unwrap();
         let out = serialize_via_tree(&doc, &tree, 3);
-        assert_eq!(out.matches("id=\"grad\"").count(), 1, "gradient defined once: {out}");
+        assert_eq!(
+            out.matches("id=\"grad\"").count(),
+            1,
+            "gradient defined once: {out}"
+        );
         assert!(out.contains("#00ff00"), "model version emitted: {out}");
-        assert!(!out.contains("#ff0000"), "source gradient dropped (deduped): {out}");
+        assert!(
+            !out.contains("#ff0000"),
+            "source gradient dropped (deduped): {out}"
+        );
         assert!(out.contains("url(#grad)"), "reference intact: {out}");
     }
 
