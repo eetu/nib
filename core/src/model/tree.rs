@@ -699,8 +699,20 @@ fn collect_paths(node: &Node, out: &mut Vec<PathElement>) {
     else {
         return;
     };
-    // A `<defs>`/clipPath/mask/… subtree renders only by reference — never project its inner shapes
-    // as editable paths (nor recurse), or they'd become phantom rows in the panel + `doc.paths`.
+    // A **component definition** is a `<g>` living directly inside a `<defs>` (referenced by
+    // `<use>`): descend into those `<g>`s so their shapes project as editable paths — edit the
+    // definition once and every `<use>` instance updates. Everything else a `<defs>` holds
+    // (gradients/clipPath/mask/filter/symbol/pattern/marker) renders only by reference, so it stays
+    // opaque + re-emits verbatim (no phantom rows/paths).
+    if tag == "defs" {
+        for c in children {
+            if matches!(c, Node::Element { tag, .. } if tag == "g") {
+                collect_paths(c, out);
+            }
+        }
+        return;
+    }
+    // Any other def container (or a non-`<g>` in `<defs>`) never projects its inner shapes.
     if DEF_CONTAINERS.contains(&tag.as_str()) {
         return;
     }
@@ -1389,6 +1401,7 @@ mod tests {
         include_str!("../../tests/fixtures/doctype-comments.svg"),
         include_str!("../../tests/fixtures/nested-deep.svg"),
         include_str!("../../tests/fixtures/compact-path.svg"),
+        include_str!("../../tests/fixtures/components.svg"),
     ];
 
     #[test]
@@ -1551,9 +1564,10 @@ mod tests {
     fn project_paths_matches_the_flat_parser_for_path_only_docs() {
         // For path-only fixtures the projection reproduces the flat parser exactly (regression
         // guard). Only the new `uid` differs, so compare with uid cleared. Fixtures with
-        // primitives (mixed-elements #3, shapes #7, defs #8 — a rect) project extra editable paths.
+        // primitives (mixed-elements #3, shapes #7, defs #8 — a rect) project extra editable paths,
+        // as does components #16 (a `<g>`-in-`<defs>` component whose shapes now project).
         for (i, src) in CORPUS.iter().enumerate() {
-            if i == 3 || i == 7 || i == 8 {
+            if i == 3 || i == 7 || i == 8 || i == 16 {
                 continue;
             }
             let projected: Vec<_> = parse_tree(src)

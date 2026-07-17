@@ -33,6 +33,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("compact-path", include_str!("fixtures/compact-path.svg")),
     ("inkscape", include_str!("fixtures/inkscape.svg")),
     ("illustrator", include_str!("fixtures/illustrator.svg")),
+    ("components", include_str!("fixtures/components.svg")),
     (
         "icon-optimized",
         include_str!("fixtures/icon-optimized.svg"),
@@ -52,6 +53,30 @@ fn defs_contents_do_not_project_as_editable_paths() {
         ["rect-0", "path-1"],
         "only the referencing shapes project: {ids:?}"
     );
+}
+
+/// A **component** = a `<g>` directly inside a `<defs>`. Its shapes MUST project as editable paths
+/// (so editing the definition propagates to every `<use>`), while other def content (a `<circle>` in
+/// a `<clipPath>`) stays opaque — the carve-out is `<g>`-in-`<defs>` only. `<use>` never projects.
+#[test]
+fn component_def_group_projects_its_shapes_but_other_defs_stay_opaque() {
+    let doc = parse_svg(include_str!("fixtures/components.svg")).unwrap();
+    let paths = doc.tree.as_ref().unwrap().project_paths();
+    // The die's body + 6 pips (inside <defs><g id="die">) project; the two <use> instances do not.
+    assert_eq!(paths.len(), 7, "die body + 6 pips project: {:?}", ids(&paths));
+    assert!(
+        paths.iter().all(|p| !p.uid.is_empty()),
+        "def-shapes carry uids (editable + sync-addressable)"
+    );
+
+    // Control: a <circle> inside a <clipPath> (defs.svg) must still NOT project.
+    let defs = parse_svg(include_str!("fixtures/defs.svg")).unwrap();
+    let dids = ids(&defs.tree.as_ref().unwrap().project_paths());
+    assert_eq!(dids, ["rect-0", "path-1"], "clipPath contents stay opaque: {dids:?}");
+}
+
+fn ids(paths: &[nib_core::model::types::PathElement]) -> Vec<String> {
+    paths.iter().map(|p| p.id.clone()).collect()
 }
 
 /// An unedited document must serialize back to its exact source — nib touches only what the

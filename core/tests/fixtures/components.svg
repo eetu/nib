@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <g id="die">
+      <rect x="0" y="0" width="9" height="9" fill="#fbfbf5" stroke="#333333"/>
+      <circle cx="2.5" cy="2.5" r="0.8" fill="#333333"/>
+      <circle cx="2.5" cy="4.5" r="0.8" fill="#333333"/>
+      <circle cx="2.5" cy="6.5" r="0.8" fill="#333333"/>
+      <circle cx="6.5" cy="2.5" r="0.8" fill="#333333"/>
+      <circle cx="6.5" cy="4.5" r="0.8" fill="#333333"/>
+      <circle cx="6.5" cy="6.5" r="0.8" fill="#333333"/>
+    </g>
+  </defs>
+  <use href="#die" x="20" y="20"/>
+  <use href="#die" x="60" y="40"/>
+</svg>
