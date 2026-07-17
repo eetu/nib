@@ -17,16 +17,41 @@ fn corner(x: f64, y: f64) -> PathNode {
     PathNode::corner(Point::new(x, y))
 }
 
-/// Four corner nodes of an axis-aligned rectangle (coords normalized so any drag direction
-/// works). Closed, no handles.
-pub fn rect_nodes(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<PathNode> {
+/// Nodes of an axis-aligned rectangle (coords normalized so any drag direction works). `rx`/`ry`
+/// are the corner radii: `0` (the default) gives a sharp 4-corner rect; a positive radius gives a
+/// rounded rect — 8 smooth nodes with quarter-ellipse bezier corners (radii clamped to half the
+/// side). `ry <= 0` mirrors `rx`, so a single radius rounds evenly. Closed.
+pub fn rect_nodes(x0: f64, y0: f64, x1: f64, y1: f64, rx: f64, ry: f64) -> Vec<PathNode> {
     let (ax, bx) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
     let (ay, by) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
+    let crx = rx.max(0.0).min((bx - ax) / 2.0);
+    let cry = if ry > 0.0 { ry } else { rx }.max(0.0).min((by - ay) / 2.0);
+    if crx < 1e-6 || cry < 1e-6 {
+        return vec![
+            corner(ax, ay),
+            corner(bx, ay),
+            corner(bx, by),
+            corner(ax, by),
+        ];
+    }
+    let (kx, ky) = (KAPPA * crx, KAPPA * cry);
+    // Clockwise from the top edge's left end. Each node touches one straight edge (no handle that
+    // side) and one corner arc (a bezier handle toward the corner) — tangent-continuous, so smooth.
+    let smooth = |x: f64, y: f64, hin: Option<(f64, f64)>, hout: Option<(f64, f64)>| PathNode {
+        point: Point::new(x, y),
+        handle_in: hin.map(|(hx, hy)| Point::new(hx, hy)),
+        handle_out: hout.map(|(hx, hy)| Point::new(hx, hy)),
+        node_type: NodeType::Smooth,
+    };
     vec![
-        corner(ax, ay),
-        corner(bx, ay),
-        corner(bx, by),
-        corner(ax, by),
+        smooth(ax + crx, ay, Some((ax + crx - kx, ay)), None), // top-left → top edge
+        smooth(bx - crx, ay, None, Some((bx - crx + kx, ay))), // top edge → top-right arc
+        smooth(bx, ay + cry, Some((bx, ay + cry - ky)), None), // right edge
+        smooth(bx, by - cry, None, Some((bx, by - cry + ky))), // right edge → bottom-right arc
+        smooth(bx - crx, by, Some((bx - crx + kx, by)), None), // bottom edge
+        smooth(ax + crx, by, None, Some((ax + crx - kx, by))), // bottom edge → bottom-left arc
+        smooth(ax, by - cry, Some((ax, by - cry + ky)), None), // left edge
+        smooth(ax, ay + cry, None, Some((ax, ay + cry - ky))), // left edge → top-left arc
     ]
 }
 

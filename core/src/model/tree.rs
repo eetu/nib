@@ -110,7 +110,15 @@ pub fn shape_subpaths(tag: &str, attrs: &[(String, String)]) -> Option<Vec<Subpa
             if w <= 0.0 || h <= 0.0 {
                 return None;
             }
-            closed(rect_nodes(x, y, x + w, y + h))
+            // Read `rx`/`ry` so an imported rounded `<rect>` projects with rounded geometry.
+            closed(rect_nodes(
+                x,
+                y,
+                x + w,
+                y + h,
+                num(attrs, "rx", 0.0),
+                num(attrs, "ry", 0.0),
+            ))
         }
         "circle" => {
             let r = num(attrs, "r", 0.0);
@@ -227,8 +235,10 @@ fn refit(tag: &str, subpaths: &[Subpath], precision: usize) -> Option<Vec<(Strin
     match tag {
         "rect" => {
             let (x0, y0, x1, y1) = points_bbox(subpaths)?;
+            // refit recognises only a SHARP axis-aligned rect; a rounded one (8 nodes) won't match
+            // this 4-node rebuild and falls to `<path>` — correct (its `d` carries the radii).
             let rebuilt = [Subpath {
-                nodes: rect_nodes(x0, y0, x1, y1),
+                nodes: rect_nodes(x0, y0, x1, y1, 0.0, 0.0),
                 closed: true,
             }];
             subpaths_match(subpaths, &rebuilt).then(|| {

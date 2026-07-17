@@ -45,6 +45,11 @@ pub enum ShapeSpec {
         y0: f64,
         x1: f64,
         y1: f64,
+        /// Corner radii (0 = sharp). `ry <= 0` mirrors `rx` for even rounding.
+        #[serde(default)]
+        rx: f64,
+        #[serde(default)]
+        ry: f64,
     },
     Line {
         x0: f64,
@@ -74,7 +79,14 @@ impl ShapeSpec {
     fn build(&self) -> (Vec<PathNode>, bool) {
         match *self {
             ShapeSpec::Ellipse { cx, cy, rx, ry } => (ellipse_nodes(cx, cy, rx, ry), true),
-            ShapeSpec::Rect { x0, y0, x1, y1 } => (rect_nodes(x0, y0, x1, y1), true),
+            ShapeSpec::Rect {
+                x0,
+                y0,
+                x1,
+                y1,
+                rx,
+                ry,
+            } => (rect_nodes(x0, y0, x1, y1, rx, ry), true),
             ShapeSpec::Line { x0, y0, x1, y1 } => (line_nodes(x0, y0, x1, y1), false),
             ShapeSpec::Polygon {
                 cx,
@@ -477,9 +489,15 @@ fn subpaths_finite(sps: &[Subpath]) -> bool {
 fn spec_finite(spec: &ShapeSpec) -> bool {
     match *spec {
         ShapeSpec::Ellipse { cx, cy, rx, ry } => [cx, cy, rx, ry].iter().all(|v| v.is_finite()),
-        ShapeSpec::Rect { x0, y0, x1, y1 } | ShapeSpec::Line { x0, y0, x1, y1 } => {
-            [x0, y0, x1, y1].iter().all(|v| v.is_finite())
-        }
+        ShapeSpec::Rect {
+            x0,
+            y0,
+            x1,
+            y1,
+            rx,
+            ry,
+        } => [x0, y0, x1, y1, rx, ry].iter().all(|v| v.is_finite()),
+        ShapeSpec::Line { x0, y0, x1, y1 } => [x0, y0, x1, y1].iter().all(|v| v.is_finite()),
         ShapeSpec::Polygon {
             cx,
             cy,
@@ -1361,6 +1379,57 @@ mod tests {
             }
         ));
         assert_eq!(doc3.paths[0].subpaths[0].nodes[1].point, before);
+    }
+
+    #[test]
+    fn rect_shape_supports_rounded_corners() {
+        let mut doc = doc_from("M 0 0", true);
+        // Sharp rect (rx 0) → the classic 4 corner nodes.
+        assert!(apply(
+            &mut doc,
+            &Op::SetShape {
+                path: 0,
+                subpath: 0,
+                spec: ShapeSpec::Rect {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 20.0,
+                    y1: 10.0,
+                    rx: 0.0,
+                    ry: 0.0,
+                },
+            }
+        ));
+        assert_eq!(doc.paths[0].subpaths[0].nodes.len(), 4);
+        // Rounded rect → 8 smooth nodes; the first sits on the top edge, inset rx from the corner.
+        assert!(apply(
+            &mut doc,
+            &Op::SetShape {
+                path: 0,
+                subpath: 0,
+                spec: ShapeSpec::Rect {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 20.0,
+                    y1: 10.0,
+                    rx: 4.0,
+                    ry: 0.0,
+                },
+            }
+        ));
+        let nodes = &doc.paths[0].subpaths[0].nodes;
+        assert_eq!(nodes.len(), 8, "rounded rect has 8 nodes");
+        assert!(
+            nodes
+                .iter()
+                .all(|n| n.node_type == crate::model::types::NodeType::Smooth),
+            "all corners smooth"
+        );
+        assert!(
+            (nodes[0].point.x - 4.0).abs() < 1e-6 && nodes[0].point.y.abs() < 1e-6,
+            "top edge starts inset by rx: {:?}",
+            nodes[0].point
+        );
     }
 
     #[test]
@@ -2375,6 +2444,8 @@ mod tests {
                     y0: 20.0,
                     x1: 30.0,
                     y1: 40.0,
+                    rx: 0.0,
+                    ry: 0.0,
                 },
             },
         );

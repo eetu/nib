@@ -371,14 +371,49 @@ fn collect_components(
     }
 }
 
-/// Bounding-box → a `ShapeSpec` JSON for `add_shape`. `None` for an unknown shape.
-fn shape_spec(shape: &str, x: f64, y: f64, w: f64, h: f64) -> Option<serde_json::Value> {
+/// Every tree-node uid whose `id` equals `name` — resolves a co-author's name to the node to act
+/// on, matching BOTH shapes and `<g>` groups (groups carry an `id`), so a caller can nest existing
+/// groups. Ambiguous (>1) is surfaced to the caller rather than guessed.
+fn uids_by_id(doc: &SvgDocument, name: &str) -> Vec<String> {
+    fn walk(nodes: &[RenderNode], name: &str, out: &mut Vec<String>) {
+        for n in nodes {
+            if let RenderNode::Element {
+                attrs,
+                uid,
+                children,
+                ..
+            } = n
+            {
+                if attrs.get("id").map(String::as_str) == Some(name) {
+                    out.push(uid.clone());
+                }
+                walk(children, name, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(tree) = doc.tree.as_ref() {
+        walk(&tree.render_children(), name, &mut out);
+    }
+    out
+}
+
+/// Bounding-box → a `ShapeSpec` JSON for `add_shape`. `radius` rounds a rect's corners (ignored by
+/// other shapes). `None` for an unknown shape.
+fn shape_spec(
+    shape: &str,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    radius: f64,
+) -> Option<serde_json::Value> {
     let (cx, cy) = (x + w / 2.0, y + h / 2.0);
     let r = w.min(h) / 2.0;
     let up = -std::f64::consts::FRAC_PI_2;
     Some(match shape {
         "ellipse" | "circle" => json!({"shape":"ellipse","cx":cx,"cy":cy,"rx":w/2.0,"ry":h/2.0}),
-        "rect" => json!({"shape":"rect","x0":x,"y0":y,"x1":x+w,"y1":y+h}),
+        "rect" => json!({"shape":"rect","x0":x,"y0":y,"x1":x+w,"y1":y+h,"rx":radius,"ry":radius}),
         "line" => json!({"shape":"line","x0":x,"y0":y,"x1":x+w,"y1":y+h}),
         "polygon" => json!({"shape":"polygon","cx":cx,"cy":cy,"r":r,"sides":6,"rotation":up}),
         "star" => {
@@ -448,6 +483,9 @@ pub struct AddShapeParams {
     /// (and they) recognise it later. Omit only for throwaway scaffolding.
     #[serde(default)]
     pub name: Option<String>,
+    /// Corner radius (viewBox units) for a `rect` — rounds its corners. Ignored by other shapes.
+    #[serde(default)]
+    pub radius: Option<f64>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -470,6 +508,14 @@ pub struct BooleanParams {
     pub op: String,
     /// The path indices to combine (2+).
     pub indices: Vec<usize>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct GroupNamedParams {
+    /// Names/ids of shapes and/or existing groups to wrap (2+). They must share one parent.
+    pub names: Vec<String>,
+    /// A descriptive name for the new parent group, e.g. "caesar".
+    pub name: String,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -676,7 +722,7 @@ impl NibMcp {
     ) -> Result<String, ErrorData> {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
-        let spec = shape_spec(&p.shape, p.x, p.y, p.w, p.h)
+        let spec = shape_spec(&p.shape, p.x, p.y, p.w, p.h, p.radius.unwrap_or(0.0))
             .ok_or_else(|| bad(format!("unknown shape: {}", p.shape)))?;
         let mut attrs = serde_json::Map::new();
         if let Some(f) = &p.fill {
@@ -810,6 +856,52 @@ impl NibMcp {
         }
         Ok(format!(
             "grouped {k} paths as \"{}\" → #indices renumbered, call get_document",
+            p.name
+        ))
+    }
+
+    #[tool(
+        description = "Group shapes AND/OR existing groups into a new named parent group, addressed by name/id — the way to NEST groups (e.g. group \"robe\",\"head\",\"arm\" → \"caesar\"). `group` takes path #indices only and can't reach a group; this can. Names must be unambiguous and share one parent. Renumbers #indices — call get_document after."
+    )]
+    async fn group_named(
+        &self,
+        Parameters(p): Parameters<GroupNamedParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        // Resolve each name → a single tree uid (shape or group) under the lock, then apply.
+        let uids: Vec<String> = {
+            let s = sess.lock().unwrap();
+            let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+            let mut v = Vec::with_capacity(p.names.len());
+            for nm in &p.names {
+                let m = uids_by_id(doc, nm);
+                match m.len() {
+                    0 => return Err(bad(format!("no shape or group named \"{nm}\""))),
+                    1 => v.push(m.into_iter().next().unwrap()),
+                    k => {
+                        return Err(bad(format!(
+                            "\"{nm}\" is ambiguous ({k} matches) — rename to disambiguate"
+                        )));
+                    }
+                }
+            }
+            v
+        };
+        if uids.len() < 2 {
+            return Err(bad("group_named needs at least 2 names"));
+        }
+        let k = uids.len();
+        let op = json!({ "type": "groupNodes", "uids": uids, "uid": self.gen_id("grp"), "name": p.name });
+        let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
+        if n == 0 {
+            return Err(bad(
+                "group_named did not apply — the named items must share one parent",
+            ));
+        }
+        Ok(format!(
+            "grouped {k} items as \"{}\" → #indices renumbered, call get_document",
             p.name
         ))
     }
