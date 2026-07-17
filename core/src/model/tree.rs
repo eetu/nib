@@ -776,7 +776,6 @@ fn reconcile_node(
     by_uid: &HashMap<&str, &PathElement>,
     precision: usize,
     regenerate_all: bool,
-    paths_only: bool,
 ) {
     let Node::Element {
         uid,
@@ -793,10 +792,9 @@ fn reconcile_node(
     else {
         return;
     };
-    // Canonical/normalized export: regenerate every element from its parsed tag+attrs (drop the
-    // verbatim span) — a clean, fully-derived copy vs the faithful byte-preserving save. Text nodes
-    // still emit verbatim, so whitespace/structure is kept. `paths_only` (normalized) additionally
-    // forces shapes to `<path>` below; canonical keeps primitives via `refit`.
+    // Canonical export: regenerate every element from its parsed tag+attrs (drop the verbatim span)
+    // — a clean, fully-derived copy vs the faithful byte-preserving save. Text nodes still emit
+    // verbatim, so whitespace/structure is kept; primitives are kept as primitives via `refit`.
     if regenerate_all {
         *edited = true;
     }
@@ -827,13 +825,13 @@ fn reconcile_node(
             *tag = "path".to_string();
             *edited = true;
         } else {
-            // `paths_only` (normalized) forces every editable shape to a canonical `<path>` (skip
-            // the refit that would keep a `<rect>`); canonical/faithful keep the primitive via
-            // `refit`. `regenerate_all` re-emits even an unedited shape (from the model geometry).
+            // Keep the primitive if the edited/regenerated geometry still fits its form (`refit`);
+            // a freeform reshape that broke the form falls to `<path>`. `regenerate_all` re-emits
+            // even an unedited shape (from the model geometry) for a clean canonical export.
             if p.edited || regenerate_all {
                 if tag == "path" {
                     set_or_push(attrs, "d", &path_to_d_prec(&p.subpaths, precision));
-                } else if !paths_only && let Some(geo) = refit(tag, &p.subpaths, precision) {
+                } else if let Some(geo) = refit(tag, &p.subpaths, precision) {
                     // A move/resize keeps the primitive in form → re-emit it as itself with
                     // updated geometry attrs (a `<rect>` stays a `<rect>`), preserving clean markup.
                     for (k, v) in geo {
@@ -865,7 +863,7 @@ fn reconcile_node(
         }
     }
     for c in children {
-        reconcile_node(c, by_uid, precision, regenerate_all, paths_only);
+        reconcile_node(c, by_uid, precision, regenerate_all);
     }
 }
 
@@ -895,31 +893,23 @@ impl Tree {
     /// that node edited so siblings stay verbatim. The return direction of `project_paths`; drawn
     /// (added) paths have no `uid`/node and are appended separately on export.
     pub fn reconcile_paths(&mut self, paths: &[PathElement], precision: usize) {
-        self.reconcile_paths_opt(paths, precision, false, false);
+        self.reconcile_paths_opt(paths, precision, false);
     }
 
-    /// Like [`reconcile_paths`], but `regenerate_all` re-emits every node canonically (drops verbatim
-    /// spans) and `paths_only` additionally forces every editable shape to a `<path>`. (false,false)
-    /// = faithful, (true,false) = canonical, (true,true) = normalized.
+    /// Like [`reconcile_paths`], but `regenerate_all` re-emits every node canonically (drops the
+    /// verbatim spans) — the canonical export. `false` = faithful (only edited nodes regenerate).
     pub fn reconcile_paths_opt(
         &mut self,
         paths: &[PathElement],
         precision: usize,
         regenerate_all: bool,
-        paths_only: bool,
     ) {
         let by_uid: HashMap<&str, &PathElement> = paths
             .iter()
             .filter(|p| !p.uid.is_empty())
             .map(|p| (p.uid.as_str(), p))
             .collect();
-        reconcile_node(
-            &mut self.root,
-            &by_uid,
-            precision,
-            regenerate_all,
-            paths_only,
-        );
+        reconcile_node(&mut self.root, &by_uid, precision, regenerate_all);
     }
 
     /// Show/hide the element with stable id `uid` (structural op). Returns whether it was found.

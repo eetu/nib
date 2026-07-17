@@ -21,9 +21,7 @@ pub mod ops;
 pub mod snap;
 
 use history::History;
-use model::document::{
-    parse_svg, serialize_canonical, serialize_normalized, serialize_svg, tree_boolean_results,
-};
+use model::document::{parse_svg, serialize_canonical, serialize_svg, tree_boolean_results};
 use model::tree::{Tree, parse_tree};
 use model::types::{Gradient, NodeRef, PathElement, Subpath, SvgDocument};
 use ops::Op;
@@ -404,19 +402,6 @@ impl Editor {
             Some(doc) => match &doc.tree {
                 Some(tree) => serialize_canonical(doc, tree, 3),
                 // Fallback (no tree, e.g. a doc set without source): the flat splice serializer.
-                None => serialize_svg(doc),
-            },
-            None => String::new(),
-        }
-    }
-
-    /// A normalized copy: every element regenerated canonically + every editable shape as a
-    /// `<path>` (no verbatim spans / primitives) — an "export normalized copy" action.
-    #[wasm_bindgen(js_name = toSvgNormalized)]
-    pub fn to_svg_normalized(&self) -> String {
-        match &self.doc {
-            Some(doc) => match &doc.tree {
-                Some(tree) => serialize_normalized(doc, tree, 3),
                 None => serialize_svg(doc),
             },
             None => String::new(),

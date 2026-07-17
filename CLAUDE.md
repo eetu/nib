@@ -63,12 +63,13 @@ Per-area detail in `frontend/CLAUDE.md`.
   hand"): semantic, mutable, may collide. The MCP **`find`** tool resolves a name to candidate
   object(s) so the LLM disambiguates ("left or right?") instead of guessing. Rename changes
   `name`, never `uid`. This is the load-bearing invariant for human↔LLM co-authorship.
-- **SVG export (byte-preserving by default; canonical on demand).** SVG is an *export*
-  format now, not the store of record. The default exporter (`to_svg`) preserves unedited
-  markup verbatim + re-serializes only *edited* paths (arcs in an edited path → cubics,
-  lossy; untouched paths never change); the normalized exporter (`toSvgNormalized` /
-  "export normalized copy") regenerates everything canonically, paths-only. Neither is the
-  identity substrate — the native model is.
+- **SVG export is canonical.** SVG is an *export* format now, not the store of record, so
+  `to_svg` regenerates the whole document cleanly from the model (`serialize_canonical`):
+  every element re-emitted from its tag+attrs, but **primitives kept** — a form-preserving
+  `<rect>`/`<circle>`/… stays that primitive (via `refit`), only a freeform reshape falls to
+  `<path>`. Byte-for-byte preservation is dropped as a contract; a faithful byte-preserving
+  serializer (`serialize_via_tree`) is retained for round-trip tests + as a capability, but
+  isn't the default. The native model — not any SVG form — is the identity substrate.
 - **One representation: the document tree** (`core/src/model/tree.rs`, `Node`/`Tree`).
   Imported *and* drawn content are nodes in the same tree — imported nodes parse from
   source (verbatim spans, byte-for-byte re-emit); **drawn (added) paths** are `<path>`
@@ -330,10 +331,9 @@ client-side pro pillars, all running on the core):
   **editable in place** — the first edit adopts them into `doc.gradients` keeping their id, and
   `serialize_via_tree` drops the source def (`Tree::remove_gradient_defs`) so it defines once
   (byte-for-byte until adoption); ones that don't fit (userSpaceOnUse/gradientTransform/…) stay
-  read-only. **"Export normalized copy" LANDED** — `serialize_normalized`/`toSvgNormalized` (+ the
-  palette's "Export normalized copy" / "Copy normalized SVG") emit a clean, fully-regenerated,
-  paths-only copy (every shape forced to `<path>`, all tags canonical) alongside the byte-preserving
-  save. **E5 — and the editor track (A→B→E) — is complete; what remains is finalization**
+  read-only. *(The default save is now the canonical export — see the "SVG export is canonical"
+  cornerstone; the separate paths-only "export normalized copy" was retired as redundant once
+  canonical became the default.)* **E5 — and the editor track (A→B→E) — is complete; what remains is finalization**
   (coverage/fidelity on a real-SVG corpus, robustness + large-doc perf, UX polish, ship 1.0).
   Full plan: `~/.claude/plans/nib-full-svg-dom.md`.
   Paired UX **(landed early, ahead of E):** a persisted **basic/advanced** UI preference

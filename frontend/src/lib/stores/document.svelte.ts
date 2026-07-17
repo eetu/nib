@@ -347,15 +347,11 @@ class DocumentStore {
     this.#persist();
   }
 
-  /** Current document serialized back to SVG (unedited markup preserved byte-for-byte). */
+  /** Current document exported to SVG — the canonical export (regenerated from the native model,
+   *  primitives kept; only freeform-reshaped shapes become `<path>`). SVG is an export format now;
+   *  the model is the source of truth. */
   toSvg(): string {
     return this.#wasm?.toSvg() ?? "";
-  }
-
-  /** A normalized copy — every element regenerated canonically + editable shapes as `<path>` (no
-   *  verbatim spans / primitives). For downstream tools that want plain paths. */
-  toSvgNormalized(): string {
-    return this.#wasm?.toSvgNormalized() ?? "";
   }
 
   /** The canvas render tree (root `<svg>`'s children) — the canvas draws it declaratively,

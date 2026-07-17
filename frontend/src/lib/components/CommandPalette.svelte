@@ -5,7 +5,6 @@
   import { workspace } from "$lib/stores/workspace.svelte";
   import { TOOL_GROUPS } from "$lib/tools";
   import { fitToView } from "$lib/view";
-  import { downloadSvg } from "$lib/workspace/fs";
 
   // ⌘/Ctrl+K quick actions — a searchable list over the tool + editor action registry (the
   // same op surface the MCP server will expose). Keyboard-first: type, arrow, enter.
@@ -124,19 +123,6 @@
     {
       label: "copy svg",
       run: () => void navigator.clipboard.writeText(editor.toSvg()),
-      enabled: () => editor.hasDocument,
-    },
-    {
-      label: "copy normalized svg",
-      run: () => void navigator.clipboard.writeText(editor.toSvgNormalized()),
-      enabled: () => editor.hasDocument,
-    },
-    {
-      label: "export normalized copy",
-      run: () => {
-        const base = (editor.fileName ?? "nib.svg").replace(/\.svg$/i, "");
-        downloadSvg(`${base}-normalized.svg`, editor.toSvgNormalized());
-      },
       enabled: () => editor.hasDocument,
     },
   ]);
