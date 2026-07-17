@@ -264,7 +264,9 @@ mod tests {
 
         // persistence round-trips through the DB (model = source of truth, svg = cached export).
         let model = sess.lock().unwrap().editor.to_model_json().unwrap();
-        db::update_project(&pool, id, &model, &edited).await.unwrap();
+        db::update_project(&pool, id, &model, &edited)
+            .await
+            .unwrap();
         let reloaded = db::get_project(&pool, user.id, id).await.unwrap().unwrap();
         assert!(!reloaded.model.is_empty(), "model persisted");
         assert_ne!(reloaded.svg, BLANK_SVG);
@@ -370,7 +372,10 @@ mod tests {
         assert_eq!(msg.ops.len(), 1, "structural op replays as an op");
         assert_eq!(msg.ops[0]["type"], "groupNodes");
         let svg = sess.lock().unwrap().editor.to_svg();
-        assert!(svg.contains("<g"), "grouped in the authoritative editor: {svg}");
+        assert!(
+            svg.contains("<g"),
+            "grouped in the authoritative editor: {svg}"
+        );
 
         let _ = std::fs::remove_file(&path);
     }
