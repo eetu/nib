@@ -47,7 +47,8 @@ function stampCreateUid(op: unknown): void {
       t === "combinePaths" ||
       t === "outlineStroke" ||
       t === "offsetPath" ||
-      t === "stampInstance") &&
+      t === "stampInstance" ||
+      t === "setDropShadow") &&
     !o.uid
   ) {
     o.uid = crypto.randomUUID();
@@ -1232,6 +1233,33 @@ class DocumentStore {
       this.commit();
       this.#sync();
     }
+  }
+
+  /** Give a path a soft drop shadow — builds/replaces an `feDropShadow` filter def and points the
+   *  path at it. One committed step + a structural change (new filter node), so bump treeVersion. */
+  dropShadow(
+    pathIndex: number,
+    opts?: { dx?: number; dy?: number; blur?: number; color?: string; opacity?: number },
+  ): void {
+    const ok = this.#apply({
+      type: "setDropShadow",
+      path: pathIndex,
+      dx: opts?.dx ?? 2,
+      dy: opts?.dy ?? 2,
+      blur: opts?.blur ?? 2,
+      color: opts?.color ?? "#000000",
+      opacity: opts?.opacity ?? 0.4,
+      id: `shadow-${crypto.randomUUID().slice(0, 8)}`,
+    });
+    if (ok) {
+      this.commit();
+      this.treeVersion++;
+    }
+  }
+
+  /** Remove a path's drop shadow (clears its `filter`; the now-unreferenced def is inert). */
+  clearDropShadow(pathIndex: number): void {
+    this.setPathStyle(pathIndex, "filter", null);
   }
 
   moveNode(ref: NodeRef, to: Point): void {

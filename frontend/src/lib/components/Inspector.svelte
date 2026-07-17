@@ -131,6 +131,14 @@
     setStyle("opacity", pct >= 100 ? null : String(round(pct / 100)));
   }
 
+  // Drop shadow (the one authorable effect) — a filter def + the path's `filter` attr.
+  const hasShadow = $derived((style.filter ?? "").includes("url("));
+  function toggleShadow() {
+    if (pathIndex === null) return;
+    if (hasShadow) editor.clearDropShadow(pathIndex);
+    else editor.dropShadow(pathIndex);
+  }
+
   // Evaluate a numeric field that may hold a simple arithmetic expression ("100+20",
   // "3*4"). No eval/Function — a plain number or one binary op of + - * /.
   function evalNum(raw: string): number | null {
@@ -662,6 +670,16 @@
         />
         <span class="pct">{opacityShown}%</span>
       </label>
+      {#if advanced && path}
+        <button
+          class="ghost-btn shadow-toggle"
+          class:on={hasShadow}
+          title="soft drop shadow (offset + blur)"
+          onclick={toggleShadow}
+        >
+          {hasShadow ? "remove drop shadow" : "+ drop shadow"}
+        </button>
+      {/if}
     </section>
   {/if}
 
@@ -1425,6 +1443,16 @@
   }
 
   .detach-btn:hover {
+    border-color: var(--halo-accent);
+    color: var(--halo-accent);
+  }
+
+  .shadow-toggle {
+    width: 100%;
+    margin-top: 6px;
+  }
+
+  .shadow-toggle.on {
     border-color: var(--halo-accent);
     color: var(--halo-accent);
   }

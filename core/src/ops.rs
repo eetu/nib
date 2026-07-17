@@ -301,6 +301,23 @@ pub enum Op {
     /// Remove a gradient by id.
     RemoveGradient { id: String },
 
+    /// Apply a **drop-shadow** to a path: build/replace a `<filter id>` (an `feDropShadow`) in defs
+    /// and set the path's `filter="url(#id)"`. `blur` = stdDeviation; `dx`/`dy` = offset; `color` +
+    /// `opacity` the shadow paint. `id` (the filter's) is carried so peers agree; `uid` is the filter
+    /// node's tree id (minted if absent). The one authorable effect — realism + UI mockups.
+    SetDropShadow {
+        path: usize,
+        dx: f64,
+        dy: f64,
+        blur: f64,
+        color: String,
+        #[serde(default = "one")]
+        opacity: f64,
+        id: String,
+        #[serde(default)]
+        uid: Option<String>,
+    },
+
     /// Combine paths with a boolean op ("union"|"intersect"|"subtract"|"exclude"): the inputs
     /// are soft-deleted and replaced by one new path (`id`) built from the result. Curves are
     /// flattened to lines. For "subtract", the lowest-index path is the subject.
@@ -475,6 +492,10 @@ fn reproject_paths(doc: &mut SvgDocument) {
 /// the human UI, but also the MCP/sync clients — and a non-finite coord would serialize into `d`
 /// as `"NaN"`/`"inf"` (invalid SVG written back to the user's file) and can destabilize the
 /// geometry kernels. Reject the whole op rather than corrupt the document.
+/// serde default for `SetDropShadow.opacity` (a fully-opaque shadow unless overridden).
+fn one() -> f64 {
+    1.0
+}
 fn point_finite(p: &Point) -> bool {
     p.x.is_finite() && p.y.is_finite()
 }
@@ -530,6 +551,13 @@ fn op_is_finite(op: &Op) -> bool {
         Op::RotatePath {
             degrees, cx, cy, ..
         } => degrees.is_finite() && cx.is_none_or(f64::is_finite) && cy.is_none_or(f64::is_finite),
+        Op::SetDropShadow {
+            dx,
+            dy,
+            blur,
+            opacity,
+            ..
+        } => [dx, dy, blur, opacity].iter().all(|v| v.is_finite()) && *blur >= 0.0,
         Op::InsertNode { t, .. } => t.is_finite(),
         Op::AppendNode { point, .. } => point_finite(point),
         Op::SetShape { spec, .. } | Op::AddShape { spec, .. } => spec_finite(spec),
@@ -1017,6 +1045,38 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             doc.gradients.retain(|g| &g.id != id);
             doc.gradients.len() != before
         }
+        Op::SetDropShadow {
+            path,
+            dx,
+            dy,
+            blur,
+            color,
+            opacity,
+            id,
+            uid,
+        } => {
+            let Some(p) = doc.paths.get_mut(*path) else {
+                return false;
+            };
+            if p.deleted {
+                return false;
+            }
+            // Point the path at the filter (added paths edit `attributes`; imported accumulate a
+            // `style_override`, merged over the source tag on export).
+            let map = if p.added {
+                p.attributes.get_or_insert_with(IndexMap::new)
+            } else {
+                p.style_override.get_or_insert_with(IndexMap::new)
+            };
+            map.insert("filter".to_string(), format!("url(#{id})"));
+            p.edited = true;
+            // Build/replace the <filter> (feDropShadow) def in the tree.
+            let fu = uid.clone().unwrap_or_else(crate::model::tree::new_id);
+            if let Some(tree) = doc.tree.as_mut() {
+                tree.set_drop_shadow_filter(id, &fu, *dx, *dy, *blur, color, *opacity);
+            }
+            true
+        }
         Op::BooleanOp { op, paths, id, uid } => {
             let mut idxs: Vec<usize> = paths
                 .iter()
@@ -1379,6 +1439,65 @@ mod tests {
             }
         ));
         assert_eq!(doc3.paths[0].subpaths[0].nodes[1].point, before);
+    }
+
+    #[test]
+    fn drop_shadow_injects_a_filter_def_and_references_it() {
+        use crate::model::document::{parse_svg, serialize_canonical};
+        let mut doc = parse_svg(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="10" y="10" width="20" height="20"/></svg>"##,
+        )
+        .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        assert!(apply(
+            &mut doc,
+            &Op::SetDropShadow {
+                path: 0,
+                dx: 2.0,
+                dy: 2.0,
+                blur: 1.5,
+                color: "#000000".into(),
+                opacity: 0.5,
+                id: "shadow-1".into(),
+                uid: Some("fx1".into()),
+            }
+        ));
+        let out = serialize_canonical(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(out.contains("<filter"), "filter def emitted: {out}");
+        assert!(
+            out.contains("feDropShadow"),
+            "feDropShadow primitive: {out}"
+        );
+        assert!(
+            out.contains(r##"filter="url(#shadow-1)""##),
+            "path references the filter: {out}"
+        );
+        // Re-applying with the same id REPLACES the def (no pile-up).
+        assert!(apply(
+            &mut doc,
+            &Op::SetDropShadow {
+                path: 0,
+                dx: 3.0,
+                dy: 3.0,
+                blur: 2.0,
+                color: "#000000".into(),
+                opacity: 0.5,
+                id: "shadow-1".into(),
+                uid: Some("fx1".into()),
+            }
+        ));
+        let out2 = serialize_canonical(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert_eq!(
+            out2.matches("<filter").count(),
+            1,
+            "re-apply replaces the def: {out2}"
+        );
+        // The filter def is inert — it must NOT project as an editable path.
+        assert_eq!(
+            doc.paths.iter().filter(|p| !p.deleted).count(),
+            1,
+            "still just the rect projects"
+        );
     }
 
     #[test]

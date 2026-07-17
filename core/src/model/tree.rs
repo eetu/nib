@@ -1335,6 +1335,57 @@ impl Tree {
         }
     }
 
+    /// Build (or replace) a drop-shadow `<filter id>` — an `feDropShadow` — in a `<defs>`, so a path
+    /// can reference it via `filter="url(#id)"`. Re-applying with the same `id` replaces the def
+    /// (no pile-up). A generous filter region keeps the blurred/offset shadow from clipping.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_drop_shadow_filter(
+        &mut self,
+        id: &str,
+        uid: &str,
+        dx: f64,
+        dy: f64,
+        blur: f64,
+        color: &str,
+        opacity: f64,
+    ) {
+        remove_filter_by_id(&mut self.root, id);
+        let fmt = |n: f64| {
+            let s = format!("{n:.3}");
+            let s = s.trim_end_matches('0').trim_end_matches('.');
+            if s.is_empty() || s == "-0" {
+                "0".to_string()
+            } else {
+                s.to_string()
+            }
+        };
+        let fe = make_element_node(
+            &format!("{uid}-fe"),
+            "feDropShadow",
+            vec![
+                ("dx".to_string(), fmt(dx)),
+                ("dy".to_string(), fmt(dy)),
+                ("stdDeviation".to_string(), fmt(blur)),
+                ("flood-color".to_string(), color.to_string()),
+                ("flood-opacity".to_string(), fmt(opacity)),
+            ],
+            Vec::new(),
+        );
+        let filter = make_element_node(
+            uid,
+            "filter",
+            vec![
+                ("id".to_string(), id.to_string()),
+                ("x".to_string(), "-40%".to_string()),
+                ("y".to_string(), "-40%".to_string()),
+                ("width".to_string(), "180%".to_string()),
+                ("height".to_string(), "180%".to_string()),
+            ],
+            vec![fe],
+        );
+        append_into_defs(&mut self.root, &format!("{uid}-defs"), filter);
+    }
+
     /// A fresh globally-unique uid for a drawn node/group created without a caller-supplied one
     /// (standalone/local use). Sync producers instead carry the uid in the op so all clients agree;
     /// this is the fallback when none is given. UUID-backed, so no scan for collisions is needed.
@@ -1547,6 +1598,20 @@ fn remove_uses_of(node: &mut Node, name: &str) {
         });
         for c in children.iter_mut() {
             remove_uses_of(c, name);
+        }
+    }
+}
+
+/// Remove any `<filter>` with the given `id` from every `<defs>` — so re-applying a drop shadow
+/// replaces its def instead of piling duplicates up.
+fn remove_filter_by_id(node: &mut Node, id: &str) {
+    if let Node::Element { children, .. } = node {
+        children.retain(|c| {
+            !matches!(c, Node::Element { tag, attrs, .. }
+                if tag == "filter" && attr(attrs, "id") == Some(id))
+        });
+        for c in children.iter_mut() {
+            remove_filter_by_id(c, id);
         }
     }
 }

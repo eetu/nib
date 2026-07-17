@@ -568,6 +568,25 @@ pub struct RotateParams {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct DropShadowParams {
+    /// The path's #index (from get_document).
+    pub index: usize,
+    /// Shadow offset (viewBox units). Default 2, 2.
+    #[serde(default)]
+    pub dx: Option<f64>,
+    #[serde(default)]
+    pub dy: Option<f64>,
+    /// Blur amount (feGaussianBlur stdDeviation). Default 2.
+    #[serde(default)]
+    pub blur: Option<f64>,
+    /// Shadow colour + opacity. Default black at 0.4.
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub opacity: Option<f64>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct RenderParams {
     /// Target longest-side in px (default 512, clamped 128–1024). Smaller = cheaper (fewer tokens).
     #[serde(default)]
@@ -1028,6 +1047,35 @@ impl NibMcp {
             ));
         }
         Ok(format!("rotated #{} by {}°", p.index, p.degrees))
+    }
+
+    #[tool(
+        description = "Give a shape (by #index) a soft DROP SHADOW — the one authorable effect (offset + blur + colour). Defaults: dx/dy 2, blur 2, black at 40%. Renders in the browser and in render_document. Re-applying replaces the shape's shadow."
+    )]
+    async fn drop_shadow(
+        &self,
+        Parameters(p): Parameters<DropShadowParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let op = json!({
+            "type": "setDropShadow",
+            "path": p.index,
+            "dx": p.dx.unwrap_or(2.0),
+            "dy": p.dy.unwrap_or(2.0),
+            "blur": p.blur.unwrap_or(2.0),
+            "color": p.color.clone().unwrap_or_else(|| "#000000".to_string()),
+            "opacity": p.opacity.unwrap_or(0.4),
+            "id": self.gen_id("shadow"),
+        });
+        let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
+        if n == 0 {
+            return Err(bad(
+                "drop_shadow did not apply (bad #index or non-finite params)",
+            ));
+        }
+        Ok(format!("drop shadow on #{}", p.index))
     }
 }
 

@@ -714,6 +714,45 @@ test("rotate turns a shape 90° about its centre (bbox w/h swap)", async ({ page
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("drop shadow adds a filter def + references it; removing clears it", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="20" y="20" width="40" height="40" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // Select the rect, then add a drop shadow.
+  await page.locator(".layerlist .row-btn").first().click();
+  await page.getByRole("button", { name: "+ drop shadow" }).click();
+
+  // Source (= export) has a filter def with feDropShadow, and the rect references it.
+  await page.getByRole("button", { name: "source" }).click();
+  const src = await page.locator(".sourceview textarea").inputValue();
+  expect(src).toContain("<filter");
+  expect(src).toContain("feDropShadow");
+  expect(src).toContain('filter="url(#');
+
+  // Remove it → the rect no longer references a filter.
+  await page.getByRole("button", { name: "remove drop shadow" }).click();
+  const src2 = await page.locator(".sourceview textarea").inputValue();
+  expect(src2).not.toContain('filter="url(#');
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("declarative render draws shapes as paths and opaque elements (text) verbatim", async ({
   page,
 }) => {
