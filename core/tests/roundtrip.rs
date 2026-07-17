@@ -63,7 +63,12 @@ fn component_def_group_projects_its_shapes_but_other_defs_stay_opaque() {
     let doc = parse_svg(include_str!("fixtures/components.svg")).unwrap();
     let paths = doc.tree.as_ref().unwrap().project_paths();
     // The die's body + 6 pips (inside <defs><g id="die">) project; the two <use> instances do not.
-    assert_eq!(paths.len(), 7, "die body + 6 pips project: {:?}", ids(&paths));
+    assert_eq!(
+        paths.len(),
+        7,
+        "die body + 6 pips project: {:?}",
+        ids(&paths)
+    );
     assert!(
         paths.iter().all(|p| !p.uid.is_empty()),
         "def-shapes carry uids (editable + sync-addressable)"
@@ -72,7 +77,11 @@ fn component_def_group_projects_its_shapes_but_other_defs_stay_opaque() {
     // Control: a <circle> inside a <clipPath> (defs.svg) must still NOT project.
     let defs = parse_svg(include_str!("fixtures/defs.svg")).unwrap();
     let dids = ids(&defs.tree.as_ref().unwrap().project_paths());
-    assert_eq!(dids, ["rect-0", "path-1"], "clipPath contents stay opaque: {dids:?}");
+    assert_eq!(
+        dids,
+        ["rect-0", "path-1"],
+        "clipPath contents stay opaque: {dids:?}"
+    );
 }
 
 fn ids(paths: &[nib_core::model::types::PathElement]) -> Vec<String> {

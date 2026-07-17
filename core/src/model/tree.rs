@@ -1226,7 +1226,10 @@ pub fn make_element_node(
 /// `<use href="#id">` reference target), and the reserved `nib-` prefix is off-limits (the canvas
 /// injects `nib-grid`/gradient ids into the same live `<svg>`).
 fn all_ids(node: &Node, out: &mut std::collections::HashSet<String>) {
-    if let Node::Element { attrs, children, .. } = node {
+    if let Node::Element {
+        attrs, children, ..
+    } = node
+    {
         if let Some(id) = attr(attrs, "id") {
             out.insert(id.to_string());
         }
@@ -1342,7 +1345,11 @@ fn lift_into(node: &mut Node, members: &[String], replacement: Node) -> Result<V
             .collect();
         if !members.is_empty() && positions.len() == members.len() {
             let at = positions[0];
-            let mut grabbed: Vec<Node> = positions.iter().rev().map(|&i| children.remove(i)).collect();
+            let mut grabbed: Vec<Node> = positions
+                .iter()
+                .rev()
+                .map(|&i| children.remove(i))
+                .collect();
             grabbed.reverse();
             children.insert(at.min(children.len()), replacement);
             return Ok(grabbed);
