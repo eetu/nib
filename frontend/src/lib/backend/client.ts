@@ -6,7 +6,9 @@ import { base } from "$app/paths";
 import { settings } from "$lib/stores/settings.svelte";
 
 export type ProjectMeta = { id: number; name: string; updated_at: string };
-export type Project = { id: number; name: string; svg: string };
+// `model` is the native document-model JSON (the source of truth); `svg` is a cached export. A
+// brand-new project has an empty `model` until first opened (then the backend imports svg → model).
+export type Project = { id: number; name: string; model: string; svg: string };
 
 function apiBase(): string {
   return settings.backendUrl || base; // "" → same-origin (respecting the Pages base path)

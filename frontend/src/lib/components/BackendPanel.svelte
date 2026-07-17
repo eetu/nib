@@ -24,7 +24,10 @@
     error = null;
     try {
       const p = await getProject(id);
-      editor.load(p.svg, p.name);
+      // Load the native model (ids intact, so structural ops sync correctly); a not-yet-migrated
+      // project has no model — fall back to importing its svg (the backend migrates it on connect).
+      if (p.model) editor.loadModel(JSON.parse(p.model), p.name);
+      else editor.load(p.svg, p.name);
       sync.connect(id);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);

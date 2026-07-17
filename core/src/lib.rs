@@ -12,7 +12,7 @@
 //! `#[wasm_bindgen]` method is a thin serde wrapper over a plain-Rust core method.
 
 use indexmap::IndexMap;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 pub mod history;
@@ -30,6 +30,23 @@ use ops::Op;
 
 const BLANK_SVG: &str =
     "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n</svg>";
+
+/// The native document-model format version — bump when the persisted JSON shape changes so a
+/// loader can migrate older blobs.
+const SCHEMA_VERSION: u32 = 1;
+
+/// The native document model — nib's **single source of truth**, persisted + transmitted as JSON.
+/// It carries the `SvgDocument` (paths, gradients, source) **plus** its structural `tree` (which is
+/// `serde(skip)` on the doc, so it rides here explicitly). Every node's `uid` lives in this blob, so
+/// a client that loads a model shares identity with whoever created it — it never re-parses SVG to
+/// sync, which is what made uids drift. SVG (and any future format) is import/export only.
+#[derive(Serialize, Deserialize)]
+struct Model {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u32,
+    document: SvgDocument,
+    tree: Option<Tree>,
+}
 
 /// One undo step: the document's paths plus the selection that was active. Selection is
 /// captured so undo/redo restore it, matching the TS store.
@@ -91,6 +108,41 @@ impl Editor {
         self.selected_path = None;
         self.dirty = false;
         self.history.reset(self.snapshot());
+        Ok(())
+    }
+
+    /// Build the native model (doc + structural tree) from the current document, `None` if empty.
+    fn build_model(&self) -> Option<Model> {
+        let doc = self.doc.as_ref()?;
+        Some(Model {
+            schema_version: SCHEMA_VERSION,
+            document: doc.clone(),
+            tree: doc.tree.clone(),
+        })
+    }
+
+    /// Replace the whole document from a native model (doc + tree), ids intact — no SVG re-parse.
+    fn set_model(&mut self, model: Model) {
+        let mut doc = model.document;
+        doc.tree = model.tree; // the tree is serde(skip) on the doc, so restore it from the model
+        self.doc = Some(doc);
+        self.selection = None;
+        self.selected_path = None;
+        self.dirty = false;
+        self.history.reset(self.snapshot());
+    }
+
+    /// Serialize the document to the native model JSON — what the backend persists + serves. `None`
+    /// if there's no document.
+    pub fn to_model_json(&self) -> Option<String> {
+        self.build_model()
+            .and_then(|m| serde_json::to_string(&m).ok())
+    }
+
+    /// Load the document from native model JSON (ids intact). Errors (without mutating) on bad JSON.
+    pub fn load_model_json(&mut self, json: &str) -> Result<(), String> {
+        let model: Model = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        self.set_model(model);
         Ok(())
     }
 
@@ -193,6 +245,29 @@ impl Editor {
         self.selected_path = None;
         self.dirty = false;
         self.history.reset(self.snapshot());
+        Ok(())
+    }
+
+    /// Serialize the document to the native model (doc + tree) for the frontend to persist/send —
+    /// the single source of truth. `null` if there's no document. Maps serialize as plain objects.
+    #[wasm_bindgen(js_name = toModel)]
+    pub fn to_model_js(&self) -> Result<JsValue, JsValue> {
+        match self.build_model() {
+            Some(model) => {
+                let serializer =
+                    serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+                model.serialize(&serializer).map_err(Into::into)
+            }
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    /// Load the document from a native model (doc + tree) — ids intact, no SVG re-parse. The
+    /// connected-mode open path (a client hydrates from the backend's model, sharing identity).
+    #[wasm_bindgen(js_name = loadModel)]
+    pub fn load_model_js(&mut self, json: JsValue) -> Result<(), JsValue> {
+        let model: Model = serde_wasm_bindgen::from_value(json)?;
+        self.set_model(model);
         Ok(())
     }
 
@@ -473,6 +548,37 @@ mod tests {
         assert!(ed.has_document());
         assert!(!ed.can_undo());
         assert_eq!(ed.to_svg(), SAMPLE);
+    }
+
+    #[test]
+    fn model_json_round_trip_preserves_uids_and_svg() {
+        // The native model is the source of truth: loading it must reproduce identical node uids
+        // (so structural ops replay across clients) and the same document — no SVG re-parse.
+        let mut ed = Editor::new();
+        ed.load_source(SAMPLE).unwrap();
+        let uids0: Vec<String> = ed
+            .doc()
+            .unwrap()
+            .paths
+            .iter()
+            .map(|p| p.uid.clone())
+            .collect();
+        let svg0 = ed.to_svg();
+        let model = ed.to_model_json().expect("model json");
+
+        let mut ed2 = Editor::new();
+        ed2.load_model_json(&model).unwrap();
+        let uids1: Vec<String> = ed2
+            .doc()
+            .unwrap()
+            .paths
+            .iter()
+            .map(|p| p.uid.clone())
+            .collect();
+        assert!(!uids0.is_empty() && !uids0[0].is_empty(), "paths carry uids");
+        assert_eq!(uids0, uids1, "uids survive the model round-trip");
+        assert!(ed2.doc().unwrap().tree.is_some(), "tree rides in the model");
+        assert_eq!(ed2.to_svg(), svg0, "svg round-trips through the model");
     }
 
     #[test]

@@ -19,9 +19,9 @@ roxmltree = "0.21.1"
 xmlparser = "0.13.6"
 indexmap = { version = "2.14.0", features = ["serde"] }
 i_overlay = "7.0.2"
+serde_json = "1.0.150"
 
 [dev-dependencies]
-serde_json = "1.0.150"
 wasm-bindgen-test = "0.3.76"
 
 # wasm-pack's bundled wasm-opt is too old for the post-MVP wasm features modern rustc emits

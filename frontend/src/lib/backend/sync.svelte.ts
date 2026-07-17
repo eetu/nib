@@ -9,8 +9,7 @@ import { settings } from "$lib/stores/settings.svelte";
 
 const CLIENT_ID = crypto.randomUUID();
 
-// `svg` set = a full resync (structural ops that can't replay by uid across clients); else replay `ops`.
-type SyncMsg = { clientId: string; ops: unknown[]; svg?: string };
+type SyncMsg = { clientId: string; ops: unknown[] };
 
 function wsUrl(id: number): string {
   const token = encodeURIComponent(settings.backendToken);
@@ -39,9 +38,8 @@ class ProjectSync {
     ws.addEventListener("open", () => {
       if (this.#ws !== ws) return;
       this.status = "connected";
-      // Stream each committed batch to the backend, which persists + broadcasts it. Structural
-      // batches carry an SVG snapshot (svg) instead of replayable ops.
-      editor.setSyncSink((msg) => this.#send(msg));
+      // Stream each committed op-batch to the backend, which persists + broadcasts it.
+      editor.setSyncSink((ops) => this.#send(ops));
     });
     ws.addEventListener("message", (e) => {
       let msg: SyncMsg;
@@ -51,8 +49,7 @@ class ProjectSync {
         return;
       }
       if (msg.clientId === CLIENT_ID) return; // our own echo
-      if (msg.svg != null) editor.applyRemoteReload(msg.svg);
-      else editor.applyRemote(msg.ops);
+      editor.applyRemote(msg.ops);
     });
     const drop = () => {
       if (this.#ws === ws) {
@@ -64,9 +61,9 @@ class ProjectSync {
     ws.addEventListener("error", drop);
   }
 
-  #send(msg: { ops: unknown[]; svg?: string }): void {
+  #send(ops: unknown[]): void {
     if (this.#ws?.readyState === WebSocket.OPEN) {
-      this.#ws.send(JSON.stringify({ clientId: CLIENT_ID, ...msg }));
+      this.#ws.send(JSON.stringify({ clientId: CLIENT_ID, ops }));
     }
   }
 

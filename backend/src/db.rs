@@ -27,12 +27,15 @@ pub struct ProjectMeta {
     pub updated_at: String,
 }
 
-/// A full project row, including its SVG source.
+/// A full project row. `model` is the native document model JSON (the source of truth); `svg` is a
+/// cached canonical export (empty for a brand-new project until first edited). A freshly-created
+/// project has an empty `model` until its session first opens (which imports `svg` → model).
 #[derive(Clone, FromRow, Serialize)]
 pub struct Project {
     pub id: i64,
     pub user_id: i64,
     pub name: String,
+    pub model: String,
     pub svg: String,
     pub created_at: String,
     pub updated_at: String,
@@ -82,7 +85,7 @@ pub async fn get_project(
     id: i64,
 ) -> Result<Option<Project>, sqlx::Error> {
     sqlx::query_as::<_, Project>(
-        "select id, user_id, name, svg, created_at, updated_at from projects where id = ? and user_id = ?",
+        "select id, user_id, name, model, svg, created_at, updated_at from projects where id = ? and user_id = ?",
     )
     .bind(id)
     .bind(user_id)
@@ -105,11 +108,20 @@ pub async fn create_project(
     Ok(res.last_insert_rowid())
 }
 
-pub async fn update_project_svg(pool: &SqlitePool, id: i64, svg: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("update projects set svg = ?, updated_at = datetime('now') where id = ?")
-        .bind(svg)
-        .bind(id)
-        .execute(pool)
-        .await?;
+/// Persist a project's native model (source of truth) plus its cached SVG export, in one write.
+pub async fn update_project(
+    pool: &SqlitePool,
+    id: i64,
+    model: &str,
+    svg: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "update projects set model = ?, svg = ?, updated_at = datetime('now') where id = ?",
+    )
+    .bind(model)
+    .bind(svg)
+    .bind(id)
+    .execute(pool)
+    .await?;
     Ok(())
 }

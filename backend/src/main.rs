@@ -120,7 +120,8 @@ async fn get_project(
         .ok_or((StatusCode::NOT_FOUND, "no such project".to_string()))
 }
 
-/// Replace a project's SVG (validated through the core parser so broken markup never persists).
+/// Replace a project's document by importing a posted SVG: parse it into the native model (the
+/// source of truth), then persist model + cached SVG. Broken markup never persists (BAD_REQUEST).
 async fn put_project(
     AuthUser(user): AuthUser,
     State(st): State<AppState>,
@@ -134,8 +135,12 @@ async fn put_project(
     {
         return Err((StatusCode::NOT_FOUND, "no such project".to_string()));
     }
-    nib_core::model::document::parse_svg(&body).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-    db::update_project_svg(&st.pool, id, &body)
+    let mut editor = nib_core::Editor::new();
+    editor
+        .load_source(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let model = editor.to_model_json().unwrap_or_default();
+    db::update_project(&st.pool, id, &model, &editor.to_svg())
         .await
         .map_err(ise)?;
     Ok(StatusCode::NO_CONTENT)
@@ -257,9 +262,11 @@ mod tests {
         let edited = sess.lock().unwrap().editor.to_svg();
         assert!(edited.contains("<path"), "drawn shape emitted: {edited}");
 
-        // persistence round-trips through the DB.
-        db::update_project_svg(&pool, id, &edited).await.unwrap();
+        // persistence round-trips through the DB (model = source of truth, svg = cached export).
+        let model = sess.lock().unwrap().editor.to_model_json().unwrap();
+        db::update_project(&pool, id, &model, &edited).await.unwrap();
         let reloaded = db::get_project(&pool, user.id, id).await.unwrap().unwrap();
+        assert!(!reloaded.model.is_empty(), "model persisted");
         assert_ne!(reloaded.svg, BLANK_SVG);
         assert!(reloaded.svg.contains("<path"));
 
@@ -300,16 +307,15 @@ mod tests {
         let m2 = rx2.recv().await.unwrap();
         assert_eq!(m1.client_id, "clientA");
         assert_eq!(m1.ops.len(), 1);
-        assert!(m1.svg.is_none(), "a plain op replays — no svg snapshot");
         assert_eq!(m2.client_id, "clientA");
 
         let _ = std::fs::remove_file(&path);
     }
 
-    // A tree-structural op (groupNodes) can't replay across clients — its `uid`s are per-client — so
-    // the broadcast carries an authoritative SVG snapshot to resync from instead of the op.
+    // A tree-structural op (groupNodes) now replays as a plain op on every client: all clients load
+    // the same native model, so the origin's node uids resolve identically on a peer (no snapshot).
     #[tokio::test]
-    async fn structural_op_broadcasts_svg_snapshot() {
+    async fn structural_op_replays_as_op() {
         let path = std::env::temp_dir().join(format!("nib-struct-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let pool = db::connect(&format!("sqlite:{}", path.display()))
@@ -332,7 +338,7 @@ mod tests {
             });
             session::apply_ops(&sess, &pool, vec![op], "t").unwrap();
         }
-        // Their tree uids — what the group op addresses (and what a peer would fail to replay).
+        // Their tree uids — carried by the shared model, so the op replays identically on a peer.
         let uids: Vec<String> = {
             let s = sess.lock().unwrap();
             let doc = s.editor.doc().unwrap();
@@ -357,18 +363,14 @@ mod tests {
             1
         );
 
+        // The structural op is broadcast verbatim as an op (peers replay it against their identical
+        // model), and it actually grouped in the authoritative editor.
         let msg = rx.recv().await.unwrap();
         assert_eq!(msg.client_id, "clientA");
-        assert!(
-            msg.ops.is_empty(),
-            "structural op broadcasts no replayable ops"
-        );
-        let svg = msg.svg.expect("structural op broadcasts an svg snapshot");
-        assert!(
-            svg.contains("<g"),
-            "the grouped <g> is in the resync svg: {svg}"
-        );
-        assert!(svg.contains("pair"), "the group name is applied: {svg}");
+        assert_eq!(msg.ops.len(), 1, "structural op replays as an op");
+        assert_eq!(msg.ops[0]["type"], "groupNodes");
+        let svg = sess.lock().unwrap().editor.to_svg();
+        assert!(svg.contains("<g"), "grouped in the authoritative editor: {svg}");
 
         let _ = std::fs::remove_file(&path);
     }

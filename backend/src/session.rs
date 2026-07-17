@@ -1,7 +1,7 @@
 //! In-memory project sessions (Phase C). Each open project has ONE authoritative `nib_core::Editor`
-//! keyed by project id, shared by every client editing it (the MCP connection now; the browser over
-//! WebSocket in C2). All edits funnel through [`apply_ops`]: mutate the editor, broadcast the ops to
-//! the project's other subscribers, and persist the new SVG to SQLite.
+//! keyed by project id, shared by every client editing it (the MCP connection + the browser over
+//! WebSocket). All edits funnel through [`apply_ops`]: mutate the editor, broadcast the ops to the
+//! project's other subscribers, and persist the native model (+ a cached SVG export) to SQLite.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -21,41 +21,14 @@ pub fn new_sessions() -> Sessions {
 }
 
 /// A batch of ops broadcast to a project's subscribers. `client_id` is the origin, so a client
-/// ignores the echo of its own edits.
-///
-/// Most ops replay cleanly on every client (they address paths by *index*, which all clients agree
-/// on). But **tree-structural ops address nodes by `uid`** — and uids are per-client in-memory
-/// identities (the backend builds its tree incrementally via `fresh_uid`; a browser builds its by
-/// parsing the SVG), so they don't match across clients. Replaying a `groupNodes` with the origin's
-/// uids on a peer groups the wrong nodes. So for those ops we instead ship the authoritative post-op
-/// `svg` snapshot: the peer reloads it and its tree matches structurally, uids irrelevant. When
-/// `svg` is set, `ops` is empty and the receiver reloads instead of replaying. See [`is_uid_op`].
+/// ignores the echo of its own edits. Ops replay cleanly on every client now that all clients load
+/// the **same native model** (node `uid`s are shared identity carried by the model), so even
+/// structural uid-ops (`groupNodes`, `reorderNode`, …) replay correctly — no snapshot resync needed.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SyncMsg {
     #[serde(rename = "clientId")]
     pub client_id: String,
     pub ops: Vec<serde_json::Value>,
-    /// Authoritative SVG for a full resync (structural ops); `None` = replay `ops`.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub svg: Option<String>,
-}
-
-/// True for ops that address existing tree nodes by `uid` — these can't be replayed across clients
-/// (uids don't match), so they trigger a full-SVG resync instead. Adds/booleans aren't here: they
-/// only *create* nodes, so they replay fine (the fresh uids differ per client but never surface,
-/// because any later uid-op resyncs anyway).
-fn is_uid_op(ty: &str) -> bool {
-    matches!(
-        ty,
-        "groupNodes"
-            | "ungroupNode"
-            | "reorderNode"
-            | "moveTreeNode"
-            | "setNodeHidden"
-            | "setNodeBoolean"
-            | "setNodeAttr"
-            | "setNodeText"
-    )
 }
 
 /// The authoritative in-memory session for one open project.
@@ -80,7 +53,16 @@ pub async fn open(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no such project: {project_id}"))?;
     let mut editor = Editor::new();
-    editor.load_source(&project.svg)?;
+    if project.model.is_empty() {
+        // Legacy / freshly-created row: import the SVG once, then persist the native model so every
+        // later open (and every client) shares node identity instead of re-parsing.
+        editor.load_source(&project.svg)?;
+        if let Some(model) = editor.to_model_json() {
+            let _ = db::update_project(pool, project_id, &model, &editor.to_svg()).await;
+        }
+    } else {
+        editor.load_model_json(&project.model)?;
+    }
     let (tx, _rx) = broadcast::channel(256);
     let session = Arc::new(Mutex::new(ProjectSession {
         project_id,
@@ -91,9 +73,9 @@ pub async fn open(
     Ok(session)
 }
 
-/// Apply a batch of JSON ops to a project session: mutate the editor (one undo step), broadcast to
-/// the other subscribers, and persist the new SVG to SQLite. Returns how many ops applied. Sync (so
-/// the MCP tools can call it directly); the DB write is spawned onto the runtime.
+/// Apply a batch of JSON ops to a project session: mutate the editor (one undo step), broadcast the
+/// ops to the other subscribers, and persist the native model (+ cached SVG) to SQLite. Returns how
+/// many ops applied. Sync (so the MCP tools can call it directly); the DB write is spawned.
 pub fn apply_ops(
     session: &Arc<Mutex<ProjectSession>>,
     pool: &SqlitePool,
@@ -104,7 +86,7 @@ pub fn apply_ops(
         .iter()
         .map(|v| serde_json::from_value(v.clone()).map_err(|e| format!("invalid op: {e}")))
         .collect::<Result<_, _>>()?;
-    let (svg, id, applied) = {
+    let (model, svg, id, applied) = {
         let mut s = session.lock().unwrap();
         let mut applied = 0usize;
         for op in &parsed {
@@ -116,63 +98,21 @@ pub fn apply_ops(
             return Ok(0);
         }
         s.editor.commit();
+        // The native model is the source of truth (persisted); the svg is a cached export.
+        let model = s.editor.to_model_json().unwrap_or_default();
         let svg = s.editor.to_svg();
-        // Broadcast to the project's other subscribers (browser + other MCP connections). A batch
-        // touching tree structure by uid can't be replayed on a peer (uids differ) — ship the
-        // authoritative svg for a resync instead; everything else replays by index.
-        let structural = ops.iter().any(|o| {
-            o.get("type")
-                .and_then(|t| t.as_str())
-                .is_some_and(is_uid_op)
-        });
-        let msg = if structural {
-            SyncMsg {
-                client_id: origin.to_string(),
-                ops: Vec::new(),
-                svg: Some(svg.clone()),
-            }
-        } else {
-            SyncMsg {
-                client_id: origin.to_string(),
-                ops,
-                svg: None,
-            }
-        };
-        let _ = s.tx.send(msg);
-        (svg, s.project_id, applied)
-    };
-    // Persist the new source (fire-and-forget; the editor is the live authority meanwhile).
-    let pool = pool.clone();
-    tokio::spawn(async move {
-        let _ = db::update_project_svg(&pool, id, &svg).await;
-    });
-    Ok(applied)
-}
-
-/// Adopt a whole-document SVG snapshot from a client — the other half of the structural-op sync: a
-/// browser that grouped/reordered ships the authoritative SVG (it can't express the change as
-/// replayable uid-ops for peers). Load it into the session editor, broadcast it for the other
-/// subscribers to resync, and persist. Errors if the markup won't parse (the session is untouched).
-pub fn apply_svg(
-    session: &Arc<Mutex<ProjectSession>>,
-    pool: &SqlitePool,
-    svg: &str,
-    origin: &str,
-) -> Result<(), String> {
-    let (canonical, id) = {
-        let mut s = session.lock().unwrap();
-        s.editor.load_source(svg)?; // rebuild the authoritative tree from the peer's snapshot
-        let canonical = s.editor.to_svg();
+        // Broadcast the ops to the project's other subscribers. All clients load the same model
+        // (identical node uids), so every op — structural uid-ops included — replays correctly.
         let _ = s.tx.send(SyncMsg {
             client_id: origin.to_string(),
-            ops: Vec::new(),
-            svg: Some(canonical.clone()),
+            ops,
         });
-        (canonical, s.project_id)
+        (model, svg, s.project_id, applied)
     };
+    // Persist model + cached svg (fire-and-forget; the editor is the live authority meanwhile).
     let pool = pool.clone();
     tokio::spawn(async move {
-        let _ = db::update_project_svg(&pool, id, &canonical).await;
+        let _ = db::update_project(&pool, id, &model, &svg).await;
     });
-    Ok(())
+    Ok(applied)
 }
