@@ -284,6 +284,10 @@
     const name = prompt("rename component:", current);
     if (name?.trim() && name.trim() !== current) editor.renameComponent(uid, name.trim());
   }
+  function deleteComp(uid: string, name: string, instances: number) {
+    const note = instances ? ` and its ${instances} instance${instances === 1 ? "" : "s"}` : "";
+    if (confirm(`delete component “${name}”${note}?`)) editor.deleteComponent(uid);
+  }
 
   // Right-click context menu for a row (path or group) — an action list at the cursor.
   type Menu = {
@@ -542,7 +546,18 @@
             elementSel?.kind === "element" && editor.setNodeAttr(elementSel.uid, "fill", v)}
         />
       {/if}
-      <p class="hint">{elTag} element · attributes edit in place</p>
+      {#if elTag === "use"}
+        <button
+          class="detach-btn"
+          title="bake this instance into independent, editable shapes (leaves the component + other instances)"
+          onclick={() => elementSel?.kind === "element" && editor.detachInstance(elementSel.uid)}
+        >
+          detach instance
+        </button>
+        <p class="hint">instance of a component · move/resize is free</p>
+      {:else}
+        <p class="hint">{elTag} element · attributes edit in place</p>
+      {/if}
     </section>
   {/if}
 
@@ -938,6 +953,14 @@
                   title="stamp an instance"
                   onclick={() => editor.stampInstance(c.name)}>+ stamp</button
                 >
+                <button
+                  class="del"
+                  title="delete this component and all its instances"
+                  aria-label="delete component"
+                  onclick={() => deleteComp(c.uid, c.name, c.instanceCount)}
+                >
+                  <Trash2 size={12} />
+                </button>
               </div>
               {#if compExpanded.includes(c.uid)}
                 <ul class="partlist">
@@ -1344,6 +1367,40 @@
   }
 
   .comprow .stamp:hover {
+    border-color: var(--halo-accent);
+    color: var(--halo-accent);
+  }
+
+  .comprow .del {
+    flex: none;
+    display: flex;
+    align-items: center;
+    padding: 3px;
+    border: none;
+    border-radius: var(--halo-radius-pill);
+    background: transparent;
+    color: var(--halo-text-muted);
+    cursor: pointer;
+  }
+
+  .comprow .del:hover {
+    color: var(--halo-danger, #e5484d);
+    background: var(--halo-bg-main);
+  }
+
+  .detach-btn {
+    width: 100%;
+    margin-top: 6px;
+    padding: 4px 8px;
+    border: 1px solid var(--halo-border);
+    border-radius: var(--halo-radius-pill);
+    background: var(--halo-bg-main);
+    color: var(--halo-text-main);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .detach-btn:hover {
     border-color: var(--halo-accent);
     color: var(--halo-accent);
   }

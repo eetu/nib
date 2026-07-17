@@ -342,7 +342,13 @@ fn collect_components(
         };
         if tag == "defs" {
             for c in children {
-                if let RenderNode::Element { tag: ct, attrs, .. } = c {
+                if let RenderNode::Element {
+                    tag: ct,
+                    attrs,
+                    uid,
+                    ..
+                } = c
+                {
                     if ct == "g" {
                         if let Some(id) = attrs.get("id") {
                             let mut parts = Vec::new();
@@ -351,7 +357,7 @@ fn collect_components(
                                 part_comp.insert(p.clone(), id.clone());
                             }
                             summaries.push(json!({
-                                "name": id, "parts": parts.len(),
+                                "name": id, "uid": uid, "parts": parts.len(),
                                 "instances": uses.get(id).copied().unwrap_or(0),
                             }));
                         }
@@ -868,7 +874,7 @@ impl NibMcp {
     }
 
     #[tool(
-        description = "List the document's components (name, part count, instance count) — the reusable definitions you can `stamp`."
+        description = "List the document's components (name, uid, part count, instance count) — the reusable definitions you can `stamp`. To remove one (and cascade its instances), apply_op {type:\"deleteComponent\", uid}."
     )]
     async fn list_components(&self, ctx: RequestContext<RoleServer>) -> Result<String, ErrorData> {
         let user = self.user(&ctx).await?;
@@ -922,6 +928,11 @@ mod tests {
         let (comps, part_comp) = component_info(doc);
         assert_eq!(comps.len(), 1, "one component: {comps:?}");
         assert_eq!(comps[0]["name"], "die");
+        assert!(
+            comps[0]["uid"].as_str().is_some_and(|u| !u.is_empty()),
+            "component carries its <g> uid (addressable for deleteComponent): {:?}",
+            comps[0]
+        );
         assert_eq!(comps[0]["parts"], 2, "rect + circle"); // the def's two shapes
         assert_eq!(comps[0]["instances"], 2, "two <use>");
         // The def parts map back to the component name (outline labeling).
@@ -987,7 +998,11 @@ mod tests {
         };
         // Instance A body ≈ (10,30)-(50,70); instance B ≈ (120,30)-(160,70).
         assert_ne!(px(30, 50), [255, 255, 255], "left <use> resolved + painted");
-        assert_ne!(px(140, 50), [255, 255, 255], "right <use> resolved + painted");
+        assert_ne!(
+            px(140, 50),
+            [255, 255, 255],
+            "right <use> resolved + painted"
+        );
         // The gap between the two instances is untouched backdrop — not one giant fill.
         assert_eq!(px(85, 50), [255, 255, 255], "gap stays white");
     }

@@ -1163,6 +1163,85 @@ impl Tree {
         true
     }
 
+    /// Bake one `<use>` instance (`uid`) into an independent, editable copy: replace it with a `<g>`
+    /// (`g_uid`) wrapping deep clones of the referenced component's shapes (fresh, deterministic uids
+    /// derived from `g_uid`), carrying the instance's `transform` + `x`/`y` composed onto the group so
+    /// the copy lands where the instance was. The definition is left intact (other instances keep
+    /// tracking it). Returns false if `uid` isn't a `<use>`, its href doesn't resolve to a component
+    /// `<g>`, or that component is empty.
+    pub fn detach_instance(&mut self, uid: &str, g_uid: &str) -> bool {
+        // Read the instance's placement as owned values (so the immutable borrow ends before mutation).
+        let (name, x, y, transform) = {
+            let Some(Node::Element { tag, attrs, .. }) = find_uid(&self.root, uid) else {
+                return false;
+            };
+            if tag != "use" {
+                return false;
+            }
+            let Some(href) = attr(attrs, "href").or_else(|| attr(attrs, "xlink:href")) else {
+                return false;
+            };
+            (
+                href.trim_start_matches('#').to_string(),
+                attr(attrs, "x").map(str::to_string),
+                attr(attrs, "y").map(str::to_string),
+                attr(attrs, "transform").map(str::to_string),
+            )
+        };
+        // Deep-clone the component definition's element children with fresh deterministic uids.
+        let cloned: Vec<Node> = {
+            let Some(children) = component_children(&self.root, &name) else {
+                return false;
+            };
+            let mut counter = 0usize;
+            children
+                .iter()
+                .filter_map(|c| clone_reid(c, g_uid, &mut counter))
+                .collect()
+        };
+        if cloned.is_empty() {
+            return false;
+        }
+        // Compose the instance transform: `<use transform=T x y>` renders T then translate(x,y), so
+        // the wrapper group gets `T translate(x y)` (outermost-first).
+        let mut t = transform.unwrap_or_default();
+        let dx = x.as_deref().unwrap_or("0");
+        let dy = y.as_deref().unwrap_or("0");
+        if dx != "0" || dy != "0" {
+            if !t.is_empty() {
+                t.push(' ');
+            }
+            t.push_str(&format!("translate({dx} {dy})"));
+        }
+        let attrs = if t.is_empty() {
+            Vec::new()
+        } else {
+            vec![("transform".to_string(), t)]
+        };
+        let g = make_element_node(g_uid, "g", attrs, cloned);
+        replace_node(&mut self.root, uid, g).is_ok()
+    }
+
+    /// Delete a component: remove its definition `<g uid>` AND cascade-remove every `<use>` instance
+    /// that referenced it (`<use>` is id-coupled, so an orphaned instance would paint nothing).
+    /// Returns false if `uid` isn't an element with an `id` (i.e. not a component definition group).
+    pub fn delete_component(&mut self, uid: &str) -> bool {
+        let name = match find_uid(&self.root, uid) {
+            Some(Node::Element { tag, attrs, .. }) if tag == "g" => {
+                attr(attrs, "id").map(str::to_string)
+            }
+            _ => return false,
+        };
+        let Some(name) = name else {
+            return false;
+        };
+        if remove_node(&mut self.root, uid).is_none() {
+            return false;
+        }
+        remove_uses_of(&mut self.root, &name);
+        true
+    }
+
     /// A fresh globally-unique uid for a drawn node/group created without a caller-supplied one
     /// (standalone/local use). Sync producers instead carry the uid in the op so all clients agree;
     /// this is the fallback when none is given. UUID-backed, so no scan for collisions is needed.
@@ -1277,6 +1356,113 @@ fn remove_node(node: &mut Node, uid: &str) -> Option<Node> {
         }
     }
     None
+}
+
+/// Replace the element with `uid` by `new`, in place (same slot). `Err(new)` bubbles the node back if
+/// `uid` isn't in this subtree, so a sibling can take it (mirrors `insert_rel`'s carry).
+fn replace_node(node: &mut Node, uid: &str, new: Node) -> Result<(), Node> {
+    let Node::Element { children, .. } = node else {
+        return Err(new);
+    };
+    if let Some(i) = children.iter().position(|c| c.uid() == Some(uid)) {
+        children[i] = new;
+        return Ok(());
+    }
+    let mut carry = new;
+    for c in children.iter_mut() {
+        match replace_node(c, uid, carry) {
+            Ok(()) => return Ok(()),
+            Err(n) => carry = n,
+        }
+    }
+    Err(carry)
+}
+
+/// The element children of the component `<g id=name>` (its shape definitions), if it exists.
+fn component_children<'a>(node: &'a Node, name: &str) -> Option<&'a Vec<Node>> {
+    if let Node::Element {
+        tag,
+        attrs,
+        children,
+        ..
+    } = node
+    {
+        if tag == "g" && attr(attrs, "id") == Some(name) {
+            return Some(children);
+        }
+        for c in children {
+            if let Some(found) = component_children(c, name) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// Deep-clone an element subtree for a **detach/bake**: every element gets a fresh deterministic uid
+/// (`{base}-{n}` in document pre-order — so all clients derive identical ids without carrying each)
+/// and a regenerated verbatim span. Left **unedited + not-added** on purpose: a baked primitive
+/// then stays a primitive (`refit` keeps `<rect>`/`<circle>`/… in canonical export; byte-preserving
+/// re-emits the verbatim span) rather than degrading to `<path>` — matching the "primitives kept"
+/// cornerstone. It still projects as independent editable geometry (imported shapes project by tag,
+/// not by `added`). Whitespace/comment text is dropped — serialization re-indents. `None` for
+/// non-element nodes.
+fn clone_reid(node: &Node, base: &str, counter: &mut usize) -> Option<Node> {
+    let Node::Element {
+        tag,
+        attrs,
+        children,
+        hidden,
+        boolean_op,
+        ..
+    } = node
+    else {
+        return None;
+    };
+    let uid = format!("{base}-{}", *counter);
+    *counter += 1;
+    let kids: Vec<Node> = children
+        .iter()
+        .filter_map(|c| clone_reid(c, base, counter))
+        .collect();
+    let self_closing = kids.is_empty();
+    Some(Node::Element {
+        uid,
+        tag: tag.clone(),
+        original_open: regen_open(tag, attrs, self_closing),
+        original_close: if self_closing {
+            String::new()
+        } else {
+            format!("</{tag}>")
+        },
+        attrs: attrs.clone(),
+        children: kids,
+        edited: false,
+        hidden: *hidden,
+        added: false,
+        boolean_op: boolean_op.clone(),
+    })
+}
+
+/// Remove every `<use>` instance referencing `name` (as `#name` or `name`) — the cascade half of a
+/// component delete (the definition `<g>` is removed by its uid separately).
+fn remove_uses_of(node: &mut Node, name: &str) {
+    if let Node::Element { children, .. } = node {
+        children.retain(|c| {
+            !matches!(c, Node::Element { tag, attrs, .. }
+                if tag == "use" && href_name(attrs).as_deref() == Some(name))
+        });
+        for c in children.iter_mut() {
+            remove_uses_of(c, name);
+        }
+    }
+}
+
+/// The component name a `<use>`'s `href`/`xlink:href` targets, with any leading `#` stripped.
+fn href_name(attrs: &[(String, String)]) -> Option<String> {
+    attr(attrs, "href")
+        .or_else(|| attr(attrs, "xlink:href"))
+        .map(|h| h.trim_start_matches('#').to_string())
 }
 
 /// Insert `new` relative to `ref_uid` (`before`/`after` as a sibling, `inside` as a child). Returns

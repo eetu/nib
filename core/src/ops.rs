@@ -250,6 +250,19 @@ pub enum Op {
     /// Rename a component: set its `<g id>` to `name` AND rewrite every instance `<use href>` (which
     /// is id-coupled). One atomic op = one undo step.
     RenameComponent { uid: String, name: String },
+    /// Bake one `<use>` instance (`uid`) into independent, editable geometry: replace it with a `<g>`
+    /// (`g_uid`) wrapping deep clones of the referenced component's shapes, carrying the instance's
+    /// `transform`+`x`/`y`. Descendant uids derive deterministically from `g_uid` (so peers agree
+    /// without carrying each); `g_uid` itself is carried, minted if absent. The definition is
+    /// untouched — other instances keep tracking it. Reprojects (baked shapes become editable paths).
+    DetachInstance {
+        uid: String,
+        #[serde(rename = "gUid", default)]
+        g_uid: Option<String>,
+    },
+    /// Delete a component: remove its definition `<g uid>` AND cascade-remove every `<use>` instance
+    /// that referenced it (id-coupled). One atomic op = one undo step. Reprojects (def shapes drop).
+    DeleteComponent { uid: String },
 
     /// Set (`value: Some`) or clear (`value: None`) one presentation attribute. Added paths
     /// edit their own `attributes`; imported paths accumulate a `style_override`.
@@ -886,6 +899,29 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             .as_mut()
             .map(|t| t.rename_component(uid, name))
             .unwrap_or(false),
+        Op::DetachInstance { uid, g_uid } => {
+            let gu = g_uid.clone().unwrap_or_else(crate::model::tree::new_id);
+            let ok = doc
+                .tree
+                .as_mut()
+                .map(|t| t.detach_instance(uid, &gu))
+                .unwrap_or(false);
+            if ok {
+                reproject_paths(doc); // the baked clones become editable paths
+            }
+            ok
+        }
+        Op::DeleteComponent { uid } => {
+            let ok = doc
+                .tree
+                .as_mut()
+                .map(|t| t.delete_component(uid))
+                .unwrap_or(false);
+            if ok {
+                reproject_paths(doc); // the definition's shapes stop projecting
+            }
+            ok
+        }
         Op::SetStyle { path, key, value } => {
             let Some(p) = doc.paths.get_mut(*path) else {
                 return false;
@@ -2017,6 +2053,152 @@ mod tests {
                 name: "taken".into(), // collides with the existing id
             }
         ));
+    }
+
+    #[test]
+    fn detach_instance_bakes_one_use_into_editable_shapes_leaving_the_def() {
+        use crate::model::document::{parse_svg, serialize_via_tree};
+        // A die component + two instances (one plain, one at x=40 y=10).
+        let mut doc = parse_svg(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><g id="die"><rect x="0" y="0" width="9" height="9"/><circle cx="2" cy="2" r="1"/></g></defs><use href="#die"/><use href="#die" x="40" y="10"/></svg>"##,
+        )
+        .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        // The two def shapes project; the two <use> don't.
+        assert_eq!(doc.paths.len(), 2, "def shapes project, uses don't");
+
+        // Detach the SECOND instance (the placed one). Find its uid in the tree.
+        let use_uid = find_use_uid(doc.tree.as_ref().unwrap(), Some("40")).expect("placed use");
+        assert!(apply(
+            &mut doc,
+            &Op::DetachInstance {
+                uid: use_uid,
+                g_uid: Some("baked".into()),
+            }
+        ));
+        let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        // The definition is untouched: <g id="die"> + the OTHER <use> still there.
+        assert!(out.contains(r##"<g id="die""##), "definition kept: {out}");
+        assert_eq!(
+            out.matches(r##"href="#die""##).count(),
+            1,
+            "only the un-detached instance remains a <use>: {out}"
+        );
+        // The baked copy is a plain <g> carrying the composed placement transform + its own shapes.
+        assert!(
+            out.contains("translate(40 10)"),
+            "instance placement composed onto the bake: {out}"
+        );
+        // Its shapes are now independent editable paths (def's 2 + baked 2 = 4).
+        assert_eq!(
+            doc.paths.len(),
+            4,
+            "def shapes (2) + baked copies (2) project: {}",
+            doc.paths.len()
+        );
+        // Baked descendant uids derive deterministically from the carried g_uid.
+        assert!(
+            doc.paths.iter().any(|p| p.uid.starts_with("baked-")),
+            "baked shapes carry derived uids"
+        );
+
+        // Detaching a non-<use> uid, or a dangling href, fails cleanly.
+        assert!(!apply(
+            &mut doc,
+            &Op::DetachInstance {
+                uid: "die".into(), // that's the def <g>, not a <use>
+                g_uid: None,
+            }
+        ));
+    }
+
+    #[test]
+    fn delete_component_removes_the_def_and_cascades_to_every_instance() {
+        use crate::model::document::{parse_svg, serialize_via_tree};
+        let mut doc = parse_svg(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><g id="die"><rect x="0" y="0" width="9" height="9"/></g></defs><use href="#die"/><use href="#die" x="40"/><rect id="keep" x="80" y="80" width="5" height="5"/></svg>"##,
+        )
+        .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        // The die's rect + the standalone "keep" rect project (2); the two <use> don't.
+        assert_eq!(doc.paths.len(), 2);
+
+        // Find the component <g uid> and delete it.
+        let g_uid = find_component_uid(doc.tree.as_ref().unwrap(), "die").expect("component g uid");
+        assert!(apply(&mut doc, &Op::DeleteComponent { uid: g_uid }));
+
+        let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(!out.contains(r##"id="die""##), "definition gone: {out}");
+        assert!(!out.contains("<use"), "all instances cascaded away: {out}");
+        assert!(
+            out.contains(r##"id="keep""##),
+            "unrelated shape kept: {out}"
+        );
+        // Only the standalone rect still projects.
+        let live = doc.paths.iter().filter(|p| !p.deleted).count();
+        assert_eq!(live, 1, "only the standalone rect remains editable");
+    }
+
+    /// The uid of the first `<use>` whose `x` matches (or the first `<use>` at all when `x` is None).
+    fn find_use_uid(tree: &crate::model::tree::Tree, x: Option<&str>) -> Option<String> {
+        fn walk(n: &crate::model::tree::Node, x: Option<&str>, out: &mut Option<String>) {
+            if out.is_some() {
+                return;
+            }
+            if let crate::model::tree::Node::Element {
+                tag,
+                attrs,
+                children,
+                uid,
+                ..
+            } = n
+            {
+                if tag == "use" {
+                    let ax = attrs
+                        .iter()
+                        .find(|(k, _)| k == "x")
+                        .map(|(_, v)| v.as_str());
+                    if x.is_none() || ax == x {
+                        *out = Some(uid.clone());
+                        return;
+                    }
+                }
+                for c in children {
+                    walk(c, x, out);
+                }
+            }
+        }
+        let mut out = None;
+        walk(&tree.root, x, &mut out);
+        out
+    }
+
+    /// The uid of the component `<g id=name>`.
+    fn find_component_uid(tree: &crate::model::tree::Tree, name: &str) -> Option<String> {
+        fn walk(n: &crate::model::tree::Node, name: &str, out: &mut Option<String>) {
+            if out.is_some() {
+                return;
+            }
+            if let crate::model::tree::Node::Element {
+                tag,
+                attrs,
+                children,
+                uid,
+                ..
+            } = n
+            {
+                if tag == "g" && attrs.iter().any(|(k, v)| k == "id" && v == name) {
+                    *out = Some(uid.clone());
+                    return;
+                }
+                for c in children {
+                    walk(c, name, out);
+                }
+            }
+        }
+        let mut out = None;
+        walk(&tree.root, name, &mut out);
+        out
     }
 
     #[test]

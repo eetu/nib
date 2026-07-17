@@ -37,6 +37,9 @@ function stampCreateUid(op: unknown): void {
     if (!o.uid) o.uid = crypto.randomUUID();
     if (!o.useUid) o.useUid = crypto.randomUUID();
     if (!o.defsUid) o.defsUid = crypto.randomUUID();
+  } else if (t === "detachInstance") {
+    // The baked wrapper <g>'s uid; its descendants derive deterministically from it.
+    if (!o.gUid) o.gUid = crypto.randomUUID();
   } else if (
     (t === "addPath" ||
       t === "addShape" ||
@@ -561,6 +564,29 @@ class DocumentStore {
   renameComponent(uid: string, name: string): void {
     if (name.trim() && this.#apply({ type: "renameComponent", uid, name: name.trim() })) {
       this.commit();
+      this.treeVersion++;
+    }
+  }
+
+  /** Bake one `<use>` instance (`uid`) into independent, editable shapes — a `<g>` copy of the
+   *  component carrying the instance's placement. The definition is untouched (other instances keep
+   *  tracking it). Selects the baked group. */
+  detachInstance(uid: string): void {
+    const gUid = crypto.randomUUID();
+    if (this.#apply({ type: "detachInstance", uid, gUid })) {
+      this.commit();
+      this.#resetClientSelection();
+      this.treeVersion++;
+      this.selectElement(gUid);
+    }
+  }
+
+  /** Delete a component (`uid` = its definition `<g>`) AND every `<use>` instance of it (cascade).
+   *  Clears the selection since the removed nodes may have been selected. */
+  deleteComponent(uid: string): void {
+    if (this.#apply({ type: "deleteComponent", uid })) {
+      this.commit();
+      this.#resetClientSelection();
       this.treeVersion++;
     }
   }

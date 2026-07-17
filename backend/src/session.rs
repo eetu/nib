@@ -60,6 +60,12 @@ fn ensure_create_uid(op: &mut serde_json::Value) {
                 }
             }
         }
+        "detachInstance" => {
+            // The baked wrapper <g>'s uid; its descendants derive deterministically from it.
+            if op.get("gUid").and_then(|v| v.as_str()).is_none() {
+                op["gUid"] = serde_json::json!(nib_core::model::tree::new_id());
+            }
+        }
         "addPath" | "addShape" | "booleanOp" | "combinePaths" | "outlineStroke" | "offsetPath"
         | "stampInstance" => {
             if op.get("uid").and_then(|v| v.as_str()).is_none() {

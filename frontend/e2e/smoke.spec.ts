@@ -1437,6 +1437,59 @@ test("create a component from a selection, then stamp an instance", async ({ pag
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("detach bakes one instance into shapes; deleting a component cascades to its instances", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+  page.on("dialog", (d) => void d.accept()); // the delete confirm()
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  // A component (die) already referenced by two <use> instances.
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><g id="die"><rect x="0" y="0" width="9" height="9" fill="#f00"/></g></defs><use href="#die"/><use href="#die" x="40" y="10"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // One component, two instances. The def's rect projects once; the two <use> don't emit rects.
+  await expect(page.locator(".complist .comprow")).toHaveCount(1);
+  await expect(page.locator(".comprow .meta")).toContainText("2×");
+  await page.getByRole("button", { name: "source" }).click();
+  const src0 = await page.locator(".sourceview textarea").inputValue();
+  expect(src0.match(/<use/g)?.length).toBe(2);
+  expect(src0.match(/<rect/g)?.length).toBe(1);
+
+  // Select a <use> instance (a leaf layer row) → the element section offers "detach instance".
+  await page.locator(".layerlist .pathrow .row-btn").first().click();
+  await page.getByRole("button", { name: "detach instance" }).click();
+
+  // The baked copy is independent shapes (rect count 1→2); one <use> remains; the def is untouched.
+  const src1 = await page.locator(".sourceview textarea").inputValue();
+  expect(src1.match(/<use/g)?.length).toBe(1);
+  expect(src1.match(/<rect/g)?.length).toBe(2);
+  expect(src1).toContain('<g id="die"');
+
+  // Delete the component → its def AND the remaining instance cascade away; the baked group stays.
+  await page.locator(".comprow .del").click();
+  await expect(page.locator(".complist .comprow")).toHaveCount(0);
+  const src2 = await page.locator(".sourceview textarea").inputValue();
+  expect(src2).not.toContain("<use");
+  expect(src2).not.toContain('id="die"');
+  expect(src2.match(/<rect/g)?.length).toBe(1); // only the baked copy survives
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("grouping a non-adjacent multi-selection then deleting removes the right shapes", async ({
   page,
 }) => {
