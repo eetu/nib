@@ -269,6 +269,13 @@
     editor.groupSelection();
   }
 
+  let compExpanded = $state<string[]>([]);
+  function toggleComp(uid: string) {
+    compExpanded = compExpanded.includes(uid)
+      ? compExpanded.filter((x) => x !== uid)
+      : [...compExpanded, uid];
+  }
+
   function createComponentFromSelection() {
     const name = prompt("component name:", `component ${editor.components.length + 1}`);
     if (name?.trim()) editor.createComponentFromSelection(name.trim());
@@ -905,20 +912,52 @@
       {#if editor.components.length}
         <ul class="complist">
           {#each editor.components as c (c.uid)}
-            <li class="comprow">
-              <button
-                class="row-btn"
-                ondblclick={() => renameComp(c.uid, c.name)}
-                title="double-click to rename (updates every instance)"
-              >
-                <span class="pid">{c.name}</span>
-                <span class="meta">{c.partUids.length} parts · {c.instanceCount}×</span>
-              </button>
-              <button
-                class="stamp"
-                title="stamp an instance"
-                onclick={() => editor.stampInstance(c.name)}>+ stamp</button
-              >
+            <li>
+              <div class="comprow">
+                <button
+                  class="disclosure"
+                  aria-label={compExpanded.includes(c.uid) ? "collapse parts" : "show parts"}
+                  onclick={() => toggleComp(c.uid)}
+                >
+                  {#if compExpanded.includes(c.uid)}
+                    <ChevronDown size={12} />
+                  {:else}
+                    <ChevronRight size={12} />
+                  {/if}
+                </button>
+                <button
+                  class="row-btn"
+                  ondblclick={() => renameComp(c.uid, c.name)}
+                  title="double-click to rename (updates every instance)"
+                >
+                  <span class="pid">{c.name}</span>
+                  <span class="meta">{c.partUids.length} parts · {c.instanceCount}×</span>
+                </button>
+                <button
+                  class="stamp"
+                  title="stamp an instance"
+                  onclick={() => editor.stampInstance(c.name)}>+ stamp</button
+                >
+              </div>
+              {#if compExpanded.includes(c.uid)}
+                <ul class="partlist">
+                  {#each c.partUids as pu (pu)}
+                    {@const idx = uidToIndex.get(pu)}
+                    {#if idx !== undefined}
+                      <li>
+                        <button
+                          class="part-btn"
+                          class:active={editor.selectedPathIndex === idx}
+                          title="select this part — editing it (fill, geometry) updates every instance"
+                          onclick={() => editor.selectPath(idx)}
+                        >
+                          {doc?.paths[idx]?.id ?? "part"}
+                        </button>
+                      </li>
+                    {/if}
+                  {/each}
+                </ul>
+              {/if}
             </li>
           {/each}
         </ul>
@@ -1306,6 +1345,43 @@
 
   .comprow .stamp:hover {
     border-color: var(--halo-accent);
+    color: var(--halo-accent);
+  }
+
+  .comprow .disclosure {
+    flex: none;
+    display: flex;
+    align-items: center;
+    padding: 2px;
+    border: none;
+    background: transparent;
+    color: var(--halo-text-muted);
+  }
+
+  .partlist {
+    list-style: none;
+    margin: 0 0 2px;
+    padding: 0 0 0 18px;
+  }
+
+  .part-btn {
+    width: 100%;
+    padding: 2px 6px;
+    border: none;
+    border-radius: var(--halo-radius-pill);
+    background: transparent;
+    color: var(--halo-text-muted);
+    text-align: left;
+    font-size: 11px;
+  }
+
+  .part-btn:hover {
+    background: var(--halo-bg-main);
+    color: var(--halo-text-main);
+  }
+
+  .part-btn.active {
+    background: var(--halo-accent-soft);
     color: var(--halo-accent);
   }
 

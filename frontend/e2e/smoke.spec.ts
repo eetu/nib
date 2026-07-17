@@ -1426,6 +1426,14 @@ test("create a component from a selection, then stamp an instance", async ({ pag
   expect(src2.match(/<g id="die"/g)?.length).toBe(1);
   expect(src2.match(/<rect/g)?.length).toBe(2);
 
+  // Expand the component + select a definition part — editing it (fill/geometry) propagates to
+  // every instance (they're <use> of the one definition).
+  await page.locator(".comprow .disclosure").first().click();
+  const parts = page.locator(".partlist .part-btn");
+  await expect(parts).toHaveCount(2);
+  await parts.nth(0).click();
+  await expect(parts.nth(0)).toHaveClass(/active/);
+
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 

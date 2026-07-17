@@ -60,6 +60,10 @@ export function hitTest(screen: Point): Hit {
   const doc = editor.doc;
   if (!doc) return { kind: "empty" };
 
+  // Component-definition shapes live inside `<defs>`: they paint only via `<use>` (never directly at
+  // their def-space coords), so they must not be phantom click targets. Skip them in every scan.
+  const defUids = editor.defPathUids;
+
   // 1+2. Handles + anchors are hit-testable only while node-editing: any non-select tool
   //       (add/delete-node, pen), or the select tool after a double-click enters node mode.
   //       Otherwise the select tool's drag always moves the whole shape — no ambiguity over
@@ -85,7 +89,7 @@ export function hitTest(screen: Point): Hit {
     // own nodes are never shadowed (e.g. a circle's nodes sit on the bbox edge-midpoints).
     let bestAnchor: { ref: NodeRef; d: number } | null = null;
     doc.paths.forEach((path, pathIndex) => {
-      if (path.deleted) return;
+      if (path.deleted || defUids.has(path.uid ?? "")) return;
       path.subpaths.forEach((sp, subpathIndex) => {
         sp.nodes.forEach((n, nodeIndex) => {
           const d = screenDist(n.point, screen);
@@ -122,7 +126,7 @@ export function hitTest(screen: Point): Hit {
   let best: Hit | null = null;
   let bestD = Infinity;
   doc.paths.forEach((path, pathIndex) => {
-    if (path.deleted) return;
+    if (path.deleted || defUids.has(path.uid ?? "")) return;
     path.subpaths.forEach((sp, subpathIndex) => {
       const hit = nearestOnSubpath(sp, docPoint);
       if (hit && hit.distance <= threshDoc && hit.distance < bestD) {
@@ -144,7 +148,7 @@ export function hitTest(screen: Point): Hit {
   //    stroke-only paths (fill="none"); an absent fill counts as filled (SVG default).
   for (let pathIndex = doc.paths.length - 1; pathIndex >= 0; pathIndex--) {
     const p = doc.paths[pathIndex];
-    if (p.deleted) continue;
+    if (p.deleted || defUids.has(p.uid ?? "")) continue;
     const fill = p.styleOverride?.fill ?? p.attributes?.fill;
     if (fill === "none") continue;
     if (pointInPath(p.subpaths, docPoint)) return { kind: "fill", pathIndex };

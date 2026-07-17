@@ -1949,6 +1949,19 @@ mod tests {
         let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
         assert_eq!(out.matches(r##"href="#die""##).count(), 2, "two instances: {out}");
 
+        // Editing a definition part propagates: restyle def-path #0 (a rect inside the component's
+        // <g>) → the definition updates, so every <use> instance renders the new fill natively.
+        assert!(apply(
+            &mut doc,
+            &Op::SetStyle {
+                path: 0,
+                key: "fill".into(),
+                value: Some("#00ff00".into()),
+            }
+        ));
+        let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(out.contains("#00ff00"), "def part restyle lands in the definition: {out}");
+
         // Rename → the <g id> AND every <use href> update (no dangling #die).
         assert!(apply(
             &mut doc,
