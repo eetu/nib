@@ -24,6 +24,7 @@ use serde::Deserialize;
 use serde_json::json;
 use sqlx::SqlitePool;
 
+use nib_core::model::tree::RenderNode;
 use nib_core::model::types::SvgDocument;
 
 use crate::db::{self, User};
@@ -54,7 +55,10 @@ vocabulary), set_style, boolean_op, group, rename. Mutations return a ONE-LINE a
 good naming compounds. This is the difference between a drawing and a mess: always do it. To act on \
 what your co-author means ('make the hand bigger'), call `find` to resolve the name to object(s); if \
 more than one matches (two 'hand's), DON'T guess — show them the candidates and ask which (left or \
-right?). Names are the shared vocabulary; the #index/uid are how you then address the one they meant.\n\
+right?). Names are the shared vocabulary; the #index/uid are how you then address the one they meant. \
+For a REPEATED compound (dice, windows, tree leaves, icons), `create_component` from its shapes once, \
+then `stamp` instances instead of re-drawing them — far fewer ops, and editing the definition updates \
+every instance (`list_components` shows what's defined).\n\
 5. render_document returns a PNG so you can SEE the result and verify it actually reads correctly \
 (get_document gives structure; this gives pixels). Images are token-heavy — render at checkpoints, \
 not after every edit; pass a small `width` for a quick glance.\n\
@@ -167,6 +171,25 @@ fn outline(s: &ProjectSession) -> String {
         r(vb.height),
         count_paths(s),
     )];
+    // Components + which paths are definition parts (so def-space bounds don't confuse the LLM).
+    let (comps, part_comp) = component_info(doc);
+    if !comps.is_empty() {
+        let names: Vec<String> = comps
+            .iter()
+            .map(|c| {
+                format!(
+                    "{} ({} parts, {}×)",
+                    c["name"].as_str().unwrap_or("?"),
+                    c["parts"],
+                    c["instances"]
+                )
+            })
+            .collect();
+        lines.push(format!(
+            "components: {} — a `<use>` renders one; edit a part to update all",
+            names.join(", ")
+        ));
+    }
     for (i, p) in doc.paths.iter().enumerate() {
         if p.deleted {
             continue;
@@ -205,8 +228,12 @@ fn outline(s: &ProjectSession) -> String {
             .unwrap_or_default();
         let nodes: usize = p.subpaths.iter().map(|sp| sp.nodes.len()).sum();
         let hidden = if p.hidden { " hidden" } else { "" };
+        let in_comp = part_comp
+            .get(&p.uid)
+            .map(|n| format!(" [in component: {n}]"))
+            .unwrap_or_default();
         lines.push(format!(
-            "#{i} {id} {bbox} fill {fill}{stroke} {nodes}n{hidden}"
+            "#{i} {id} {bbox} fill {fill}{stroke} {nodes}n{hidden}{in_comp}"
         ));
     }
     lines.join("\n")
@@ -249,6 +276,92 @@ fn find_by_name(doc: &SvgDocument, query: &str) -> Vec<serde_json::Value> {
     // Exact-name matches first, so a precise reference ranks above partial hits.
     matches.sort_by_key(|m| !m.get("exact").and_then(|e| e.as_bool()).unwrap_or(false));
     matches
+}
+
+/// The document's components (a `<g id>` directly inside a `<defs>`) as summary JSON, plus a map of
+/// each definition part's `uid` → its component name (so the outline can label def-paths).
+fn component_info(
+    doc: &SvgDocument,
+) -> (
+    Vec<serde_json::Value>,
+    std::collections::HashMap<String, String>,
+) {
+    let mut summaries = Vec::new();
+    let mut part_comp = std::collections::HashMap::new();
+    let Some(tree) = doc.tree.as_ref() else {
+        return (summaries, part_comp);
+    };
+    let roots = tree.render_children();
+    let mut uses: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    count_uses(&roots, &mut uses);
+    collect_components(&roots, &uses, &mut summaries, &mut part_comp);
+    (summaries, part_comp)
+}
+
+fn count_uses(nodes: &[RenderNode], uses: &mut std::collections::HashMap<String, usize>) {
+    for n in nodes {
+        if let RenderNode::Element {
+            tag,
+            attrs,
+            children,
+            ..
+        } = n
+        {
+            if tag == "use" {
+                if let Some(h) = attrs.get("href").or_else(|| attrs.get("xlink:href")) {
+                    *uses
+                        .entry(h.trim_start_matches('#').to_string())
+                        .or_insert(0) += 1;
+                }
+            }
+            count_uses(children, uses);
+        }
+    }
+}
+
+fn collect_part_uids(node: &RenderNode, out: &mut Vec<String>) {
+    if let RenderNode::Element { children, .. } = node {
+        for c in children {
+            if let RenderNode::Element { uid, .. } = c {
+                out.push(uid.clone());
+                collect_part_uids(c, out);
+            }
+        }
+    }
+}
+
+fn collect_components(
+    nodes: &[RenderNode],
+    uses: &std::collections::HashMap<String, usize>,
+    summaries: &mut Vec<serde_json::Value>,
+    part_comp: &mut std::collections::HashMap<String, String>,
+) {
+    for n in nodes {
+        let RenderNode::Element { tag, children, .. } = n else {
+            continue;
+        };
+        if tag == "defs" {
+            for c in children {
+                if let RenderNode::Element { tag: ct, attrs, .. } = c {
+                    if ct == "g" {
+                        if let Some(id) = attrs.get("id") {
+                            let mut parts = Vec::new();
+                            collect_part_uids(c, &mut parts);
+                            for p in &parts {
+                                part_comp.insert(p.clone(), id.clone());
+                            }
+                            summaries.push(json!({
+                                "name": id, "parts": parts.len(),
+                                "instances": uses.get(id).copied().unwrap_or(0),
+                            }));
+                        }
+                    }
+                }
+            }
+        } else {
+            collect_components(children, uses, summaries, part_comp);
+        }
+    }
 }
 
 /// Bounding-box → a `ShapeSpec` JSON for `add_shape`. `None` for an unknown shape.
@@ -366,6 +479,25 @@ pub struct RenameParams {
     pub index: usize,
     /// The new descriptive name/id, e.g. "caesar-toga".
     pub name: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct CreateComponentParams {
+    /// The path #indices to turn into a reusable component (1+). They must share one parent.
+    pub indices: Vec<usize>,
+    /// A unique name for the component (its `<g>` id + the `<use href>` target), e.g. "die".
+    pub name: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct StampParams {
+    /// The component name to stamp (from create_component / list_components).
+    pub component: String,
+    /// Optional placement offset (viewBox units) so the instance doesn't overlap the others.
+    #[serde(default)]
+    pub x: Option<f64>,
+    #[serde(default)]
+    pub y: Option<f64>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -662,6 +794,92 @@ impl NibMcp {
     }
 
     #[tool(
+        description = "Turn paths (by #index, 1+) into a reusable COMPONENT: they move into a `<g>` definition and a `<use>` instance replaces them (rendered in place). Then `stamp` copies instead of re-drawing — e.g. define a die once, stamp it. Editing a component part updates every instance. Paths must share one parent; `name` must be unique. Renumbers #indices — call get_document after."
+    )]
+    async fn create_component(
+        &self,
+        Parameters(p): Parameters<CreateComponentParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let uids: Vec<String> = {
+            let s = sess.lock().unwrap();
+            let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+            let mut v = Vec::with_capacity(p.indices.len());
+            for &i in &p.indices {
+                let pe = doc
+                    .paths
+                    .get(i)
+                    .ok_or_else(|| bad(format!("no path at #{i}")))?;
+                if pe.deleted {
+                    return Err(bad(format!("path #{i} is deleted")));
+                }
+                if pe.uid.is_empty() {
+                    return Err(bad(format!("path #{i} has no tree uid")));
+                }
+                v.push(pe.uid.clone());
+            }
+            v
+        };
+        if uids.is_empty() {
+            return Err(bad("create_component needs at least 1 path index"));
+        }
+        let op = json!({ "type": "createComponent", "members": uids, "name": p.name });
+        let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
+        if n == 0 {
+            return Err(bad(
+                "create_component did not apply — the paths must share one parent, and the name must be unique",
+            ));
+        }
+        Ok(format!(
+            "component \"{}\" created from {} paths → #indices renumbered, call get_document",
+            p.name,
+            uids.len()
+        ))
+    }
+
+    #[tool(
+        description = "Stamp a new instance of a component (by name) at optional x/y offset — a `<use>` reference, not a copy, so editing the component updates it too. Cheaper than re-drawing the shapes."
+    )]
+    async fn stamp(
+        &self,
+        Parameters(p): Parameters<StampParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let mut attributes = serde_json::Map::new();
+        if let Some(x) = p.x {
+            attributes.insert("x".into(), json!(x.to_string()));
+        }
+        if let Some(y) = p.y {
+            attributes.insert("y".into(), json!(y.to_string()));
+        }
+        let op = json!({ "type": "stampInstance", "href": format!("#{}", p.component), "attributes": attributes });
+        let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
+        if n == 0 {
+            return Err(bad("stamp did not apply (no active document?)"));
+        }
+        Ok(format!(
+            "stamped an instance of \"{}\" → call get_document",
+            p.component
+        ))
+    }
+
+    #[tool(
+        description = "List the document's components (name, part count, instance count) — the reusable definitions you can `stamp`."
+    )]
+    async fn list_components(&self, ctx: RequestContext<RoleServer>) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let s = sess.lock().unwrap();
+        let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+        let (comps, _) = component_info(doc);
+        Ok(json!({ "components": comps }).to_string())
+    }
+
+    #[tool(
         description = "Give a path (by #index) a descriptive, human-readable name/id, e.g. \"caesar-toga\". Do this for shapes you didn't already name at creation — it shows in the outline + the human's layers panel."
     )]
     async fn rename(
@@ -693,7 +911,23 @@ impl ServerHandler for NibMcp {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_by_name, render_png};
+    use super::{component_info, find_by_name, render_png};
+
+    #[test]
+    fn component_info_lists_components_and_labels_parts() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><g id="die"><rect x="0" y="0" width="9" height="9"/><circle cx="2" cy="2" r="1"/></g></defs><use href="#die" x="10" y="10"/><use href="#die" x="40" y="10"/></svg>"##;
+        let mut ed = nib_core::Editor::new();
+        ed.load_source(svg).unwrap();
+        let doc = ed.doc().unwrap();
+        let (comps, part_comp) = component_info(doc);
+        assert_eq!(comps.len(), 1, "one component: {comps:?}");
+        assert_eq!(comps[0]["name"], "die");
+        assert_eq!(comps[0]["parts"], 2, "rect + circle"); // the def's two shapes
+        assert_eq!(comps[0]["instances"], 2, "two <use>");
+        // The def parts map back to the component name (outline labeling).
+        assert_eq!(part_comp.len(), 2);
+        assert!(part_comp.values().all(|v| v == "die"));
+    }
 
     #[test]
     fn find_by_name_resolves_and_disambiguates() {
@@ -735,5 +969,26 @@ mod tests {
             &[255, 255, 255],
             "something was drawn"
         );
+    }
+
+    /// render_document is the LLM's "see your work" tool — for components it must resolve `<use href>`
+    /// against a `<g>` definition, so BOTH instances paint. This is the one external dependency the
+    /// components feature rides on (resvg's `<use>` resolution); pin it deterministically. viewBox is
+    /// 200×100 rendered at target 200 → scale 1.0, so pixel coords == document coords.
+    #[test]
+    fn render_resolves_use_of_a_component_def_for_every_instance() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><defs><g id="die"><rect x="0" y="0" width="40" height="40" fill="#3f86d4"/></g></defs><use href="#die" x="10" y="30"/><use href="#die" x="120" y="30"/></svg>"##;
+        let png = render_png(svg, 200.0).expect("render");
+        let pm = resvg::tiny_skia::Pixmap::decode_png(&png).expect("decode");
+        assert_eq!((pm.width(), pm.height()), (200, 100));
+        let px = |x: u32, y: u32| {
+            let i = ((y * pm.width() + x) * 4) as usize;
+            [pm.data()[i], pm.data()[i + 1], pm.data()[i + 2]]
+        };
+        // Instance A body ≈ (10,30)-(50,70); instance B ≈ (120,30)-(160,70).
+        assert_ne!(px(30, 50), [255, 255, 255], "left <use> resolved + painted");
+        assert_ne!(px(140, 50), [255, 255, 255], "right <use> resolved + painted");
+        // The gap between the two instances is untouched backdrop — not one giant fill.
+        assert_eq!(px(85, 50), [255, 255, 255], "gap stays white");
     }
 }

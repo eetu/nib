@@ -53,7 +53,15 @@ fn ensure_create_uid(op: &mut serde_json::Value) {
                 op["uids"] = serde_json::json!(uids);
             }
         }
-        "addPath" | "addShape" | "booleanOp" | "combinePaths" | "outlineStroke" | "offsetPath" => {
+        "createComponent" => {
+            for key in ["uid", "useUid", "defsUid"] {
+                if op.get(key).and_then(|v| v.as_str()).is_none() {
+                    op[key] = serde_json::json!(nib_core::model::tree::new_id());
+                }
+            }
+        }
+        "addPath" | "addShape" | "booleanOp" | "combinePaths" | "outlineStroke" | "offsetPath"
+        | "stampInstance" => {
             if op.get("uid").and_then(|v| v.as_str()).is_none() {
                 op["uid"] = serde_json::json!(nib_core::model::tree::new_id());
             }
