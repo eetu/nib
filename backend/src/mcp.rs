@@ -576,6 +576,14 @@ pub struct FlipParams {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct ReorderParams {
+    /// The path's #index (from get_document).
+    pub index: usize,
+    /// front | back | forward | backward.
+    pub r#where: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct DropShadowParams {
     /// The path's #index (from get_document).
     pub index: usize,
@@ -1078,6 +1086,46 @@ impl NibMcp {
             "flipped #{} {}",
             p.index,
             if horizontal { "horizontal" } else { "vertical" }
+        ))
+    }
+
+    #[tool(
+        description = "Change a shape's z-order (by #index): `where` ∈ front | back | forward | backward. front/back move it all the way (bring-to-front / send-to-back); forward/backward one step. Renumbers #indices — call get_document after."
+    )]
+    async fn reorder(
+        &self,
+        Parameters(p): Parameters<ReorderParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let uid = {
+            let s = sess.lock().unwrap();
+            let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+            let pe = doc
+                .paths
+                .get(p.index)
+                .ok_or_else(|| bad(format!("no path at #{}", p.index)))?;
+            if pe.uid.is_empty() {
+                return Err(bad("that shape has no tree uid (can't reorder)"));
+            }
+            pe.uid.clone()
+        };
+        let w = p.r#where.to_lowercase();
+        let op = match w.as_str() {
+            "front" => json!({ "type": "reorderNodeExtreme", "uid": uid, "front": true }),
+            "back" => json!({ "type": "reorderNodeExtreme", "uid": uid, "front": false }),
+            "forward" | "up" => json!({ "type": "reorderNode", "uid": uid, "forward": true }),
+            "backward" | "down" => json!({ "type": "reorderNode", "uid": uid, "forward": false }),
+            _ => return Err(bad("where must be front | back | forward | backward")),
+        };
+        let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
+        if n == 0 {
+            return Err(bad("reorder was a no-op (already at that edge?)"));
+        }
+        Ok(format!(
+            "moved #{} {w} → #indices renumbered, call get_document",
+            p.index
         ))
     }
 

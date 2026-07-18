@@ -810,6 +810,38 @@ test("select-all (⌘A) then delete clears every shape", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("send to back (⌘⇧[) moves the top shape below the others", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  // "b" is drawn after "a", so it's on top (last in document order).
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="a" x="0" y="0" width="30" height="30"/><rect id="b" x="10" y="10" width="30" height="30"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // The layers list is reversed (top of stack first) → the first row is "b". Select + send to back.
+  await page.locator(".layerlist .row-btn").first().click();
+  await page.keyboard.press("Meta+Shift+BracketLeft");
+
+  await page.getByRole("button", { name: "source" }).click();
+  const src = await page.locator(".sourceview textarea").inputValue();
+  expect(src.indexOf('id="b"')).toBeLessThan(src.indexOf('id="a"')); // b now behind a
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("drop shadow adds a filter def + references it; removing clears it", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

@@ -988,6 +988,13 @@ impl Tree {
         reorder_in(&mut self.root, uid, forward)
     }
 
+    /// Move the node `uid` to the front (`front: true`, last element among its siblings = top of z)
+    /// or the back (first element = bottom) — bring-to-front / send-to-back. Returns whether it
+    /// actually moved (false when found but already at that extreme, or not found).
+    pub fn reorder_extreme(&mut self, uid: &str, front: bool) -> bool {
+        reorder_extreme_in(&mut self.root, uid, front).unwrap_or(false)
+    }
+
     /// Set (`Some`) or remove (`None`) an attribute on the element `uid`, marking it edited so it
     /// regenerates on emit. Returns whether the node was found + changed.
     pub fn set_node_attr(&mut self, uid: &str, key: &str, value: Option<&str>) -> bool {
@@ -1674,6 +1681,46 @@ fn reorder_in(node: &mut Node, uid: &str, forward: bool) -> bool {
         }
     }
     false
+}
+
+/// Move `uid` to the front (last element) or back (first element) of its siblings. `Some(true)` =
+/// moved, `Some(false)` = found but already at that extreme, `None` = not in this subtree.
+fn reorder_extreme_in(node: &mut Node, uid: &str, front: bool) -> Option<bool> {
+    if let Node::Element { children, .. } = node {
+        if let Some(i) = children.iter().position(|c| c.uid() == Some(uid)) {
+            let at_extreme = if front {
+                children
+                    .iter()
+                    .rposition(|c| matches!(c, Node::Element { .. }))
+                    == Some(i)
+            } else {
+                children
+                    .iter()
+                    .position(|c| matches!(c, Node::Element { .. }))
+                    == Some(i)
+            };
+            if at_extreme {
+                return Some(false);
+            }
+            let n = children.remove(i);
+            if front {
+                children.push(n); // last child = top of z among siblings
+            } else {
+                let at = children
+                    .iter()
+                    .position(|c| matches!(c, Node::Element { .. }))
+                    .unwrap_or(0);
+                children.insert(at, n);
+            }
+            return Some(true);
+        }
+        for c in children.iter_mut() {
+            if let Some(moved) = reorder_extreme_in(c, uid, front) {
+                return Some(moved);
+            }
+        }
+    }
+    None
 }
 
 /// Lift the sibling `members` out of their shared parent (like `group_in`), inserting `replacement`

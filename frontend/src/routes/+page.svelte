@@ -79,6 +79,14 @@
       } else if (k === "a") {
         e.preventDefault();
         editor.selectAll();
+      } else if (k === "]" || k === "}") {
+        // ⌘] forward · ⌘⇧] to front (Shift maps ] → } on US layouts, so accept both).
+        e.preventDefault();
+        editor.reorderSelection(true, e.shiftKey);
+      } else if (k === "[" || k === "{") {
+        // ⌘[ backward · ⌘⇧[ to back.
+        e.preventDefault();
+        editor.reorderSelection(false, e.shiftKey);
       } else if (k === "g" && settings.uiLevel === "advanced") {
         // Group / ungroup the selection — a pro feature, so inert in basic (touch-up) mode.
         e.preventDefault();

@@ -696,6 +696,27 @@ class DocumentStore {
     }
   }
 
+  /** Reorder the current selection's z: `forward` (or backward), `extreme` = all the way to
+   *  front/back. Keyboard entry (⌘]/⌘[ and ⌘⇧]/⌘⇧[) — the context menu addresses rows directly. */
+  reorderSelection(forward: boolean, extreme: boolean): void {
+    const uid = this.selectedPathElement?.uid;
+    if (!uid) return;
+    if (extreme) this.reorderNodeExtreme(uid, forward);
+    else this.reorderNode(uid, forward);
+  }
+
+  /** Move a tree node to the front (`front`, top of z) or back of its siblings — bring-to-front /
+   *  send-to-back. No-op when already at that extreme. */
+  reorderNodeExtreme(uid: string, front: boolean): void {
+    const sel = this.#pathUids(this.selectedPaths);
+    const grp = this.selectedGroupUid;
+    if (this.#apply({ type: "reorderNodeExtreme", uid, front })) {
+      this.commit();
+      this.treeVersion++;
+      this.#reselectByUids(sel, grp);
+    }
+  }
+
   /** Move a tree node relative to another (drag-drop): `before`/`after` = sibling of `refUid`
    *  (reparenting across levels), `inside` = into that group. */
   moveTreeNode(uid: string, refUid: string, position: "before" | "after" | "inside"): void {

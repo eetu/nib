@@ -276,8 +276,10 @@
     const uid = n.uid;
     const items: Menu["items"] = [
       { label: "rename", run: () => startGroupRename(uid, treeName(n)) },
+      { label: "bring to front", run: () => editor.reorderNodeExtreme(uid, true) },
       { label: "bring forward", run: () => editor.reorderNode(uid, true) },
       { label: "send backward", run: () => editor.reorderNode(uid, false) },
+      { label: "send to back", run: () => editor.reorderNodeExtreme(uid, false) },
     ];
     // Live-boolean ops are a pro (advanced) path-craft feature — hidden in basic (touch-up) mode,
     // matching the multi-select boolean buttons + palette.
@@ -368,8 +370,10 @@
         // Tree z-order (imported shapes have a uid); drawn rows reorder by drag instead.
         ...(uid
           ? [
+              { label: "bring to front", run: () => editor.reorderNodeExtreme(uid, true) },
               { label: "bring forward", run: () => editor.reorderNode(uid, true) },
               { label: "send backward", run: () => editor.reorderNode(uid, false) },
+              { label: "send to back", run: () => editor.reorderNodeExtreme(uid, false) },
             ]
           : []),
         { label: "delete", danger: true, run: () => editor.deletePath(index) },

@@ -229,6 +229,10 @@ pub enum Op {
     /// Move a tree node one element-slot within its parent — `forward` (later in document order =
     /// higher z) or backward. Re-projects the paths view (z-order changed).
     ReorderNode { uid: String, forward: bool },
+    /// Move a tree node to the very front (`front: true`, top of z = last element among its
+    /// siblings) or back (bottom) — bring-to-front / send-to-back. Re-projects. No-op (returns
+    /// false) when already at that extreme.
+    ReorderNodeExtreme { uid: String, front: bool },
     /// Move a tree node relative to `ref_uid` — `position` = "before"/"after" (sibling, reparenting
     /// across levels) or "inside" (into a group). The drag-drop reorder op. Re-projects the paths.
     /// (Distinct from `MoveNode`, which moves an anchor *point*.)
@@ -948,6 +952,17 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 .tree
                 .as_mut()
                 .map(|t| t.reorder(uid, *forward))
+                .unwrap_or(false);
+            if ok {
+                reproject_paths(doc);
+            }
+            ok
+        }
+        Op::ReorderNodeExtreme { uid, front } => {
+            let ok = doc
+                .tree
+                .as_mut()
+                .map(|t| t.reorder_extreme(uid, *front))
                 .unwrap_or(false);
             if ok {
                 reproject_paths(doc);
@@ -1913,6 +1928,53 @@ mod tests {
         let ia = out.find("id=\"a\"").unwrap();
         let ib = out.find("id=\"b\"").unwrap();
         assert!(ib < ia, "after bring-forward, b precedes a: {out}");
+    }
+
+    #[test]
+    fn reorder_extreme_moves_a_node_to_front_or_back() {
+        use crate::model::document::{parse_svg, serialize_via_tree};
+        let mut doc = parse_svg(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="a" x="0" y="0" width="10" height="10"/><rect id="b" x="20" y="0" width="10" height="10"/><rect id="c" x="40" y="0" width="10" height="10"/></svg>"#,
+        )
+        .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        let ua = doc.paths[0].uid.clone(); // "a", bottom of z (first)
+        // Bring "a" to the front → it becomes the last element (drawn on top).
+        assert!(apply(
+            &mut doc,
+            &Op::ReorderNodeExtreme {
+                uid: ua.clone(),
+                front: true
+            }
+        ));
+        let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        let (ia, ib, ic) = (
+            out.find("id=\"a\"").unwrap(),
+            out.find("id=\"b\"").unwrap(),
+            out.find("id=\"c\"").unwrap(),
+        );
+        assert!(ib < ic && ic < ia, "a moved to the front (last): {out}");
+        // Already at the front → no-op (returns false).
+        assert!(!apply(
+            &mut doc,
+            &Op::ReorderNodeExtreme {
+                uid: ua.clone(),
+                front: true
+            }
+        ));
+        // Send "a" to the back → first element again.
+        assert!(apply(
+            &mut doc,
+            &Op::ReorderNodeExtreme {
+                uid: ua,
+                front: false
+            }
+        ));
+        let out2 = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(
+            out2.find("id=\"a\"").unwrap() < out2.find("id=\"b\"").unwrap(),
+            "a back to the bottom (first): {out2}"
+        );
     }
 
     #[test]
