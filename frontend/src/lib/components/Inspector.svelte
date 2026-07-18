@@ -37,7 +37,9 @@
   // Style target = the selected path (a selected node implies its path).
   const path = $derived(editor.selectedPathElement);
   const pathIndex = $derived(editor.selectedPathIndex);
-  const isCreateTool = $derived(tools.active === "pen" || tools.active === "circle");
+  const isCreateTool = $derived(
+    ["pen", "circle", "rect", "line", "polygon", "star"].includes(tools.active),
+  );
 
   // A selected non-shape element (text/image/use) — its render node, edited generically by attr.
   const elementSel = $derived(editor.selectedElement);
@@ -129,6 +131,12 @@
     const pct = Number((e.currentTarget as HTMLInputElement).value);
     opacityLive = null;
     setStyle("opacity", pct >= 100 ? null : String(round(pct / 100)));
+  }
+
+  // Corner radius the rect tool draws with (a tool preference, shown in "new shape style").
+  function setCornerRadius(e: Event) {
+    const v = evalNum((e.currentTarget as HTMLInputElement).value);
+    if (v !== null && v >= 0) tools.cornerRadius = v;
   }
 
   // Drop shadow (the one authorable effect) — a filter def + the path's `filter` attr.
@@ -670,6 +678,19 @@
         />
         <span class="pct">{opacityShown}%</span>
       </label>
+      {#if !path && tools.active === "rect"}
+        <label class="row">
+          <span class="rlbl">corner°</span>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            value={tools.cornerRadius}
+            oninput={setCornerRadius}
+            aria-label="corner radius"
+          />
+        </label>
+      {/if}
       {#if advanced && path}
         <button
           class="ghost-btn shadow-toggle"

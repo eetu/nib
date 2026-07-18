@@ -73,6 +73,39 @@ test("draws a rectangle with the rect shape tool", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("rect tool draws rounded corners when a corner radius is set", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "new drawing" }).click();
+  await expect(page.locator("svg.canvas")).toBeVisible();
+
+  // Pick the rect tool → the "new shape style" panel exposes the corner radius; set it.
+  await page.keyboard.press("r");
+  await page.getByRole("spinbutton", { name: "corner radius" }).fill("8");
+
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.7);
+  await page.mouse.up();
+
+  // The drawn path has curve commands (rounded corners), not a plain 4-line box.
+  const rect = page.locator("svg.canvas g.artwork path");
+  await expect(rect).toHaveCount(1);
+  await expect(rect).toHaveAttribute("d", /C/);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("New drawing creates a blank document from the top bar", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

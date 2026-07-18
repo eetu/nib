@@ -1,10 +1,12 @@
 import { editor } from "$lib/stores/document.svelte";
 import { interaction } from "$lib/stores/interaction.svelte";
+import { tools } from "$lib/stores/tool.svelte";
 
 import { MIN_SHAPE, snapPoint } from "./shape-util";
 import type { Tool } from "./types";
 
-/** Draw a rectangle: press one corner, drag to the opposite one. A closed 4-corner path. */
+/** Draw a rectangle: press one corner, drag to the opposite one. A closed 4-corner path (or 8
+ *  rounded ones when the tool's corner radius is set). */
 export const rectTool: Tool = {
   id: "rect",
   cursor: () => "crosshair",
@@ -16,8 +18,17 @@ export const rectTool: Tool = {
   begin(ctx) {
     editor.ensureBlank();
     if (!editor.doc) return null;
+    const r = tools.cornerRadius;
     const a = snapPoint(ctx.docPoint).point;
-    const ref = editor.beginShape({ shape: "rect", x0: a.x, y0: a.y, x1: a.x, y1: a.y });
+    const ref = editor.beginShape({
+      shape: "rect",
+      x0: a.x,
+      y0: a.y,
+      x1: a.x,
+      y1: a.y,
+      rx: r,
+      ry: r,
+    });
     let b = a;
     return {
       move(docPoint, event) {
@@ -39,6 +50,8 @@ export const rectTool: Tool = {
           y0: a.y,
           x1: b.x,
           y1: b.y,
+          rx: r,
+          ry: r,
         });
       },
       up() {

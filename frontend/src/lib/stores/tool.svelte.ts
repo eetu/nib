@@ -20,6 +20,7 @@ type Prefs = {
   gridSize: number;
   guidesEnabled: boolean;
   newStyle: Record<string, string>;
+  cornerRadius: number;
 };
 
 const PREFS_KEY = "prefs";
@@ -44,6 +45,9 @@ class ToolState {
   /** Presentation attributes stamped onto pen/circle paths at creation. */
   newStyle = $state<Record<string, string>>({ ...DEFAULT_STYLE });
 
+  /** Corner radius (doc units) the rect tool draws with — 0 = sharp. Persisted like the style. */
+  cornerRadius = $state(0);
+
   constructor() {
     const p = loadState<Prefs>(PREFS_KEY);
     if (p) {
@@ -53,6 +57,7 @@ class ToolState {
       this.gridSize = p.gridSize;
       this.guidesEnabled = p.guidesEnabled ?? true;
       if (p.newStyle) this.newStyle = p.newStyle;
+      this.cornerRadius = p.cornerRadius ?? 0;
     }
     const save = debounce((prefs: Prefs) => saveState<Prefs>(PREFS_KEY, prefs), 300);
     $effect.root(() => {
@@ -64,6 +69,7 @@ class ToolState {
           gridSize: this.gridSize,
           guidesEnabled: this.guidesEnabled,
           newStyle: this.newStyle,
+          cornerRadius: this.cornerRadius,
         });
       });
     });
