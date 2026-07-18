@@ -14,6 +14,8 @@
   import FlipHorizontal2 from "@lucide/svelte/icons/flip-horizontal-2";
   import FlipVertical2 from "@lucide/svelte/icons/flip-vertical-2";
   import Group from "@lucide/svelte/icons/group";
+  import Lock from "@lucide/svelte/icons/lock";
+  import LockOpen from "@lucide/svelte/icons/lock-open";
   import PaintBucket from "@lucide/svelte/icons/paint-bucket";
   import Pipette from "@lucide/svelte/icons/pipette";
   import Trash2 from "@lucide/svelte/icons/trash-2";
@@ -822,6 +824,7 @@
     <li
       class="pathrow"
       class:nested
+      class:locked={p.locked}
       class:dropbefore={dropUid === uid && dropPos === "before"}
       class:dropafter={dropUid === uid && dropPos === "after"}
       draggable={renaming !== index}
@@ -876,6 +879,15 @@
           <span class="pid">{p.id}</span>
         </button>
       {/if}
+      <button
+        class="eye"
+        class:on={p.locked}
+        title={p.locked ? "unlock" : "lock (not selectable on canvas)"}
+        aria-label="toggle lock"
+        onclick={() => editor.setPathLocked(index, !p.locked)}
+      >
+        {#if p.locked}<Lock size={13} />{:else}<LockOpen size={13} />{/if}
+      </button>
       <button
         class="eye"
         title={p.hidden ? "show" : "hide"}
@@ -1624,6 +1636,16 @@
   .layerlist .eye:hover,
   .layerlist .chev:hover {
     color: var(--halo-accent);
+  }
+
+  .layerlist .eye.on {
+    color: var(--halo-accent);
+  }
+
+  /* a locked row reads as inert (it isn't selectable on the canvas) */
+  .pathrow.locked .row-btn,
+  .pathrow.locked .thumb {
+    opacity: 0.5;
   }
 
   .grouphead {

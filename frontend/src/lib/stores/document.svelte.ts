@@ -1080,6 +1080,15 @@ class DocumentStore {
     if (this.#apply({ type: "setPathHidden", path: pathIndex, hidden })) this.commit();
   }
 
+  /** Lock/unlock a single path (a locked path is skipped in canvas hit-testing). If it's currently
+   *  selected, clear the selection so it can't be moved by keyboard either. */
+  setPathLocked(pathIndex: number, locked: boolean): void {
+    if (this.#apply({ type: "setPathLocked", path: pathIndex, locked })) {
+      this.commit();
+      if (locked && this.selectedPaths.includes(pathIndex)) this.deselect();
+    }
+  }
+
   // --- gradients ---------------------------------------------------------
 
   get gradients(): Gradient[] {
@@ -1308,7 +1317,7 @@ class DocumentStore {
     const defs = this.defPathUids;
     const idxs = paths
       .map((p, i) => ({ p, i }))
-      .filter(({ p }) => !p.deleted && !defs.has(p.uid ?? ""))
+      .filter(({ p }) => !p.deleted && !p.locked && !defs.has(p.uid ?? ""))
       .map(({ i }) => i);
     if (!idxs.length) return;
     this.#wasm?.deselect();

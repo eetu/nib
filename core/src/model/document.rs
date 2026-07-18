@@ -208,6 +208,7 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
                 deleted: false,
                 renamed: false,
                 hidden: false,
+                locked: false,
             }
         })
         .collect();
@@ -708,6 +709,7 @@ mod tests {
             deleted: false,
             renamed: false,
             hidden: false,
+            locked: false,
         }
     }
 

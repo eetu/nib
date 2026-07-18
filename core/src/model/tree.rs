@@ -613,6 +613,7 @@ fn node_operands(children: &[Node]) -> Vec<PathElement> {
                 deleted: false,
                 renamed: false,
                 hidden: false,
+                locked: false,
             }),
             _ => None,
         })
@@ -807,6 +808,7 @@ fn collect_paths(node: &Node, out: &mut Vec<PathElement>) {
             deleted: false,
             renamed: false,
             hidden: false,
+            locked: false,
         });
     }
     for c in children {

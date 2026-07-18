@@ -62,6 +62,8 @@ export type PathElement = {
   renamed?: boolean;
   /** Per-path visibility toggle (hidden = dropped from render + display:none on export). */
   hidden?: boolean;
+  /** Editor-only lock: a locked path isn't hit-testable/selectable on the canvas (not exported). */
+  locked?: boolean;
 };
 
 export type ViewBox = {

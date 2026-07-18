@@ -170,6 +170,11 @@ pub struct PathElement {
     /// Per-path visibility toggle (hidden = omitted from render + `display="none"` on export).
     #[serde(skip_serializing_if = "is_false", default)]
     pub hidden: bool,
+    /// Editor-only lock: a locked path isn't hit-testable / selectable on the canvas (the layers
+    /// row still toggles it). Rides the native model (persists + syncs) but has no SVG form, so it's
+    /// never written to export — a nib annotation, unlike `hidden` (which is real `display:none`).
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

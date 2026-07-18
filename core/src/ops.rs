@@ -212,6 +212,9 @@ pub enum Op {
     ReorderPath { from: usize, to: usize },
     /// Show/hide a single path.
     SetPathHidden { path: usize, hidden: bool },
+    /// Lock/unlock a single path — a locked path isn't hit-testable/selectable on the canvas
+    /// (editor-only; not written to SVG). Rides the native model so it persists + syncs.
+    SetPathLocked { path: usize, locked: bool },
     /// Show/hide any node in the document **tree** by its stable `uid` — a group, an opaque
     /// element, or a shape, at any depth (structural op). Exports as `display="none"`, skipped in
     /// the render. The tree is the structural model; `SetPathHidden` is the per-path sibling.
@@ -406,6 +409,7 @@ fn drawn_path(
         deleted: false,
         renamed: false,
         hidden: false,
+        locked: false,
     }
 }
 
@@ -924,6 +928,16 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             p.hidden = *hidden;
             true
         }
+        Op::SetPathLocked { path, locked } => {
+            let Some(p) = doc.paths.get_mut(*path) else {
+                return false;
+            };
+            if p.locked == *locked {
+                return false;
+            }
+            p.locked = *locked;
+            true
+        }
         Op::SetNodeHidden { uid, hidden } => doc
             .tree
             .as_mut()
@@ -1437,6 +1451,7 @@ mod tests {
                 deleted: false,
                 renamed: false,
                 hidden: false,
+                locked: false,
             }],
             gradients: Vec::new(),
             tree: None,

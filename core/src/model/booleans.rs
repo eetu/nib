@@ -143,6 +143,7 @@ mod tests {
             deleted: false,
             renamed: false,
             hidden: false,
+            locked: false,
         }
     }
 

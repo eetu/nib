@@ -842,6 +842,45 @@ test("send to back (⌘⇧[) moves the top shape below the others", async ({ pag
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("a locked shape can't be selected on the canvas", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  // A near-full-canvas rect so a centre click reliably lands on it.
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="5" y="5" width="90" height="90" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  const centre = { x: box.x + box.width * 0.5, y: box.y + box.height * 0.5 };
+  const row = page.locator(".layerlist .row-btn").first();
+
+  // Baseline: clicking the shape selects it.
+  await page.mouse.click(centre.x, centre.y);
+  await expect(row).toHaveClass(/active/);
+
+  // Lock it (deselects), then a click no longer selects it.
+  await page.getByRole("button", { name: "toggle lock" }).click();
+  await expect(row).not.toHaveClass(/active/);
+  await page.mouse.click(centre.x, centre.y);
+  await expect(row).not.toHaveClass(/active/);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("drop shadow adds a filter def + references it; removing clears it", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

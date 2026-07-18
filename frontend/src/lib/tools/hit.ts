@@ -89,7 +89,7 @@ export function hitTest(screen: Point): Hit {
     // own nodes are never shadowed (e.g. a circle's nodes sit on the bbox edge-midpoints).
     let bestAnchor: { ref: NodeRef; d: number } | null = null;
     doc.paths.forEach((path, pathIndex) => {
-      if (path.deleted || defUids.has(path.uid ?? "")) return;
+      if (path.deleted || path.locked || defUids.has(path.uid ?? "")) return;
       path.subpaths.forEach((sp, subpathIndex) => {
         sp.nodes.forEach((n, nodeIndex) => {
           const d = screenDist(n.point, screen);
@@ -126,7 +126,7 @@ export function hitTest(screen: Point): Hit {
   let best: Hit | null = null;
   let bestD = Infinity;
   doc.paths.forEach((path, pathIndex) => {
-    if (path.deleted || defUids.has(path.uid ?? "")) return;
+    if (path.deleted || path.locked || defUids.has(path.uid ?? "")) return;
     path.subpaths.forEach((sp, subpathIndex) => {
       const hit = nearestOnSubpath(sp, docPoint);
       if (hit && hit.distance <= threshDoc && hit.distance < bestD) {
@@ -148,7 +148,7 @@ export function hitTest(screen: Point): Hit {
   //    stroke-only paths (fill="none"); an absent fill counts as filled (SVG default).
   for (let pathIndex = doc.paths.length - 1; pathIndex >= 0; pathIndex--) {
     const p = doc.paths[pathIndex];
-    if (p.deleted || defUids.has(p.uid ?? "")) continue;
+    if (p.deleted || p.locked || defUids.has(p.uid ?? "")) continue;
     const fill = p.styleOverride?.fill ?? p.attributes?.fill;
     if (fill === "none") continue;
     if (pointInPath(p.subpaths, docPoint)) return { kind: "fill", pathIndex };
