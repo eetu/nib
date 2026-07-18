@@ -62,16 +62,11 @@ export const TOOL_GROUPS: ToolGroup[] = [
     ],
   },
   {
+    // Point/create tools that are always available (unlike the advanced shape primitives).
     name: "draw",
-    tools: [{ id: "pen", tool: penTool, label: "pen", shortcut: "p", icon: PenTool }],
-  },
-  {
-    name: "text",
-    tools: [{ id: "text", tool: textTool, label: "text", shortcut: "t", icon: Type }],
-  },
-  {
-    name: "eyedropper",
     tools: [
+      { id: "pen", tool: penTool, label: "pen", shortcut: "p", icon: PenTool },
+      { id: "text", tool: textTool, label: "text", shortcut: "t", icon: Type },
       {
         id: "eyedropper",
         tool: eyedropperTool,

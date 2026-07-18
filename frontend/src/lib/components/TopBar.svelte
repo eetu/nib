@@ -37,6 +37,8 @@
 <header class="topbar">
   <Wordmark />
 
+  <div class="vsep"></div>
+
   <div class="group">
     <button
       class="icon-btn"
@@ -63,6 +65,8 @@
       <ClipboardPaste size={18} />
     </button>
   </div>
+
+  <div class="vsep"></div>
 
   <div class="group">
     <button
@@ -92,7 +96,7 @@
     {/if}
   </div>
 
-  <div class="group right">
+  <div class="group">
     <Popover icon={Magnet} title="snap & grid" align="right">
       <label class="snaprow">
         <input type="checkbox" bind:checked={tools.snapEnabled} /> snap to points
@@ -113,6 +117,11 @@
     <button class="icon-btn" title="settings" aria-label="settings" onclick={onSettings}>
       <Settings size={18} />
     </button>
+  </div>
+
+  <div class="vsep"></div>
+
+  <div class="group">
     <button
       class="icon-btn"
       title={copied ? "copied" : "copy svg"}
@@ -146,7 +155,7 @@
   .topbar {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 8px;
     padding: 6px 12px;
     height: 46px;
     background: var(--halo-bg-main);
@@ -156,20 +165,34 @@
   .group {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 4px;
   }
 
-  .group.right {
-    margin-left: auto;
+  /* Vertical divider between clusters — the header's echo of the tool rail's separators. */
+  .vsep {
+    width: 1px;
+    height: 20px;
+    background: var(--halo-border);
   }
 
+  /* The document title takes the middle space (so the output cluster sits at the far right without
+     an auto-margin hack) and truncates gracefully on narrow windows. */
   .filename {
+    flex: 1;
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 6px;
+    min-width: 0;
     color: var(--halo-text-muted);
     font-family: var(--halo-font-heading);
     font-size: 12px;
+  }
+
+  .filename .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .dot {
