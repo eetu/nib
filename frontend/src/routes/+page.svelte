@@ -76,6 +76,9 @@
       } else if (k === "d") {
         e.preventDefault();
         editor.duplicateSelected();
+      } else if (k === "a") {
+        e.preventDefault();
+        editor.selectAll();
       } else if (k === "g" && settings.uiLevel === "advanced") {
         // Group / ungroup the selection — a pro feature, so inert in basic (touch-up) mode.
         e.preventDefault();
@@ -124,6 +127,14 @@
       else if (e.key === "ArrowRight") editor.nudge(step, 0);
       else if (e.key === "ArrowUp") editor.nudge(0, -step);
       else if (e.key === "ArrowDown") editor.nudge(0, step);
+      return;
+    }
+
+    // Shift+H / Shift+V flip the selection horizontally / vertically (Figma-style), before the
+    // bare-key tool shortcuts so plain "v" (select) / "h" still switch tools.
+    if (e.shiftKey && (k === "h" || k === "v") && hasSel) {
+      e.preventDefault();
+      editor.flip(k === "h" ? "h" : "v");
       return;
     }
 

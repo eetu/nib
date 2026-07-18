@@ -568,6 +568,14 @@ pub struct RotateParams {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct FlipParams {
+    /// The path's #index (from get_document).
+    pub index: usize,
+    /// "horizontal" (left↔right) or "vertical" (top↕bottom).
+    pub axis: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct DropShadowParams {
     /// The path's #index (from get_document).
     pub index: usize,
@@ -1047,6 +1055,30 @@ impl NibMcp {
             ));
         }
         Ok(format!("rotated #{} by {}°", p.index, p.degrees))
+    }
+
+    #[tool(
+        description = "Flip a shape (by #index) — axis \"horizontal\" (left↔right) or \"vertical\" (top↕bottom) — mirroring it about its own centre."
+    )]
+    async fn flip(
+        &self,
+        Parameters(p): Parameters<FlipParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let a = p.axis.to_lowercase();
+        let horizontal = a.starts_with('h') || a == "x";
+        let op = json!({ "type": "flipPath", "path": p.index, "horizontal": horizontal });
+        let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
+        if n == 0 {
+            return Err(bad("flip did not apply (bad #index or deleted path)"));
+        }
+        Ok(format!(
+            "flipped #{} {}",
+            p.index,
+            if horizontal { "horizontal" } else { "vertical" }
+        ))
     }
 
     #[tool(

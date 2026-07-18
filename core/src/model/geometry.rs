@@ -114,6 +114,35 @@ pub fn rotate_subpaths(subpaths: &[Subpath], cx: f64, cy: f64, radians: f64) -> 
         .collect()
 }
 
+/// Mirror subpaths (each node's point + both handles) across a vertical axis at `cx` (a
+/// *horizontal* flip, left↔right) or a horizontal axis at `cy` (a *vertical* flip, top↕bottom).
+/// Returns fresh subpaths; the input is untouched. The `FlipPath` kernel.
+pub fn flip_subpaths(subpaths: &[Subpath], cx: f64, cy: f64, horizontal: bool) -> Vec<Subpath> {
+    let at = |p: Point| -> Point {
+        if horizontal {
+            Point::new(2.0 * cx - p.x, p.y)
+        } else {
+            Point::new(p.x, 2.0 * cy - p.y)
+        }
+    };
+    subpaths
+        .iter()
+        .map(|sp| Subpath {
+            closed: sp.closed,
+            nodes: sp
+                .nodes
+                .iter()
+                .map(|n| PathNode {
+                    point: at(n.point),
+                    handle_in: n.handle_in.map(at),
+                    handle_out: n.handle_out.map(at),
+                    node_type: n.node_type,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 /// Are the incoming/outgoing handles of a node collinear through the point (i.e. the node
 /// reads as smooth)? Tolerant of handle length.
 pub fn handles_collinear(handle_in: Point, point: Point, handle_out: Point, eps_deg: f64) -> bool {

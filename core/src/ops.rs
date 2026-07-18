@@ -145,6 +145,17 @@ pub enum Op {
         #[serde(default)]
         cy: Option<f64>,
     },
+    /// Mirror a path across its bounding-box centre — `horizontal` flips left↔right, else top↕bottom.
+    /// `cx`/`cy` override the pivot (e.g. a shared centre to flip a multi-selection as one rigid
+    /// group). The semantic flip the Inspector, keyboard, and MCP funnel through.
+    FlipPath {
+        path: usize,
+        horizontal: bool,
+        #[serde(default)]
+        cx: Option<f64>,
+        #[serde(default)]
+        cy: Option<f64>,
+    },
 
     /// Insert a node on the segment leaving `segment` at parameter `t` (shape-preserving).
     InsertNode {
@@ -551,6 +562,9 @@ fn op_is_finite(op: &Op) -> bool {
         Op::RotatePath {
             degrees, cx, cy, ..
         } => degrees.is_finite() && cx.is_none_or(f64::is_finite) && cy.is_none_or(f64::is_finite),
+        Op::FlipPath { cx, cy, .. } => {
+            cx.is_none_or(f64::is_finite) && cy.is_none_or(f64::is_finite)
+        }
         Op::SetDropShadow {
             dx,
             dy,
@@ -707,6 +721,32 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 crate::model::geometry::rotate_subpaths(&p.subpaths, px, py, degrees.to_radians())
             };
             doc.paths[*path].subpaths = rot;
+            doc.paths[*path].edited = true;
+            true
+        }
+        Op::FlipPath {
+            path,
+            horizontal,
+            cx,
+            cy,
+        } => {
+            let flipped = {
+                let Some(p) = doc.paths.get(*path) else {
+                    return false;
+                };
+                if p.deleted {
+                    return false;
+                }
+                let (px, py) = match (cx, cy) {
+                    (Some(x), Some(y)) => (*x, *y),
+                    _ => match crate::model::geometry::subpaths_bounds(&p.subpaths) {
+                        Some(b) => ((b.min_x + b.max_x) / 2.0, (b.min_y + b.max_y) / 2.0),
+                        None => return false,
+                    },
+                };
+                crate::model::geometry::flip_subpaths(&p.subpaths, px, py, *horizontal)
+            };
+            doc.paths[*path].subpaths = flipped;
             doc.paths[*path].edited = true;
             true
         }
@@ -1549,6 +1589,40 @@ mod tests {
             "top edge starts inset by rx: {:?}",
             nodes[0].point
         );
+    }
+
+    #[test]
+    fn flip_path_mirrors_geometry_about_its_centre() {
+        // A triangle from (0,0)-(4,0)-(0,4). Its bbox centre is (2,2). A horizontal flip mirrors x
+        // about 2: (0,0)→(4,0), (4,0)→(0,0), (0,4)→(4,4).
+        let mut doc = doc_from("M 0 0 L 4 0 L 0 4 Z", true);
+        assert!(apply(
+            &mut doc,
+            &Op::FlipPath {
+                path: 0,
+                horizontal: true,
+                cx: None,
+                cy: None,
+            }
+        ));
+        let n = &doc.paths[0].subpaths[0].nodes;
+        assert!((n[0].point.x - 4.0).abs() < 1e-6 && n[0].point.y.abs() < 1e-6);
+        assert!((n[1].point.x - 0.0).abs() < 1e-6 && n[1].point.y.abs() < 1e-6);
+        assert!(doc.paths[0].edited);
+
+        // A vertical flip about an explicit pivot y=0 sends node 2 (0,4) → (0,-4).
+        let mut doc2 = doc_from("M 0 0 L 4 0 L 0 4 Z", true);
+        assert!(apply(
+            &mut doc2,
+            &Op::FlipPath {
+                path: 0,
+                horizontal: false,
+                cx: Some(0.0),
+                cy: Some(0.0),
+            }
+        ));
+        let n2 = doc2.paths[0].subpaths[0].nodes[2].point;
+        assert!((n2.x).abs() < 1e-6 && (n2.y + 4.0).abs() < 1e-6, "{n2:?}");
     }
 
     #[test]

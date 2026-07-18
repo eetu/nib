@@ -11,6 +11,8 @@
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import Eye from "@lucide/svelte/icons/eye";
   import EyeOff from "@lucide/svelte/icons/eye-off";
+  import FlipHorizontal2 from "@lucide/svelte/icons/flip-horizontal-2";
+  import FlipVertical2 from "@lucide/svelte/icons/flip-vertical-2";
   import Group from "@lucide/svelte/icons/group";
   import PaintBucket from "@lucide/svelte/icons/paint-bucket";
   import Pipette from "@lucide/svelte/icons/pipette";
@@ -752,6 +754,14 @@
         <button class="ghost-btn" title="rotate 90° clockwise" onclick={() => rotateQuick(90)}
           >⟳</button
         >
+      </div>
+      <div class="pathops">
+        <button class="ghost-btn" title="flip horizontal (⇧H)" onclick={() => editor.flip("h")}>
+          <FlipHorizontal2 size={14} /> flip h
+        </button>
+        <button class="ghost-btn" title="flip vertical (⇧V)" onclick={() => editor.flip("v")}>
+          <FlipVertical2 size={14} /> flip v
+        </button>
       </div>
       {#if advanced}
         <div class="pathops">

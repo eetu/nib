@@ -1262,6 +1262,44 @@ class DocumentStore {
     this.setPathStyle(pathIndex, "filter", null);
   }
 
+  /** Mirror the current selection about its union-box centre — "h" (left↔right) or "v" (top↕bottom).
+   *  A multi-selection flips as one rigid group (shared pivot). One committed step. */
+  flip(axis: "h" | "v"): void {
+    const bb = this.selectionBounds;
+    if (!bb) return;
+    const cx = (bb.minX + bb.maxX) / 2;
+    const cy = (bb.minY + bb.maxY) / 2;
+    const horizontal = axis === "h";
+    let ok = false;
+    for (const i of this.selectedPaths) {
+      if (this.#apply({ type: "flipPath", path: i, horizontal, cx, cy })) ok = true;
+    }
+    if (ok) {
+      this.commit();
+      this.#sync();
+    }
+  }
+
+  /** Select every visible editable path (⌘A) — excludes deleted + component-definition paths. */
+  selectAll(): void {
+    const paths = this.doc?.paths;
+    if (!paths) return;
+    const defs = this.defPathUids;
+    const idxs = paths
+      .map((p, i) => ({ p, i }))
+      .filter(({ p }) => !p.deleted && !defs.has(p.uid ?? ""))
+      .map(({ i }) => i);
+    if (!idxs.length) return;
+    this.#wasm?.deselect();
+    this.selection = null;
+    this.selectedPath = null;
+    this.nodeEditIndex = null;
+    this.selectedElementUid = null;
+    this.selectedGroupUid = null;
+    this.selectedPaths = idxs;
+    this.#wasm?.selectPath(idxs[0]);
+  }
+
   moveNode(ref: NodeRef, to: Point): void {
     this.#apply({ type: "moveNode", node: ref, to });
     this.#sync();

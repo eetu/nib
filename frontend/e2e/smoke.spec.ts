@@ -747,6 +747,69 @@ test("rotate turns a shape 90° about its centre (bbox w/h swap)", async ({ page
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("flip horizontal mirrors a shape about its centre", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  // A right-triangle (asymmetric), bbox 0-40 → centre x=20.
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M 0 0 L 40 0 L 0 40 Z" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  await page.locator(".layerlist .row-btn").first().click();
+  await page.getByRole("button", { name: "flip h" }).click();
+
+  // Mirrored about x=20: (0,0)→(40,0), (40,0)→(0,0), (0,40)→(40,40).
+  await page.getByRole("button", { name: "source" }).click();
+  const src = await page.locator(".sourceview textarea").inputValue();
+  expect(src).toContain("40 40"); // the third vertex mirrored to the right
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
+test("select-all (⌘A) then delete clears every shape", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="5" y="5" width="20" height="20"/><rect x="40" y="40" width="20" height="20"/><circle cx="80" cy="20" r="10"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const rows = page.locator(".layerlist .row-btn");
+  await expect(rows).toHaveCount(3);
+  // Select all → delete removes the whole selection.
+  await page.locator("svg.canvas").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Meta+a");
+  await page.keyboard.press("Delete");
+  await expect(rows).toHaveCount(0);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("drop shadow adds a filter def + references it; removing clears it", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
