@@ -254,9 +254,33 @@ client-side pro pillars, all running on the core):
   command palette (⌘K); plus workflow polish (New/Save-As, copy-style, source
   prettify + reveal, double-click node editing, friendly path names, content-aware
   fit + export viewBox, tight selection bounds).
-- **Deferred (needs a dedicated rotate tool):** rotate/skew about a *freely-movable*
-  pivot — a centre pivot handle conflicts with the unified select tool's
-  drag-to-move + double-click-to-node-edit.
+- **1.0 tools + fidelity — landed this cycle (all core-op-first, so MCP + sync get them free):**
+  first-class **rotation** (`RotatePath`; numeric + 90° buttons + MCP) and **flip H/V** (`FlipPath`,
+  ⇧H/⇧V); a **drop-shadow** effect (`SetDropShadow` → an `feDropShadow` filter def); **rounded-rect**
+  corner radius (`ShapeSpec.rx/ry` + an interactive rect-tool radius); **bring-to-front / send-to-back**
+  (`ReorderNodeExtreme`, ⌘]/⌘[ + ⌘⇧]/⌘⇧[, MCP `reorder`); **lock/unlock** (`SetPathLocked` — editor-only,
+  hit-test-skipped, never exported); **select-all** (⌘A); a **text creation tool** (`AddText` + MCP
+  `add_text`) and an **eyedropper** (`sampleFillAt`); **⌘/Ctrl snap-bypass** + **snap-to-grid on shape
+  drag**; **reusable components** (a `<g>` in `<defs>` projects as editable shapes, `<use>` instances,
+  stamp, edit-once-propagates, plus **detach**-to-bake and **delete**-cascade) with a full MCP surface
+  (`create_component`/`stamp`/`list_components`/`group_named`); **export-fidelity fixes** (canonical
+  export was dropping the root `xmlns` and mangling namespaced attribute prefixes; `<use>` now emits
+  `xlink:href` back-compat). Header/rail **UX pass** (cluster dividers, centred document title,
+  consolidated tool groups).
+- **Open issues → 1.0 (finalization — verification + polish, not new capability):**
+  1. **Export fidelity on a real-SVG corpus** — the *mechanisms* landed (xmlns, attr-prefix, `<use>`
+     xlink); still owe a corpus of messy real-world SVGs (Illustrator/Inkscape/Figma/optimised)
+     round-tripped **and actually opened in those tools** to confirm they render.
+  2. **Pixel-verify the new tools** end-to-end (rotate/flip/rounded-rect/drop-shadow/text/eyedropper)
+     via `render_document` + a manual pass (text needs system fonts to raster).
+  3. **Large-document performance** — profile project/reconcile/serialize + canvas render at
+     hundreds–thousands of nodes; the invariants are linear but unmeasured at scale.
+  4. **UI follow-ups:** the grid toggle is duplicated (the header snap popover **and** the rail
+     button) — pick one home; give the **basic/advanced** UI level a visible affordance (Settings-only
+     today).
+  5. **Deferred (needs a dedicated rotate tool):** rotate/skew about a *freely-movable* pivot — a
+     centre pivot handle conflicts with the unified select tool's drag-to-move + double-click-to-node-
+     edit. Then **freeze the editor UI (1.0 RC).**
 - **Editor track = A → B → E → finalize; Phase C rides alongside.** Phase E is the
   *editor's capstone* — once it lands the editor is feature-complete and the remaining work
   is **finalization** (coverage/fidelity on a real-SVG corpus, robustness + large-doc perf,
@@ -294,10 +318,12 @@ client-side pro pillars, all running on the core):
   - **C2 live sync** (`sync.rs`): `GET /ws/projects/{id}?token=…` — the browser + the LLM edit the
     **same project live**; MCP `apply_op` broadcasts to the WS, and WS ops broadcast back
     (echo-guarded by `clientId`).
-  - **Remaining:** the **frontend connected mode** — build-flagged (`PUBLIC_NIB_BACKEND`) so the
+  - **Frontend connected mode — LANDED (flagged):** build-flagged (`PUBLIC_NIB_BACKEND`) so the
     **standalone / GitHub-Pages build ships zero backend code** and stays a pure local file editor;
     when on, a projects list + token-in-Settings + `ProjectSync` (WS) + `DocumentStore.applyRemote`
     make the co-editing visible in the browser. Plan: `~/.claude/plans/happy-crunching-blum.md`.
+    **Phase C is functionally complete as a co-editing scaffold; a real login/multi-tenant story +
+    hardening (rate limits, conflict UX) remain before it's production-grade.**
 - **Phase D — LANDED (folded into E3):** arbitrary *nested* groups are the object tree
   itself — `GroupNodes`/`UngroupNode`/`ReorderNode`/`SetNodeHidden` on stable-id (`uid`)
   addressing; drawn + imported content unified into one tree, `<g>`-wrapped on export.
