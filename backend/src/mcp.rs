@@ -568,6 +568,21 @@ pub struct RotateParams {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct AddTextParams {
+    /// The text content, e.g. "Alea iacta est".
+    pub text: String,
+    /// Baseline position in viewBox units.
+    pub x: f64,
+    pub y: f64,
+    /// Font size (px). Default 16.
+    #[serde(default)]
+    pub size: Option<f64>,
+    /// Fill colour. Default black.
+    #[serde(default)]
+    pub fill: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct FlipParams {
     /// The path's #index (from get_document).
     pub index: usize,
@@ -781,6 +796,33 @@ impl NibMcp {
             "added #{idx} \"{rid}\" · {} paths",
             count_paths(&s)
         ))
+    }
+
+    #[tool(
+        description = "Add a text label at (x, y) — a `<text>` element (baseline at y). Optional font size + fill. Note: text isn't a path, so it won't appear in get_document's path outline; render_document needs system fonts to show it."
+    )]
+    async fn add_text(
+        &self,
+        Parameters(p): Parameters<AddTextParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let mut attributes = serde_json::Map::new();
+        attributes.insert(
+            "font-size".into(),
+            json!(p.size.unwrap_or(16.0).to_string()),
+        );
+        attributes.insert(
+            "fill".into(),
+            json!(p.fill.clone().unwrap_or_else(|| "#000000".to_string())),
+        );
+        let op = json!({ "type": "addText", "x": p.x, "y": p.y, "text": p.text, "attributes": attributes });
+        let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
+        if n == 0 {
+            return Err(bad("add_text did not apply (no active document?)"));
+        }
+        Ok(format!("added text \"{}\" at ({}, {})", p.text, p.x, p.y))
     }
 
     #[tool(

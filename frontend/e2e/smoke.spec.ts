@@ -881,6 +881,33 @@ test("a locked shape can't be selected on the canvas", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("text tool places an editable <text> label", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "new drawing" }).click();
+  await expect(page.locator("svg.canvas")).toBeVisible();
+
+  // Pick the text tool + click → a <text> lands and is selected.
+  await page.keyboard.press("t");
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+
+  // Rendered as a real <text> in the artwork, and the Inspector edits its content.
+  await expect(page.locator("svg.canvas g.artwork text")).toHaveCount(1);
+  await expect(page.getByRole("textbox", { name: "text content" })).toHaveValue("Text");
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("drop shadow adds a filter def + references it; removing clears it", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

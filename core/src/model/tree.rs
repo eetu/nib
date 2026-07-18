@@ -1178,6 +1178,21 @@ impl Tree {
         self.append_drawn(make_element_node(uid, "use", attrs, Vec::new()));
     }
 
+    /// Append a `<text ...>content</text>` element as the last root child (top of z) — the text
+    /// tool + MCP add-text. `attributes` carries x/y + font-size/fill; the content is one text child.
+    pub fn append_text(&mut self, uid: &str, attributes: &IndexMap<String, String>, text: &str) {
+        let attrs: Vec<(String, String)> = attributes
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        self.append_drawn(make_element_node(
+            uid,
+            "text",
+            attrs,
+            vec![Node::Text(text.to_string())],
+        ));
+    }
+
     /// Rename the component `<g uid>`: set its `id` to `name` AND rewrite every `<use>` whose `href`
     /// pointed at the old id — `<use>` is id-coupled, so a plain attr edit would dangle instances.
     /// Returns false if the uid isn't a component, `name` is blank, or collides with another id.

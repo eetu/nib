@@ -7,6 +7,7 @@ import Plus from "@lucide/svelte/icons/plus";
 import Slash from "@lucide/svelte/icons/slash";
 import Square from "@lucide/svelte/icons/square";
 import Star from "@lucide/svelte/icons/star";
+import Type from "@lucide/svelte/icons/type";
 import type { Component } from "svelte";
 
 import type { ToolId } from "$lib/stores/tool.svelte";
@@ -20,6 +21,7 @@ import { polygonTool } from "./polygon";
 import { rectTool } from "./rect";
 import { selectTool } from "./select";
 import { starTool } from "./star";
+import { textTool } from "./text";
 import type { Tool } from "./types";
 
 /** One tool's full definition — behavior + everything the rail/shortcuts need. This is the
@@ -60,6 +62,10 @@ export const TOOL_GROUPS: ToolGroup[] = [
   {
     name: "draw",
     tools: [{ id: "pen", tool: penTool, label: "pen", shortcut: "p", icon: PenTool }],
+  },
+  {
+    name: "text",
+    tools: [{ id: "text", tool: textTool, label: "text", shortcut: "t", icon: Type }],
   },
   {
     // Shape primitives — rect / line / polygon / star slot in here and the group becomes a

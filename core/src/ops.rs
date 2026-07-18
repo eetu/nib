@@ -265,6 +265,17 @@ pub enum Op {
     },
     /// Replace a text-bearing element's content (its child text) — editing a `<text>` label.
     SetNodeText { uid: String, text: String },
+    /// Add a `<text x y ...>text</text>` element at the top of z (the text tool + MCP). `uid` carried
+    /// (minted if absent); `attributes` may set font-size/fill (defaults filled in if absent).
+    AddText {
+        #[serde(default)]
+        uid: Option<String>,
+        x: f64,
+        y: f64,
+        text: String,
+        #[serde(default)]
+        attributes: IndexMap<String, String>,
+    },
 
     /// Create a **component** from `members` (co-siblings): wrap them in a `<g id=name>` placed in
     /// `<defs>` and drop a `<use href="#name">` where they were. `uid`/`use_uid`/`defs_uid` (the new
@@ -515,6 +526,16 @@ fn reproject_paths(doc: &mut SvgDocument) {
 fn one() -> f64 {
     1.0
 }
+/// A compact coordinate string (2 decimals, trailing zeros trimmed) for a generated attribute.
+fn fmt_coord(n: f64) -> String {
+    let s = format!("{n:.2}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s.is_empty() || s == "-0" {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
+}
 fn point_finite(p: &Point) -> bool {
     p.x.is_finite() && p.y.is_finite()
 }
@@ -583,6 +604,7 @@ fn op_is_finite(op: &Op) -> bool {
         Op::InsertNode { t, .. } => t.is_finite(),
         Op::AppendNode { point, .. } => point_finite(point),
         Op::SetShape { spec, .. } | Op::AddShape { spec, .. } => spec_finite(spec),
+        Op::AddText { x, y, .. } => x.is_finite() && y.is_finite(),
         Op::OutlineStroke { width, .. } => width.is_finite(),
         Op::OffsetPath { distance, .. } => distance.is_finite(),
         Op::SimplifyPath { tolerance, .. } => tolerance.is_finite(),
@@ -1013,6 +1035,34 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             .as_mut()
             .map(|t| t.set_node_text(uid, text))
             .unwrap_or(false),
+        Op::AddText {
+            uid,
+            x,
+            y,
+            text,
+            attributes,
+        } => {
+            let u = uid.clone().unwrap_or_else(crate::model::tree::new_id);
+            let mut attrs = IndexMap::new();
+            attrs.insert("x".to_string(), fmt_coord(*x));
+            attrs.insert("y".to_string(), fmt_coord(*y));
+            for (k, v) in attributes {
+                attrs.insert(k.clone(), v.clone());
+            }
+            attrs
+                .entry("font-size".to_string())
+                .or_insert_with(|| "16".to_string());
+            attrs
+                .entry("fill".to_string())
+                .or_insert_with(|| "#000000".to_string());
+            doc.tree
+                .as_mut()
+                .map(|t| {
+                    t.append_text(&u, &attrs, text);
+                    true
+                })
+                .unwrap_or(false)
+        }
         Op::CreateComponent {
             members,
             uid,
@@ -1567,6 +1617,36 @@ mod tests {
             doc.paths.iter().filter(|p| !p.deleted).count(),
             1,
             "still just the rect projects"
+        );
+    }
+
+    #[test]
+    fn add_text_appends_a_text_element() {
+        use crate::model::document::{parse_svg, serialize_via_tree};
+        let mut doc =
+            parse_svg(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"></svg>"#)
+                .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        assert!(apply(
+            &mut doc,
+            &Op::AddText {
+                uid: Some("t1".into()),
+                x: 10.0,
+                y: 20.0,
+                text: "Hello".into(),
+                attributes: Default::default(),
+            }
+        ));
+        let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(out.contains("<text"), "text element emitted: {out}");
+        assert!(out.contains(">Hello</text>"), "content present: {out}");
+        assert!(
+            out.contains(r#"x="10""#) && out.contains(r#"y="20""#),
+            "position: {out}"
+        );
+        assert!(
+            out.contains(r#"font-size="16""#),
+            "default font-size: {out}"
         );
     }
 

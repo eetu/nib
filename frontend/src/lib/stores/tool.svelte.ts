@@ -1,7 +1,16 @@
 import { debounce, loadState, saveState } from "$lib/persistence";
 
 export type ToolId =
-  "select" | "pen" | "circle" | "rect" | "line" | "polygon" | "star" | "add-node" | "delete-node";
+  | "select"
+  | "pen"
+  | "circle"
+  | "rect"
+  | "line"
+  | "polygon"
+  | "star"
+  | "text"
+  | "add-node"
+  | "delete-node";
 
 /** Style applied to the next drawn path/shape (editable up front via the
  *  "new shape style" panel; also the reset defaults). */

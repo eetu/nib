@@ -48,7 +48,8 @@ function stampCreateUid(op: unknown): void {
       t === "outlineStroke" ||
       t === "offsetPath" ||
       t === "stampInstance" ||
-      t === "setDropShadow") &&
+      t === "setDropShadow" ||
+      t === "addText") &&
     !o.uid
   ) {
     o.uid = crypto.randomUUID();
@@ -552,6 +553,26 @@ class DocumentStore {
       href: `#${name}`,
       uid,
       attributes: { transform: `translate(${d} ${d})` },
+    });
+    if (ok) {
+      this.commit();
+      this.#resetClientSelection();
+      this.treeVersion++;
+      this.selectElement(uid);
+    }
+  }
+
+  /** Add a `<text>` element at (x, y) and select it — the text tool. Content + size + fill are then
+   *  edited in the Inspector's element section (E4). Appends at the top of z. */
+  addText(x: number, y: number, text: string): void {
+    const uid = crypto.randomUUID();
+    const ok = this.#apply({
+      type: "addText",
+      uid,
+      x,
+      y,
+      text,
+      attributes: { "font-size": "16", fill: "#000000" },
     });
     if (ok) {
       this.commit();
