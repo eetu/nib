@@ -1,7 +1,7 @@
 import { editor } from "$lib/stores/document.svelte";
 import { interaction } from "$lib/stores/interaction.svelte";
 
-import { MIN_SHAPE, snapPoint, snapRadius } from "./shape-util";
+import { MIN_SHAPE, snapBypassed, snapPoint, snapRadius } from "./shape-util";
 import type { Tool } from "./types";
 
 const SIDES = 6;
@@ -19,7 +19,7 @@ export const polygonTool: Tool = {
   begin(ctx) {
     editor.ensureBlank();
     if (!editor.doc) return null;
-    const c = snapPoint(ctx.docPoint).point;
+    const c = snapPoint(ctx.docPoint, snapBypassed(ctx.event)).point;
     const ref = editor.beginShape({
       shape: "polygon",
       cx: c.x,
@@ -30,8 +30,8 @@ export const polygonTool: Tool = {
     });
     let r = 0;
     return {
-      move(docPoint) {
-        r = snapRadius(c, docPoint);
+      move(docPoint, event) {
+        r = snapRadius(c, docPoint, snapBypassed(event));
         editor.setShape(ref.pathIndex, ref.subpathIndex, {
           shape: "polygon",
           cx: c.x,

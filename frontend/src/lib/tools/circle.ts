@@ -3,11 +3,11 @@ import { editor } from "$lib/stores/document.svelte";
 import { interaction } from "$lib/stores/interaction.svelte";
 import { tools } from "$lib/stores/tool.svelte";
 
-import { MIN_SHAPE, snapPoint, snapRadius } from "./shape-util";
+import { MIN_SHAPE, snapBypassed, snapPoint, snapRadius } from "./shape-util";
 import type { Tool } from "./types";
 
 /** Draw a circle: press at the centre, drag out to the radius. The result is a closed 4-node
- *  bezier path, editable like any other. */
+ *  bezier path, editable like any other. Hold ⌘/Ctrl to bypass centre + radius snapping. */
 export const circleTool: Tool = {
   id: "circle",
   cursor: () => "crosshair",
@@ -19,12 +19,13 @@ export const circleTool: Tool = {
   begin(ctx) {
     editor.ensureBlank();
     if (!editor.doc) return null;
-    const c = snapPoint(ctx.docPoint).point;
+    const c = snapPoint(ctx.docPoint, snapBypassed(ctx.event)).point;
     const ref = editor.beginShape({ shape: "ellipse", cx: c.x, cy: c.y, rx: 0, ry: 0 });
     let radius = 0;
     return {
-      move(docPoint) {
-        radius = snapRadius(c, docPoint);
+      move(docPoint, event) {
+        const bypass = snapBypassed(event);
+        radius = snapRadius(c, docPoint, bypass);
         editor.setShape(ref.pathIndex, ref.subpathIndex, {
           shape: "ellipse",
           cx: c.x,
@@ -32,7 +33,7 @@ export const circleTool: Tool = {
           rx: radius,
           ry: radius,
         });
-        if (tools.gridEnabled && radius > 0) {
+        if (!bypass && tools.gridEnabled && radius > 0) {
           const dir = normalize({ x: docPoint.x - c.x, y: docPoint.y - c.y });
           interaction.snapPoint = { x: c.x + dir.x * radius, y: c.y + dir.y * radius };
         } else {

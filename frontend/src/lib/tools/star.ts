@@ -1,7 +1,7 @@
 import { editor } from "$lib/stores/document.svelte";
 import { interaction } from "$lib/stores/interaction.svelte";
 
-import { MIN_SHAPE, snapPoint, snapRadius } from "./shape-util";
+import { MIN_SHAPE, snapBypassed, snapPoint, snapRadius } from "./shape-util";
 import type { Tool } from "./types";
 
 const POINTS = 5;
@@ -20,7 +20,7 @@ export const starTool: Tool = {
   begin(ctx) {
     editor.ensureBlank();
     if (!editor.doc) return null;
-    const c = snapPoint(ctx.docPoint).point;
+    const c = snapPoint(ctx.docPoint, snapBypassed(ctx.event)).point;
     const ref = editor.beginShape({
       shape: "star",
       cx: c.x,
@@ -32,8 +32,8 @@ export const starTool: Tool = {
     });
     let r = 0;
     return {
-      move(docPoint) {
-        r = snapRadius(c, docPoint);
+      move(docPoint, event) {
+        r = snapRadius(c, docPoint, snapBypassed(event));
         editor.setShape(ref.pathIndex, ref.subpathIndex, {
           shape: "star",
           cx: c.x,

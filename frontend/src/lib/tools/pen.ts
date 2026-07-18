@@ -6,6 +6,7 @@ import { interaction } from "$lib/stores/interaction.svelte";
 import { tools } from "$lib/stores/tool.svelte";
 import { viewport } from "$lib/stores/viewport.svelte";
 
+import { snapBypassed } from "./shape-util";
 import type { DragSession, Tool } from "./types";
 
 const ENDPOINT_HIT_PX = 11;
@@ -94,9 +95,9 @@ function resumeDrag(ref: NodeRef): DragSession {
 
 /** Snap the placement point to an existing anchor (returning its ref, so a
  *  click on the start node can close the loop) or to the grid. */
-function penPoint(docPoint: Point): { point: Point; snapRef: NodeRef | null } {
+function penPoint(docPoint: Point, bypass = false): { point: Point; snapRef: NodeRef | null } {
   const doc = editor.doc;
-  if (!doc) return { point: docPoint, snapRef: null };
+  if (!doc || bypass) return { point: docPoint, snapRef: null };
   if (tools.snapEnabled) {
     const threshold = viewport.toDocLength(tools.snapThresholdPx);
     const hit = findSnap(docPoint, collectAnchors(doc, editor.selection), threshold);
@@ -126,7 +127,7 @@ export const penTool: Tool = {
   begin(ctx) {
     editor.ensureBlank();
     if (!editor.doc) return null;
-    const { point, snapRef } = penPoint(ctx.docPoint);
+    const { point, snapRef } = penPoint(ctx.docPoint, snapBypassed(ctx.event));
     interaction.clearDrag();
 
     if (drawing) {

@@ -2,6 +2,28 @@ import type { ViewBox } from "$lib/model/types";
 
 import type { Bounds } from "./transform";
 
+/** The (dx, dy) that snaps a moving box to the grid: per axis, the correction that lands the
+ *  *nearest* of the box's min/mid/max edge on a grid line — so a shape clicks into grid alignment by
+ *  whichever edge or centre is closest, and moves rigidly (the grab offset is preserved). */
+export function gridSnapBox(box: Bounds, size: number): { dx: number; dy: number } {
+  if (size <= 0) return { dx: 0, dy: 0 };
+  const nearest = (a: number, b: number, c: number): number => {
+    let best = 0;
+    let min = Infinity;
+    for (const v of [a, b, c]) {
+      const corr = Math.round(v / size) * size - v;
+      if (Math.abs(corr) < min) {
+        min = Math.abs(corr);
+        best = corr;
+      }
+    }
+    return best;
+  };
+  const midX = (box.minX + box.maxX) / 2;
+  const midY = (box.minY + box.maxY) / 2;
+  return { dx: nearest(box.minX, midX, box.maxX), dy: nearest(box.minY, midY, box.maxY) };
+}
+
 // The alignment lines a bbox contributes on each axis: min edge · centre · max edge.
 function xLines(b: Bounds): number[] {
   return [b.minX, (b.minX + b.maxX) / 2, b.maxX];

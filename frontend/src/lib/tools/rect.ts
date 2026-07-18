@@ -2,7 +2,7 @@ import { editor } from "$lib/stores/document.svelte";
 import { interaction } from "$lib/stores/interaction.svelte";
 import { tools } from "$lib/stores/tool.svelte";
 
-import { MIN_SHAPE, snapPoint } from "./shape-util";
+import { MIN_SHAPE, snapBypassed, snapPoint } from "./shape-util";
 import type { Tool } from "./types";
 
 /** Draw a rectangle: press one corner, drag to the opposite one. A closed 4-corner path (or 8
@@ -19,7 +19,7 @@ export const rectTool: Tool = {
     editor.ensureBlank();
     if (!editor.doc) return null;
     const r = tools.cornerRadius;
-    const a = snapPoint(ctx.docPoint).point;
+    const a = snapPoint(ctx.docPoint, snapBypassed(ctx.event)).point;
     const ref = editor.beginShape({
       shape: "rect",
       x0: a.x,
@@ -32,7 +32,7 @@ export const rectTool: Tool = {
     let b = a;
     return {
       move(docPoint, event) {
-        const s = snapPoint(docPoint);
+        const s = snapPoint(docPoint, snapBypassed(event));
         b = s.point;
         // Shift constrains to a square — the larger side sets both, keeping the drag direction.
         if (event.shiftKey) {

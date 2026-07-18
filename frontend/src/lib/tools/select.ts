@@ -6,7 +6,8 @@ import { interaction } from "$lib/stores/interaction.svelte";
 import { tools } from "$lib/stores/tool.svelte";
 import { viewport } from "$lib/stores/viewport.svelte";
 
-import { alignGuides } from "./guides";
+import { alignGuides, gridSnapBox } from "./guides";
+import { snapBypassed } from "./shape-util";
 import {
   type Bounds,
   boxCenter,
@@ -29,10 +30,14 @@ function axisLock(start: Point, current: Point): Point {
 /** Resolve where a dragged anchor should land: snap onto another anchor (and
  *  flag a close-loop), else grid, else the raw pointer. Publishes the snap
  *  indicator for the overlay as a side effect. */
-function resolveTarget(docPoint: Point, dragged: NodeRef): { point: Point; closing: boolean } {
+function resolveTarget(
+  docPoint: Point,
+  dragged: NodeRef,
+  bypass = false,
+): { point: Point; closing: boolean } {
   const doc = editor.doc;
   interaction.clearDrag();
-  if (!doc) return { point: docPoint, closing: false };
+  if (!doc || bypass) return { point: docPoint, closing: false };
 
   if (tools.snapEnabled) {
     const threshold = viewport.toDocLength(tools.snapThresholdPx);
@@ -60,7 +65,7 @@ function anchorDrag(ref: NodeRef, start: Point): DragSession {
         closeAt = null;
         interaction.clearDrag();
       } else {
-        const r = resolveTarget(docPoint, ref);
+        const r = resolveTarget(docPoint, ref, snapBypassed(event));
         target = r.point;
         closeAt = r.closing ? { pathIndex: ref.pathIndex, subpathIndex: ref.subpathIndex } : null;
       }
@@ -86,7 +91,8 @@ function handleDrag(ref: NodeRef, which: "in" | "out", anchor: Point): DragSessi
     move(docPoint, event) {
       let point = docPoint;
       if (event.shiftKey) point = axisLock(anchor, docPoint);
-      else if (tools.gridEnabled) point = snapToGrid(docPoint, tools.gridSize);
+      else if (tools.gridEnabled && !snapBypassed(event))
+        point = snapToGrid(docPoint, tools.gridSize);
       editor.moveHandle(ref, which, point);
       moved = true;
     },
@@ -132,18 +138,35 @@ function selectionDrag(start: Point, primary: number, wasMulti: boolean): DragSe
         else tx = 0;
         interaction.guidesX = [];
         interaction.guidesY = [];
-      } else if (tools.guidesEnabled && base && doc) {
+      } else if (snapBypassed(event) || !base || !doc) {
+        // ⌘/Ctrl held → move freely, no snapping.
+        interaction.guidesX = [];
+        interaction.guidesY = [];
+      } else {
         const moving = {
           minX: base.minX + tx,
           minY: base.minY + ty,
           maxX: base.maxX + tx,
           maxY: base.maxY + ty,
         };
-        const g = alignGuides(moving, others, doc.viewBox, viewport.toDocLength(GUIDE_PX));
-        tx += g.dx;
-        ty += g.dy;
-        interaction.guidesX = g.gx;
-        interaction.guidesY = g.gy;
+        if (tools.gridEnabled) {
+          // Snap-to-grid: quantise the moving box — the nearest of its edges/centre per axis lands
+          // on a grid line, and the whole selection translates rigidly (grab offset preserved).
+          const g = gridSnapBox(moving, tools.gridSize);
+          tx += g.dx;
+          ty += g.dy;
+          interaction.guidesX = [];
+          interaction.guidesY = [];
+        } else if (tools.guidesEnabled) {
+          const g = alignGuides(moving, others, doc.viewBox, viewport.toDocLength(GUIDE_PX));
+          tx += g.dx;
+          ty += g.dy;
+          interaction.guidesX = g.gx;
+          interaction.guidesY = g.gy;
+        } else {
+          interaction.guidesX = [];
+          interaction.guidesY = [];
+        }
       }
       const dx = tx - appliedX;
       const dy = ty - appliedY;

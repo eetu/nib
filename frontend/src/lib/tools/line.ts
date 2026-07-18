@@ -1,10 +1,11 @@
 import { editor } from "$lib/stores/document.svelte";
 import { interaction } from "$lib/stores/interaction.svelte";
 
-import { MIN_SHAPE, snapPoint } from "./shape-util";
+import { MIN_SHAPE, snapBypassed, snapPoint } from "./shape-util";
 import type { Tool } from "./types";
 
-/** Draw a straight line: press one end, drag to the other. An open 2-node path. */
+/** Draw a straight line: press one end, drag to the other. An open 2-node path. Hold ⌘/Ctrl to
+ *  place off-snap (bypass anchor + grid snapping momentarily). */
 export const lineTool: Tool = {
   id: "line",
   cursor: () => "crosshair",
@@ -16,12 +17,12 @@ export const lineTool: Tool = {
   begin(ctx) {
     editor.ensureBlank();
     if (!editor.doc) return null;
-    const a = snapPoint(ctx.docPoint).point;
+    const a = snapPoint(ctx.docPoint, snapBypassed(ctx.event)).point;
     const ref = editor.beginShape({ shape: "line", x0: a.x, y0: a.y, x1: a.x, y1: a.y });
     let b = a;
     return {
       move(docPoint, event) {
-        const s = snapPoint(docPoint);
+        const s = snapPoint(docPoint, snapBypassed(event));
         b = s.point;
         // Shift snaps the line's angle to 45° steps, keeping its length.
         if (event.shiftKey) {
