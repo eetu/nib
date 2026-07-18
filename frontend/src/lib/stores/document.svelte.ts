@@ -1257,6 +1257,20 @@ class DocumentStore {
     if (this.#apply({ type: "setStyle", path: pathIndex, key, value })) this.commit();
   }
 
+  /** Apply an eyedropper-sampled fill to the current selection (all selected paths, one undo step),
+   *  or to the new-shape default when nothing is selected (so the next drawn shape uses it). */
+  applySampledFill(color: string): void {
+    const sel = this.selectedPaths;
+    if (sel.length) {
+      let ok = false;
+      for (const i of sel)
+        if (this.#apply({ type: "setStyle", path: i, key: "fill", value: color })) ok = true;
+      if (ok) this.commit();
+    } else {
+      tools.setNewStyle("fill", color);
+    }
+  }
+
   /** Live-preview a style change without committing — for a color-picker drag, so the shape
    *  updates as you pick. The interaction commits once (via setPathStyle) when it settles. */
   previewPathStyle(pathIndex: number, key: string, value: string | null): void {

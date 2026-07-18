@@ -908,6 +908,45 @@ test("text tool places an editable <text> label", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("eyedropper samples one shape's fill onto the selection", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  // A = a small red corner; B = a big blue rect filling most of the (square) viewBox, so a canvas
+  // CENTRE click reliably lands on B regardless of the canvas aspect ratio / letterboxing.
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="a" x="0" y="0" width="12" height="12" fill="#ff0000"/><rect id="b" x="12" y="12" width="76" height="76" fill="#0000ff"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+
+  // Select A via the layers panel (deterministic; A is the lower row — layers show top-of-stack
+  // first, so B is row 0 and A is row 1). Then eyedropper-click centre (B) → A takes B's blue.
+  await page.locator(".layerlist .row-btn").nth(1).click();
+  await page.keyboard.press("i");
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+
+  await page.getByRole("button", { name: "source" }).click();
+  const src = await page.locator(".sourceview textarea").inputValue();
+  expect(src).not.toContain("#ff0000"); // A's red is gone
+  expect(src.match(/#0000ff/g)?.length).toBe(2); // both rects blue now
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("drop shadow adds a filter def + references it; removing clears it", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

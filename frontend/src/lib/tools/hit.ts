@@ -156,3 +156,23 @@ export function hitTest(screen: Point): Hit {
 
   return { kind: "empty" };
 }
+
+/** The colour under `docPoint` for the eyedropper — the front-most shape whose body contains the
+ *  point, resolved to its fill (or stroke if fill is `none`); fully-transparent shapes fall through
+ *  to the one below. Includes locked shapes (sampling is read-only). `null` = nothing there. */
+export function sampleFillAt(docPoint: Point): string | null {
+  const doc = editor.doc;
+  if (!doc) return null;
+  const defUids = editor.defPathUids;
+  for (let i = doc.paths.length - 1; i >= 0; i--) {
+    const p = doc.paths[i];
+    if (p.deleted || defUids.has(p.uid ?? "")) continue;
+    if (!pointInPath(p.subpaths, docPoint)) continue;
+    const fill = p.styleOverride?.fill ?? p.attributes?.fill ?? "#000000";
+    if (fill !== "none") return fill;
+    const stroke = p.styleOverride?.stroke ?? p.attributes?.stroke;
+    if (stroke && stroke !== "none") return stroke;
+    // both none → see-through here; keep looking at the shape below.
+  }
+  return null;
+}

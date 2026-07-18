@@ -9,6 +9,7 @@ export type ToolId =
   | "polygon"
   | "star"
   | "text"
+  | "eyedropper"
   | "add-node"
   | "delete-node";
 

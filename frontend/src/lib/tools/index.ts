@@ -3,6 +3,7 @@ import Eraser from "@lucide/svelte/icons/eraser";
 import Hexagon from "@lucide/svelte/icons/hexagon";
 import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
 import PenTool from "@lucide/svelte/icons/pen-tool";
+import Pipette from "@lucide/svelte/icons/pipette";
 import Plus from "@lucide/svelte/icons/plus";
 import Slash from "@lucide/svelte/icons/slash";
 import Square from "@lucide/svelte/icons/square";
@@ -15,6 +16,7 @@ import type { ToolId } from "$lib/stores/tool.svelte";
 import { addNodeTool } from "./add-node";
 import { circleTool } from "./circle";
 import { deleteNodeTool } from "./delete-node";
+import { eyedropperTool } from "./eyedropper";
 import { lineTool } from "./line";
 import { penTool } from "./pen";
 import { polygonTool } from "./polygon";
@@ -66,6 +68,18 @@ export const TOOL_GROUPS: ToolGroup[] = [
   {
     name: "text",
     tools: [{ id: "text", tool: textTool, label: "text", shortcut: "t", icon: Type }],
+  },
+  {
+    name: "eyedropper",
+    tools: [
+      {
+        id: "eyedropper",
+        tool: eyedropperTool,
+        label: "eyedropper (sample colour)",
+        shortcut: "i",
+        icon: Pipette,
+      },
+    ],
   },
   {
     // Shape primitives — rect / line / polygon / star slot in here and the group becomes a
