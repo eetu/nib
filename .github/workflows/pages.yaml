@@ -53,8 +53,21 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           wasm-pack build core --target web
+          # Size-optimize with the module's OWN feature set — NOT --all-features, which lets
+          # binaryen re-encode the type section in a GC/reference-types form that browsers'
+          # streaming decoder rejects ("unknown type form"), shipping a .wasm the browser can't
+          # load. Enable only the baseline features rustc emits (bulk-memory, sign-ext, …). If
+          # wasm-opt is missing OR errors, fall back to the cargo-optimized .wasm so the deploy
+          # never ships a broken core.
           if command -v wasm-opt >/dev/null 2>&1; then
-            wasm-opt -Oz --all-features core/pkg/nib_core_bg.wasm -o core/pkg/nib_core_bg.wasm
+            cp core/pkg/nib_core_bg.wasm /tmp/nib_core_unopt.wasm
+            if ! wasm-opt -Oz \
+                --enable-bulk-memory --enable-bulk-memory-opt --enable-mutable-globals \
+                --enable-sign-ext --enable-nontrapping-float-to-int \
+                core/pkg/nib_core_bg.wasm -o core/pkg/nib_core_bg.wasm; then
+              echo "wasm-opt failed — reverting to the cargo-optimized .wasm"
+              cp /tmp/nib_core_unopt.wasm core/pkg/nib_core_bg.wasm
+            fi
           else
             echo "wasm-opt (binaryen) not found — shipping the cargo-optimized .wasm"
           fi

@@ -21,7 +21,7 @@ build-core:
 # --all-features tells wasm-opt to accept them; wasm-pack's bundled wasm-opt is too
 # old, hence a standalone binaryen (`brew install binaryen`, or apt in CI).
 opt-core: build-core
-    if command -v wasm-opt >/dev/null 2>&1; then wasm-opt -Oz --all-features core/pkg/nib_core_bg.wasm -o core/pkg/nib_core_bg.wasm; else echo "wasm-opt (binaryen) not found — shipping the unoptimized core .wasm"; fi
+    if command -v wasm-opt >/dev/null 2>&1; then cp core/pkg/nib_core_bg.wasm /tmp/nib_core_unopt.wasm; wasm-opt -Oz --enable-bulk-memory --enable-bulk-memory-opt --enable-mutable-globals --enable-sign-ext --enable-nontrapping-float-to-int core/pkg/nib_core_bg.wasm -o core/pkg/nib_core_bg.wasm || cp /tmp/nib_core_unopt.wasm core/pkg/nib_core_bg.wasm; else echo "wasm-opt (binaryen) not found — shipping the unoptimized core .wasm"; fi
 
 # Native core tests (the correctness oracle as the model is ported into Rust).
 test-core:
