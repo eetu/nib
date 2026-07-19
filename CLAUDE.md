@@ -287,8 +287,14 @@ client-side pro pillars, all running on the core):
      boots, renders, and takes edits on all three engines — while Chromium keeps the full 51 (incl.
      the File-System-Access / clipboard paths those engines gate). CI installs all three. Matrix:
      63 green (51 + 6 + 6).
-  3. **Pixel-verify the new tools** end-to-end (rotate/flip/rounded-rect/drop-shadow/text/eyedropper)
-     via `render_document` + a manual pass (text needs system fonts to raster).
+  3. **Pixel-verify the new tools — LANDED.** `core/tests/tool_pixels.rs` applies each tool's op,
+     canonically exports, rasterizes with resvg, and asserts the *pixels* changed as promised (not
+     just the model): rotate 90° swaps a portrait bbox to landscape, flip-H mirrors an asymmetric
+     shape's mass across the centre (bbox preserved), rounded-rect hollows the corners, drop-shadow
+     paints ink past the shape (which also confirms resvg renders `feDropShadow`). Shared resvg
+     helpers factored to `tests/common/`. **text** stays the manual pass (resvg needs system fonts to
+     raster glyphs); **eyedropper** (a frontend pixel-sample→set-fill) is covered by its Playwright
+     e2e.
   4. **Large-document performance** — profile project/reconcile/serialize + canvas render at
      hundreds–thousands of nodes; the invariants are linear but unmeasured at scale.
   5. **UI follow-ups — LANDED:** the duplicated grid toggle now lives *only* in the header snap
