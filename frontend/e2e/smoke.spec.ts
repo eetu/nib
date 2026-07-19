@@ -16,7 +16,9 @@ test.beforeEach(async ({ page }) => {
 // End-to-end proof that the Svelte UI drives the Rust/WASM engine correctly: boot → load →
 // render → draw → undo, asserting no console/page errors throughout. This is the check that
 // the document store's delegation to nib-core actually works in a browser (Phase A5).
-test("boots the core, loads a sample, draws, and undoes without errors", async ({ page }) => {
+test("boots the core, loads a sample, draws, and undoes without errors", { tag: "@cross" }, async ({
+  page,
+}) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => {
@@ -55,7 +57,7 @@ test("boots the core, loads a sample, draws, and undoes without errors", async (
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
-test("draws a rectangle with the rect shape tool", async ({ page }) => {
+test("draws a rectangle with the rect shape tool", { tag: "@cross" }, async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => {
@@ -119,7 +121,9 @@ test("rect tool draws rounded corners when a corner radius is set", async ({ pag
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
-test("New drawing creates a blank document from the top bar", async ({ page }) => {
+test("New drawing creates a blank document from the top bar", { tag: "@cross" }, async ({
+  page,
+}) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => {
@@ -139,7 +143,7 @@ test("New drawing creates a blank document from the top bar", async ({ page }) =
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
-test("the command palette opens and runs an action", async ({ page }) => {
+test("the command palette opens and runs an action", { tag: "@cross" }, async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => {
@@ -162,7 +166,9 @@ test("the command palette opens and runs an action", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
-test("double-click enters node editing — anchors appear only then", async ({ page }) => {
+test("double-click enters node editing — anchors appear only then", { tag: "@cross" }, async ({
+  page,
+}) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => {
@@ -1230,7 +1236,7 @@ test("an SVG with a DOCTYPE/DTD (Inkscape/Illustrator) loads", async ({ page }) 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
-test("undo then redo restores a drawn shape", async ({ page }) => {
+test("undo then redo restores a drawn shape", { tag: "@cross" }, async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => {

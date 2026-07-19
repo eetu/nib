@@ -16,5 +16,13 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 60_000,
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  // Chromium runs the full suite (incl. Chromium-only paths: File System Access, clipboard).
+  // WebKit + Firefox run only the `@cross` smoke subset — enough to prove the WASM core boots,
+  // renders, takes pointer/keyboard edits, and undoes on all three engines, without tripping on
+  // engine-gated APIs the editor already degrades gracefully around.
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    { name: "webkit", use: { ...devices["Desktop Safari"] }, grep: /@cross/ },
+    { name: "firefox", use: { ...devices["Desktop Firefox"] }, grep: /@cross/ },
+  ],
 });

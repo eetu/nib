@@ -281,16 +281,22 @@ client-side pro pillars, all running on the core):
      imports it, round-trips it **byte-for-byte**, and canonically exports it render-equivalent, so
      the whole nib→app→nib loop is a standing test. More producers (Figma/Inkscape) welcome but the
      gate + a real third-party round-trip is the 1.0 bar.
-  2. **Pixel-verify the new tools** end-to-end (rotate/flip/rounded-rect/drop-shadow/text/eyedropper)
+  2. **Cross-browser smoke — LANDED.** e2e was Chromium-only; `playwright.config.ts` now adds
+     **WebKit** + **Firefox** projects that run a `@cross`-tagged smoke subset (boot+render+undo,
+     pointer draw, blank doc, dblclick node-edit, palette/keyboard, history) — proving the WASM core
+     boots, renders, and takes edits on all three engines — while Chromium keeps the full 51 (incl.
+     the File-System-Access / clipboard paths those engines gate). CI installs all three. Matrix:
+     63 green (51 + 6 + 6).
+  3. **Pixel-verify the new tools** end-to-end (rotate/flip/rounded-rect/drop-shadow/text/eyedropper)
      via `render_document` + a manual pass (text needs system fonts to raster).
-  3. **Large-document performance** — profile project/reconcile/serialize + canvas render at
+  4. **Large-document performance** — profile project/reconcile/serialize + canvas render at
      hundreds–thousands of nodes; the invariants are linear but unmeasured at scale.
-  4. **UI follow-ups — LANDED:** the duplicated grid toggle now lives *only* in the header snap
+  5. **UI follow-ups — LANDED:** the duplicated grid toggle now lives *only* in the header snap
      popover (the rail button is gone); the **basic/advanced** UI level gets a **first-run chooser**
      (`WelcomeDialog`, shown once when `settings.uiLevelChosen` is false — persisting the pick retires
      it, then it's Settings-only). e2e seed `nib:uiLevel` in a `beforeEach` so tests boot as returning
      users; a dedicated first-run test covers the chooser.
-  5. **Deferred (needs a dedicated rotate tool):** rotate/skew about a *freely-movable* pivot — a
+  6. **Deferred (needs a dedicated rotate tool):** rotate/skew about a *freely-movable* pivot — a
      centre pivot handle conflicts with the unified select tool's drag-to-move + double-click-to-node-
      edit. Then **freeze the editor UI (1.0 RC).**
 - **Editor track = A → B → E → finalize; Phase C rides alongside.** Phase E is the

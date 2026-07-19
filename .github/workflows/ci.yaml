@@ -48,9 +48,11 @@ jobs:
         working-directory: frontend
         run: node .yarn/releases/yarn-*.cjs build
 
-      - name: Install Playwright browser
+      # Chromium runs the full suite; webkit + firefox run the `@cross` smoke subset (see
+      # playwright.config.ts) so the WASM core is proven to boot + render on all three engines.
+      - name: Install Playwright browsers
         working-directory: frontend
-        run: node_modules/.bin/playwright install --with-deps chromium
+        run: node_modules/.bin/playwright install --with-deps chromium webkit firefox
 
       - name: E2E (Playwright)
         working-directory: frontend
