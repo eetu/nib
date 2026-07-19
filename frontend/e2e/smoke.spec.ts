@@ -1932,3 +1932,57 @@ test("a group can be renamed from the layers panel", async ({ page }) => {
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
+
+test("pen closes the loop on a click at the start node, even with snap off", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  // Snap-to-points OFF so closing can't lean on the global nearest-anchor snap — it must recognise
+  // the subpath's own start node directly. This is the corner-close bug: with snap off (or when a
+  // neighbouring anchor is nearer), clicking the start used to append a stray node and leave the
+  // path open, cutting a seam across the fill.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem(
+        "nib:prefs",
+        JSON.stringify({
+          snapEnabled: false,
+          snapThresholdPx: 12,
+          gridEnabled: false,
+          gridSize: 10,
+          guidesEnabled: true,
+        }),
+      );
+    } catch {
+      /* non-fatal */
+    }
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.locator("header").getByRole("button", { name: "new", exact: true }).click();
+
+  await page.keyboard.press("p"); // pen tool
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  const at = (fx: number, fy: number) => ({ x: box.x + box.width * fx, y: box.y + box.height * fy });
+  const start = at(0.4, 0.32); // node 0 — a corner (plain click, no handles)
+
+  await page.mouse.click(start.x, start.y);
+  const b = at(0.62, 0.34);
+  await page.mouse.click(b.x, b.y);
+  const c = at(0.52, 0.55);
+  await page.mouse.click(c.x, c.y);
+  await page.mouse.click(start.x, start.y); // click the start again → close the loop
+
+  // A closed subpath serialises with a trailing Z; the bug left it open (an appended stray node, no Z).
+  const path = page.locator("svg.canvas g.artwork path").first();
+  await expect(path).toHaveAttribute("d", /[zZ]\s*$/);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
