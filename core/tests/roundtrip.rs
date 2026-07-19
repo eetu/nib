@@ -38,6 +38,9 @@ const CORPUS: &[(&str, &str)] = &[
         "icon-optimized",
         include_str!("fixtures/icon-optimized.svg"),
     ),
+    // A REAL Pixelmator Pro 3.8 export (it round-tripped nib's own exports through the app): top-level
+    // <clipPath>, userSpaceOnUse gradients with `1e-05` stop offsets, everything flattened to <path>.
+    ("pixelmator", include_str!("fixtures/pixelmator.svg")),
 ];
 
 /// `<defs>` content (clipPath/mask/gradient/filter contents) is not directly-editable canvas

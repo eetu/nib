@@ -47,6 +47,9 @@ const CORPUS: &[(&str, &str)] = &[
     ("svgo-oneline", include_str!("fixtures/svgo-oneline.svg")),
     ("figma-export", include_str!("fixtures/figma-export.svg")),
     ("gradient-radial", include_str!("fixtures/gradient-radial.svg")),
+    // A real Pixelmator Pro export — the manual design-app pass, folded back in as an automated
+    // producer fixture (top-level clipPath, userSpaceOnUse gradients, all-paths).
+    ("pixelmator", include_str!("fixtures/pixelmator.svg")),
 ];
 
 /// Longest-side render target: big enough that a real defect covers many pixels, small enough to

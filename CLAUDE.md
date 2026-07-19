@@ -275,9 +275,12 @@ client-side pro pillars, all running on the core):
      canonical regenerate-all dropped the **namespace prefix on element open tags** (`<format>…
      </dc:format>` → unparseable XML), now fixed in `tree.rs` `build` by reconstructing `prefix:local`
      for element names like it already did for attrs. Corpus grew with Figma clip-path/rounded-rect,
-     an SVGO one-liner with group-inherited fill, and radial/stop-opacity gradients. *Remaining
-     (manual):* open a handful of exports in a real design app (Pixelmator Pro / Figma / Inkscape) —
-     the resvg gate proves render-equivalence, the manual pass confirms strict third-party importers.
+     an SVGO one-liner with group-inherited fill, and radial/stop-opacity gradients. **Manual pass
+     done:** nib's exports were opened + re-exported through **Pixelmator Pro 3.8** (all six render
+     correctly); that real Pixelmator file is folded back into the corpus as `pixelmator.svg` — nib
+     imports it, round-trips it **byte-for-byte**, and canonically exports it render-equivalent, so
+     the whole nib→app→nib loop is a standing test. More producers (Figma/Inkscape) welcome but the
+     gate + a real third-party round-trip is the 1.0 bar.
   2. **Pixel-verify the new tools** end-to-end (rotate/flip/rounded-rect/drop-shadow/text/eyedropper)
      via `render_document` + a manual pass (text needs system fonts to raster).
   3. **Large-document performance** — profile project/reconcile/serialize + canvas render at
