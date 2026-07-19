@@ -54,6 +54,9 @@ export const settings = $state<{
   themeMode: ThemeMode;
   canvasBg: CanvasBg;
   uiLevel: UiLevel;
+  /** Whether the user has ever *explicitly* picked a UI level. False = first run, so the
+   *  composition root shows the one-time interface chooser; after any pick it's Settings-only. */
+  uiLevelChosen: boolean;
   /** Backend base URL for connected mode; "" = same origin (dev proxy / backend-embedded build). */
   backendUrl: string;
   /** The user's bearer token — sent to the backend + pasted into an MCP client. */
@@ -62,6 +65,7 @@ export const settings = $state<{
   themeMode: initialMode(),
   canvasBg: initialBg(),
   uiLevel: initialUiLevel(),
+  uiLevelChosen: read(UI_LEVEL_KEY) !== null,
   backendUrl: read(BACKEND_URL_KEY) ?? "",
   backendToken: read(BACKEND_TOKEN_KEY) ?? DEV_TOKEN,
 });
@@ -86,6 +90,9 @@ export function setCanvasBg(bg: CanvasBg) {
 
 export function setUiLevel(level: UiLevel) {
   settings.uiLevel = level;
+  // Persisting the key is itself the "chosen" signal (initialUiLevelChosen reads its presence),
+  // so this both records the level and retires the first-run chooser for good.
+  settings.uiLevelChosen = true;
   persist(UI_LEVEL_KEY, level);
 }
 

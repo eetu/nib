@@ -9,6 +9,7 @@
   import SourceView from "$lib/components/SourceView.svelte";
   import ToolRail from "$lib/components/ToolRail.svelte";
   import TopBar from "$lib/components/TopBar.svelte";
+  import WelcomeDialog from "$lib/components/WelcomeDialog.svelte";
   import { canvas } from "$lib/stores/canvas.svelte";
   import { editor } from "$lib/stores/document.svelte";
   import { interaction } from "$lib/stores/interaction.svelte";
@@ -21,6 +22,8 @@
   let pasteOpen = $state(false);
   let settingsOpen = $state(false);
   let paletteOpen = $state(false);
+  // First-run interface chooser — open until the user has ever picked a UI level (then Settings-only).
+  const welcomeOpen = $derived(!settings.uiLevelChosen);
   let dragging = $state(false);
   let fileInput = $state<HTMLInputElement | null>(null);
 
@@ -48,7 +51,7 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (pasteOpen || settingsOpen || paletteOpen || typing(e.target)) return;
+    if (welcomeOpen || pasteOpen || settingsOpen || paletteOpen || typing(e.target)) return;
 
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.toLowerCase();
@@ -265,6 +268,7 @@
   {/if}
 </div>
 
+<WelcomeDialog open={welcomeOpen} />
 <ImportDialog open={pasteOpen} onClose={() => (pasteOpen = false)} />
 <SettingsDialog open={settingsOpen} onClose={() => (settingsOpen = false)} />
 <CommandPalette bind:open={paletteOpen} />

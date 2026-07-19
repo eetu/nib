@@ -275,9 +275,11 @@ client-side pro pillars, all running on the core):
      via `render_document` + a manual pass (text needs system fonts to raster).
   3. **Large-document performance** — profile project/reconcile/serialize + canvas render at
      hundreds–thousands of nodes; the invariants are linear but unmeasured at scale.
-  4. **UI follow-ups:** the grid toggle is duplicated (the header snap popover **and** the rail
-     button) — pick one home; give the **basic/advanced** UI level a visible affordance (Settings-only
-     today).
+  4. **UI follow-ups — LANDED:** the duplicated grid toggle now lives *only* in the header snap
+     popover (the rail button is gone); the **basic/advanced** UI level gets a **first-run chooser**
+     (`WelcomeDialog`, shown once when `settings.uiLevelChosen` is false — persisting the pick retires
+     it, then it's Settings-only). e2e seed `nib:uiLevel` in a `beforeEach` so tests boot as returning
+     users; a dedicated first-run test covers the chooser.
   5. **Deferred (needs a dedicated rotate tool):** rotate/skew about a *freely-movable* pivot — a
      centre pivot handle conflicts with the unified select tool's drag-to-move + double-click-to-node-
      edit. Then **freeze the editor UI (1.0 RC).**

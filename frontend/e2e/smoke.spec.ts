@@ -1,5 +1,18 @@
 import { expect, test } from "@playwright/test";
 
+// Each test boots a fresh browser context (empty localStorage), which would trip the one-time
+// first-run interface chooser and cover the canvas. Seed a prior UI-level pick so every test boots
+// as a returning user; the dedicated first-run test below clears it to exercise the chooser.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem("nib:uiLevel", "advanced");
+    } catch {
+      /* storage unavailable — non-fatal */
+    }
+  });
+});
+
 // End-to-end proof that the Svelte UI drives the Rust/WASM engine correctly: boot → load →
 // render → draw → undo, asserting no console/page errors throughout. This is the check that
 // the document store's delegation to nib-core actually works in a browser (Phase A5).
@@ -665,6 +678,42 @@ test("basic UI level hides advanced tools; advanced restores them", async ({ pag
   await page.getByRole("button", { name: "advanced", exact: true }).click();
   await page.getByRole("button", { name: "done" }).click();
   await expect(shapes).toBeVisible();
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
+test("first run shows the interface chooser; picking basic applies + persists", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  // Undo the beforeEach seed so this boots as a genuine first run (later init scripts win).
+  await page.addInitScript(() => {
+    try {
+      localStorage.removeItem("nib:uiLevel");
+    } catch {
+      /* non-fatal */
+    }
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+
+  // The one-time chooser is up.
+  const chooser = page.getByRole("dialog", { name: "Choose your workspace" });
+  await expect(chooser).toBeVisible();
+
+  // Pick basic → chooser closes and the advanced-only shapes flyout is absent.
+  await chooser.getByRole("button", { name: /basic/i }).click();
+  await expect(chooser).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "shapes tools" })).toHaveCount(0);
+
+  // The pick persisted, so the chooser won't return next visit.
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("nib:uiLevel"))).toBe("basic");
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });

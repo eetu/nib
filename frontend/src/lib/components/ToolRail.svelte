@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Grid3x3 from "@lucide/svelte/icons/grid-3x3";
   import Scan from "@lucide/svelte/icons/scan";
 
   import { editor } from "$lib/stores/document.svelte";
@@ -93,19 +92,6 @@
       {/each}
     {/if}
   {/each}
-
-  <div class="sep"></div>
-
-  <button
-    class="icon-btn"
-    class:active={tools.gridEnabled}
-    title="snap to grid"
-    aria-label="snap to grid"
-    aria-pressed={tools.gridEnabled}
-    onclick={() => (tools.gridEnabled = !tools.gridEnabled)}
-  >
-    <Grid3x3 size={18} />
-  </button>
 
   <div class="spacer"></div>
 
