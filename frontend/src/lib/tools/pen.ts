@@ -127,7 +127,8 @@ export const penTool: Tool = {
   begin(ctx) {
     editor.ensureBlank();
     if (!editor.doc) return null;
-    const { point, snapRef } = penPoint(ctx.docPoint, snapBypassed(ctx.event));
+    const bypass = snapBypassed(ctx.event);
+    const { point } = penPoint(ctx.docPoint, bypass);
     interaction.clearDrag();
 
     if (drawing) {
@@ -139,11 +140,19 @@ export const penTool: Tool = {
       if (!p || p.deleted || !p.subpaths[d.subpathIndex]) {
         finishPen();
       } else {
-        // Clicking the subpath's own start node closes the loop and finishes.
+        // Clicking the subpath's own start node closes the loop and finishes. Detect it by DIRECT
+        // distance to that node (the endpoint hit radius, snap-independent) — not via the global
+        // nearest-anchor snap, which dies when snap-to-points is off and loses the close to any
+        // nearer neighbouring anchor (e.g. clustered nodes at a corner), appending a stray
+        // coincident node instead of closing. ⌘/ctrl bypass appends anyway — the escape hatch for
+        // deliberately drawing right next to the start.
+        const sp = p.subpaths[d.subpathIndex];
+        const start = sp.nodes[0]?.point;
         const onStart =
-          snapRef?.pathIndex === d.pathIndex &&
-          snapRef?.subpathIndex === d.subpathIndex &&
-          snapRef?.nodeIndex === 0;
+          !bypass &&
+          !!start &&
+          sp.nodes.length >= 2 &&
+          distance(start, ctx.docPoint) <= viewport.toDocLength(ENDPOINT_HIT_PX);
         if (onStart) {
           editor.closePath(d.pathIndex, d.subpathIndex);
           finishPen();
