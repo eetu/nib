@@ -295,8 +295,12 @@ client-side pro pillars, all running on the core):
      helpers factored to `tests/common/`. **text** stays the manual pass (resvg needs system fonts to
      raster glyphs); **eyedropper** (a frontend pixel-sample→set-fill) is covered by its Playwright
      e2e.
-  4. **Large-document performance** — profile project/reconcile/serialize + canvas render at
-     hundreds–thousands of nodes; the invariants are linear but unmeasured at scale.
+  4. **Large-document performance — LANDED (measured linear).** `core/tests/perf.rs` times
+     parse → project → canonical-serialize + a deep apply-op at n=1k…8k (min-of-3 for noise) and
+     asserts near-linear scaling (per-node growth 4k→8k stays ~1.0, gate fails >1.8 = quadratic).
+     Result: every stage doubles as n doubles (8k paths ≈ 50ms end-to-end: parse 18 / project 4 /
+     serialize 28) and apply-op is flat at ~1µs (O(1), independent of doc size). Canvas render is
+     DOM-linear by construction and covered by the "large document stays interactive" e2e.
   5. **UI follow-ups — LANDED:** the duplicated grid toggle now lives *only* in the header snap
      popover (the rail button is gone); the **basic/advanced** UI level gets a **first-run chooser**
      (`WelcomeDialog`, shown once when `settings.uiLevelChosen` is false — persisting the pick retires
