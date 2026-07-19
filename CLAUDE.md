@@ -268,9 +268,16 @@ client-side pro pillars, all running on the core):
   `xlink:href` back-compat). Header/rail **UX pass** (cluster dividers, centred document title,
   consolidated tool groups).
 - **Open issues → 1.0 (finalization — verification + polish, not new capability):**
-  1. **Export fidelity on a real-SVG corpus** — the *mechanisms* landed (xmlns, attr-prefix, `<use>`
-     xlink); still owe a corpus of messy real-world SVGs (Illustrator/Inkscape/Figma/optimised)
-     round-tripped **and actually opened in those tools** to confirm they render.
+  1. **Export fidelity on a real-SVG corpus — automated half LANDED.** `core/tests/fidelity.rs`
+     rasterizes **source vs. canonical export** with resvg (a dev-dep, so it never touches the WASM
+     build) and pixel-diffs the whole corpus — the render-grade gate the byte-preserving
+     `roundtrip.rs` can't be (canonical *regenerates* markup). It immediately caught a real bug:
+     canonical regenerate-all dropped the **namespace prefix on element open tags** (`<format>…
+     </dc:format>` → unparseable XML), now fixed in `tree.rs` `build` by reconstructing `prefix:local`
+     for element names like it already did for attrs. Corpus grew with Figma clip-path/rounded-rect,
+     an SVGO one-liner with group-inherited fill, and radial/stop-opacity gradients. *Remaining
+     (manual):* open a handful of exports in a real design app (Pixelmator Pro / Figma / Inkscape) —
+     the resvg gate proves render-equivalence, the manual pass confirms strict third-party importers.
   2. **Pixel-verify the new tools** end-to-end (rotate/flip/rounded-rect/drop-shadow/text/eyedropper)
      via `render_document` + a manual pass (text needs system fonts to raster).
   3. **Large-document performance** — profile project/reconcile/serialize + canvas render at

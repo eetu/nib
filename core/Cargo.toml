@@ -26,6 +26,10 @@ uuid = { version = "1.11.0", features = ["v4", "js"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.76"
+# Render-fidelity gate (tests/fidelity.rs only): rasterize source vs. canonical export and
+# pixel-diff. A dev-dep, so it never touches the WASM build — only `cargo test`. Same version the
+# backend renders with (MCP `render_document`).
+resvg = "0.47.0"
 
 # wasm-pack's bundled wasm-opt is too old for the post-MVP wasm features modern rustc emits
 # by default (bulk-memory, sign-ext, nontrapping-fptoint, …), and chasing --enable-* flags

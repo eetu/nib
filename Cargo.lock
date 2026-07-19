@@ -1249,6 +1249,7 @@ dependencies = [
  "i_overlay",
  "indexmap",
  "kurbo",
+ "resvg",
  "roxmltree 0.21.1",
  "serde",
  "serde-wasm-bindgen",

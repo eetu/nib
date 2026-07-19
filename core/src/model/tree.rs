@@ -400,7 +400,21 @@ fn build(node: roxmltree::Node, source: &str) -> Node {
 
     let uid = new_id();
     let r = node.range();
-    let tag = node.tag_name().name().to_string();
+    // The QUALIFIED tag name (`dc:format`, `rdf:RDF`), not just the local name. A *regenerated*
+    // (canonical) open tag is built from this via `regen_open`, while the close is emitted verbatim
+    // (`original_close`) — so a local-only `tag` produces `<format>…</dc:format>`: mismatched,
+    // unparseable XML that no consumer renders. Reconstruct `prefix:local` from the element's
+    // namespace URI + in-scope prefix, exactly like the attribute reconstruction just below. SVG's
+    // default namespace has an empty prefix, so `<path>`/`<g>`/`<defs>` stay bare and every
+    // `tag == "path"` / `DEF_CONTAINERS` check below still matches on the local name.
+    let tag = match node
+        .tag_name()
+        .namespace()
+        .and_then(|uri| node.lookup_prefix(uri))
+    {
+        Some(prefix) if !prefix.is_empty() => format!("{prefix}:{}", node.tag_name().name()),
+        _ => node.tag_name().name().to_string(),
+    };
     // roxmltree exposes namespace declarations (`xmlns`, `xmlns:xlink`) separately from attributes,
     // so capture the ones DECLARED on this node (its in-scope set minus the parent's) as leading
     // attrs. Without this a *regenerated* (canonical) `<svg>` open tag drops `xmlns`, and the file no
