@@ -505,6 +505,15 @@
   function onDblClick(e: MouseEvent) {
     if (!editor.doc || tools.active !== "select") return;
     const hit = hitTest(screenOf(e));
+    // Already node-editing and the double-click landed on an anchor → toggle it between corner and
+    // smooth (Pixelmator-style): smooth synthesizes tangent handles, corner straightens back to a
+    // hard point. Object-mode double-clicks fall through to entering node mode below.
+    if (editor.nodeEditIndex !== null && hit.kind === "anchor") {
+      const { pathIndex, subpathIndex, nodeIndex } = hit.ref;
+      const node = editor.doc.paths[pathIndex]?.subpaths[subpathIndex]?.nodes[nodeIndex];
+      if (node) editor.setNodeType(hit.ref, node.type === "smooth" ? "corner" : "smooth");
+      return;
+    }
     if (hit.kind === "fill" || hit.kind === "segment") editor.enterNodeEdit(hit.pathIndex);
   }
 

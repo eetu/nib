@@ -692,6 +692,12 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                     Some(Point::new(p.x - dir.x * in_len, p.y - dir.y * in_len));
                 sp.nodes[ni].handle_out =
                     Some(Point::new(p.x + dir.x * out_len, p.y + dir.y * out_len));
+            } else if *node_type == NodeType::Corner {
+                // A corner is a hard point: drop its tangents so the adjacent segments straighten
+                // (the Pixelmator-style smooth→sharp toggle). A cusp — a corner with independent
+                // handles — is still reachable afterwards by dragging a handle back out.
+                sp.nodes[ni].handle_in = None;
+                sp.nodes[ni].handle_out = None;
             }
             mark_edited(doc, node.path_index);
             true
@@ -2335,6 +2341,21 @@ mod tests {
         let cross =
             (hout.x - n.point.x) * (n.point.y - hin.y) - (hout.y - n.point.y) * (n.point.x - hin.x);
         assert!(cross.abs() < 1e-6, "handles should be collinear: {cross}");
+
+        // …and back to a corner strips the tangents (the smooth↔sharp toggle straightens it).
+        assert!(apply(
+            &mut doc,
+            &Op::SetNodeType {
+                node: nref(0, 0, 1),
+                node_type: NodeType::Corner,
+            }
+        ));
+        let n = &doc.paths[0].subpaths[0].nodes[1];
+        assert_eq!(n.node_type, NodeType::Corner);
+        assert!(
+            n.handle_in.is_none() && n.handle_out.is_none(),
+            "corner drops its handles"
+        );
     }
 
     #[test]
