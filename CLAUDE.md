@@ -157,7 +157,11 @@ Per-area detail in `frontend/CLAUDE.md`.
   (`document.nodeEditIndex`): its anchors + handles appear and become editable and
   the transform box hides; Esc, a tool switch, or clicking empty returns to object
   mode. Non-select tools (pen/add-node/delete-node) always show + hit anchors.
-  Hit-testing (`lib/tools/{hit,transform}.ts` + the `transform`/`rotate` Hit kinds
+  **Once in node mode, double-clicking an anchor toggles it corner↔smooth**
+  (Pixelmator-style, via `SetNodeType`): smooth synthesizes tangent handles (Catmull-
+  Rom), corner strips them back to a hard point (a cusp — a corner with independent
+  handles — is still reachable by dragging one out). Anchors render square for a
+  corner, circle for smooth. Hit-testing (`lib/tools/{hit,transform}.ts` + the `transform`/`rotate` Hit kinds
   + `select`'s scale/rotate/pathDrag) gates anchors/handles on this mode, so a
   path's own nodes are never shadowed by transform handles. Deleting the last node
   soft-deletes the now-empty path.

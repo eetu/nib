@@ -1986,3 +1986,45 @@ test("pen closes the loop on a click at the start node, even with snap off", asy
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
+
+test("double-click a node toggles it between corner and smooth", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 140"><path d="M 60 40 L 140 40 L 100 100 Z" fill="#8888aa"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await expect(page.locator("svg.canvas g.artwork path")).toBeAttached();
+
+  // Enter node mode by double-clicking the shape → its 3 corners show as SQUARE anchors.
+  await page.locator("svg.canvas g.artwork path").first().dblclick();
+  await expect(page.locator("svg.canvas rect.anchor")).toHaveCount(3);
+  await expect(page.locator("svg.canvas circle.anchor")).toHaveCount(0);
+
+  // Double-click one anchor → it becomes SMOOTH (a circle; tangents synthesized).
+  const bb = await page.locator("svg.canvas rect.anchor").first().boundingBox();
+  if (!bb) throw new Error("no anchor bbox");
+  const cx = bb.x + bb.width / 2;
+  const cy = bb.y + bb.height / 2;
+  await page.mouse.dblclick(cx, cy);
+  await expect(page.locator("svg.canvas circle.anchor")).toHaveCount(1);
+  await expect(page.locator("svg.canvas rect.anchor")).toHaveCount(2);
+
+  // Double-click it again → back to a CORNER (square), tangents stripped.
+  await page.mouse.dblclick(cx, cy);
+  await expect(page.locator("svg.canvas circle.anchor")).toHaveCount(0);
+  await expect(page.locator("svg.canvas rect.anchor")).toHaveCount(3);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
