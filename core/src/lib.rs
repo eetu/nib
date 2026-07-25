@@ -552,6 +552,152 @@ mod tests {
         assert_eq!(ed2.to_svg(), out, "canonical export is a fixed point");
     }
 
+    /// Every line of an export, for the whitespace-hygiene assertions below.
+    fn lines(svg: &str) -> Vec<&str> {
+        svg.lines().collect()
+    }
+
+    fn assert_no_blank_lines(svg: &str) {
+        assert!(
+            !lines(svg).iter().any(|l| l.trim().is_empty()),
+            "no blank / whitespace-only lines: {svg:?}"
+        );
+        assert!(
+            svg.ends_with(">\n"),
+            "exactly one trailing newline: {svg:?}"
+        );
+        assert!(!svg.ends_with(">\n\n"), "not two: {svg:?}");
+        assert!(
+            !lines(svg).iter().any(|l| l.ends_with(' ')),
+            "no trailing spaces: {svg:?}"
+        );
+    }
+
+    /// Re-loading an export and re-exporting must reproduce the same bytes — otherwise formatting
+    /// drifts a little on every save.
+    fn assert_fixed_point(svg: &str) {
+        let mut ed = Editor::new();
+        ed.load_source(svg).unwrap();
+        assert_eq!(ed.to_svg(), svg, "export is a fixed point");
+    }
+
+    const THREE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <path id="a" d="M 10 10 L 40 10 L 40 40 Z" fill="#f00"/>
+  <path id="b" d="M 50 10 L 80 10 L 80 40 Z" fill="#0f0"/>
+  <path id="c" d="M 10 50 L 40 50 L 40 80 Z" fill="#00f"/>
+</svg>"##;
+
+    #[test]
+    fn deleting_a_path_leaves_no_blank_line() {
+        // The tree keeps the source's indentation as text nodes; a deleted element used to emit
+        // nothing while its leading "\n  " survived — a blank line (with trailing spaces) per
+        // delete. The canonical export re-derives whitespace, so the hole closes up.
+        let mut ed = Editor::new();
+        ed.load_source(THREE).unwrap();
+        ed.apply(&Op::DeletePath { path: 1 });
+        let out = ed.to_svg();
+        assert!(!out.contains(r##"id="b""##), "the path is gone: {out}");
+        assert_eq!(out.matches("<path").count(), 2);
+        assert_no_blank_lines(&out);
+        assert_fixed_point(&out);
+    }
+
+    #[test]
+    fn grouping_indents_the_members_on_their_own_lines() {
+        // group_in grabs only the member *elements*, leaving their separator whitespace behind in
+        // the parent — the members used to land jammed onto one line inside the new <g>.
+        let mut ed = Editor::new();
+        ed.load_source(THREE).unwrap();
+        let uids: Vec<String> = ed
+            .doc()
+            .unwrap()
+            .paths
+            .iter()
+            .take(2)
+            .map(|p| p.uid.clone())
+            .collect();
+        ed.apply(&Op::GroupNodes {
+            uids,
+            uid: "g1".into(),
+            name: "pair".into(),
+        });
+        let out = ed.to_svg();
+        let ls = lines(&out);
+        let g = ls
+            .iter()
+            .position(|l| l.contains(r##"<g id="pair""##))
+            .expect("group emitted");
+        assert_eq!(ls[g], r##"  <g id="pair">"##, "group at depth 1: {out}");
+        assert!(
+            ls[g + 1].starts_with("    <path") && ls[g + 2].starts_with("    <path"),
+            "members one per line, indented inside the group: {out}"
+        );
+        assert_eq!(ls[g + 3], "  </g>", "close tag re-derived: {out}");
+        assert_no_blank_lines(&out);
+        assert_fixed_point(&out);
+    }
+
+    #[test]
+    fn bring_to_front_stays_inside_the_root_indentation() {
+        // reorder_extreme pushes the node as the *last* child — past the root's trailing "\n" text
+        // node, so it used to be emitted flush against `</svg>`.
+        let mut ed = Editor::new();
+        ed.load_source(THREE).unwrap();
+        let uid = ed.doc().unwrap().paths[0].uid.clone();
+        ed.apply(&Op::ReorderNodeExtreme { uid, front: true });
+        let out = ed.to_svg();
+        let ls = lines(&out);
+        assert!(
+            ls.iter()
+                .all(|l| !l.starts_with("<path") && !l.contains("/><")),
+            "no node flush against the root or its sibling: {out}"
+        );
+        assert_eq!(ls[ls.len() - 1], "</svg>");
+        assert!(
+            ls[ls.len() - 2].starts_with(r##"  <path id="a""##),
+            "the moved path is last, indented: {out}"
+        );
+        assert_no_blank_lines(&out);
+        assert_fixed_point(&out);
+    }
+
+    #[test]
+    fn pretty_export_keeps_significant_text_verbatim() {
+        // Whitespace inside <text>/<tspan>/<style> RENDERS — re-indenting it would change the
+        // document, so an element with significant content emits its children verbatim, inline.
+        let src = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><style>.a { fill: red; }</style><text x="5" y="20" font-size="8">Hello <tspan fill="#f00">there</tspan> you</text><rect x="1" y="1" width="2" height="2"/></svg>"##;
+        let mut ed = Editor::new();
+        ed.load_source(src).unwrap();
+        let out = ed.to_svg();
+        assert!(
+            out.contains(r##">Hello <tspan fill="#f00">there</tspan> you</text>"##),
+            "text content byte-identical, no injected whitespace: {out}"
+        );
+        assert!(
+            out.contains("<style>.a { fill: red; }</style>"),
+            "style content untouched: {out}"
+        );
+        assert_no_blank_lines(&out);
+        assert_fixed_point(&out);
+    }
+
+    #[test]
+    fn pretty_export_expands_a_minified_one_liner() {
+        // An SVGO-style one-liner saves as a readable, stably-formatted file.
+        let src = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><g fill="red"><rect x="1" y="1" width="2" height="2"/><circle cx="5" cy="5" r="2"/></g></svg>"##;
+        let mut ed = Editor::new();
+        ed.load_source(src).unwrap();
+        let out = ed.to_svg();
+        assert_eq!(
+            lines(&out).len(),
+            6,
+            "svg / g / rect / circle / /g / /svg: {out}"
+        );
+        assert!(out.contains("\n    <circle"), "nested at depth 2: {out}");
+        assert_no_blank_lines(&out);
+        assert_fixed_point(&out);
+    }
+
     #[test]
     fn canonical_export_keeps_namespaces_without_leaking_them_to_children() {
         // A doc that declares both the SVG default namespace AND xmlns:xlink on the root: canonical
