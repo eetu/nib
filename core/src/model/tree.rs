@@ -732,6 +732,146 @@ pub fn serialize_tree_prec(tree: &Tree, precision: usize) -> String {
     out
 }
 
+/// Is this text node pure inter-element whitespace (the source's indentation)? Such nodes are the
+/// only thing the pretty emitter drops — anything with content is significant.
+fn is_blank_text(node: &Node) -> bool {
+    matches!(node, Node::Text(s) if s.trim().is_empty())
+}
+
+/// A node reconciliation blanked out (a deleted path): empty tags, no children, not edited. It
+/// emits nothing either way; the pretty emitter must not give it a line of its own.
+fn is_blanked(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::Element {
+            original_open,
+            original_close,
+            children,
+            edited: false,
+            ..
+        } if original_open.is_empty() && original_close.is_empty() && children.is_empty()
+    )
+}
+
+/// Does this element hold **significant** content — non-blank text or opaque/CDATA nodes, or an
+/// explicit `xml:space="preserve"`? `<text>`/`<tspan>`/`<title>`/`<style>`/`<script>` do, and
+/// re-indenting them would change what renders, so their children emit inline + verbatim.
+fn has_inline_content(attrs: &[(String, String)], children: &[Node]) -> bool {
+    if attr(attrs, "xml:space") == Some("preserve") {
+        return true;
+    }
+    children
+        .iter()
+        .any(|c| matches!(c, Node::Other(_)) || matches!(c, Node::Text(s) if !s.trim().is_empty()))
+}
+
+/// Pretty (canonical) emit: one element per line at 2-space depth, dropping the source's
+/// inter-element whitespace entirely. Structural edits (delete/group/reorder/move) leave that
+/// whitespace stranded — blank lines, jammed-together group children, misindented moved nodes —
+/// so the canonical export re-derives it instead of carrying it. Elements with significant
+/// content emit their children inline + verbatim so nothing that renders is disturbed.
+fn emit_pretty(node: &Node, out: &mut String, precision: usize, depth: usize) {
+    match node {
+        Node::Text(s) | Node::Other(s) => out.push_str(s),
+        Node::Comment(s) => {
+            newline_indent(out, depth);
+            out.push_str(s.trim());
+        }
+        Node::Element {
+            tag,
+            attrs,
+            children,
+            edited: _,
+            hidden,
+            boolean_op,
+            original_open: _,
+            original_close: _,
+            uid: _,
+            added: _,
+        } => {
+            // A live-boolean `<g>` bakes to ONE computed `<path>`; otherwise the emittable children
+            // are everything but the source's indentation + dropped (deleted) nodes.
+            let baked = boolean_op
+                .as_deref()
+                .and_then(|op| baked_boolean(children, op, precision));
+            let inline = baked.is_none() && has_inline_content(attrs, children);
+            let kids: Vec<&Node> = match (&baked, inline) {
+                (Some(_), _) => Vec::new(),
+                (None, true) => children.iter().collect(), // verbatim: keep every byte
+                (None, false) => children
+                    .iter()
+                    .filter(|c| !is_blank_text(c) && !is_blanked(c))
+                    .collect(),
+            };
+            // Self-closing is decided by "is there anything to emit", NOT by the source's shape —
+            // that's what makes the output a fixed point (`<g>\n</g>` → `<g/>`, not `<g></g>` then
+            // `<g/>` on the next save).
+            let empty = baked.is_none() && kids.is_empty();
+            let open = regen_open(tag, attrs, empty);
+            newline_indent(out, depth);
+            out.push_str(&if *hidden {
+                with_display_none(&open)
+            } else {
+                open
+            });
+            if empty {
+                return;
+            }
+            match (baked, inline) {
+                // A live boolean's computed `<path>`, alone on its own line.
+                (Some(baked), _) => {
+                    newline_indent(out, depth + 1);
+                    out.push_str(&baked);
+                    newline_indent(out, depth);
+                }
+                // Mixed/text content: emit verbatim, no added whitespace, close on the same line.
+                (None, true) => {
+                    for c in kids {
+                        emit_prec(c, out, precision);
+                    }
+                }
+                (None, false) => {
+                    for c in kids {
+                        emit_pretty(c, out, precision, depth + 1);
+                    }
+                    newline_indent(out, depth);
+                }
+            }
+            out.push_str("</");
+            out.push_str(tag);
+            out.push('>');
+        }
+    }
+}
+
+/// Break to a fresh line at `depth` (no leading break at the root, which starts the document).
+fn newline_indent(out: &mut String, depth: usize) {
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    for _ in 0..depth {
+        out.push_str("  ");
+    }
+}
+
+/// Re-emit the tree **pretty-printed** — the canonical export's formatter (see [`emit_pretty`]).
+/// Prolog/epilog are trimmed to their own lines and the file ends with exactly one newline.
+pub fn serialize_tree_pretty(tree: &Tree, precision: usize) -> String {
+    let mut out = String::with_capacity(tree.prolog.len() + tree.epilog.len() + 256);
+    let prolog = tree.prolog.trim();
+    if !prolog.is_empty() {
+        out.push_str(prolog);
+    }
+    emit_pretty(&tree.root, &mut out, precision, 0);
+    let epilog = tree.epilog.trim();
+    if !epilog.is_empty() {
+        out.push('\n');
+        out.push_str(epilog);
+    }
+    out.push('\n');
+    out
+}
+
 fn attr<'a>(attrs: &'a [(String, String)], key: &str) -> Option<&'a str> {
     attrs
         .iter()

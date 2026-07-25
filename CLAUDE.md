@@ -67,9 +67,18 @@ Per-area detail in `frontend/CLAUDE.md`.
   `to_svg` regenerates the whole document cleanly from the model (`serialize_canonical`):
   every element re-emitted from its tag+attrs, but **primitives kept** — a form-preserving
   `<rect>`/`<circle>`/… stays that primitive (via `refit`), only a freeform reshape falls to
-  `<path>`. Byte-for-byte preservation is dropped as a contract; a faithful byte-preserving
-  serializer (`serialize_via_tree`) is retained for round-trip tests + as a capability, but
-  isn't the default. The native model — not any SVG form — is the identity substrate.
+  `<path>`. Canonical export also **re-derives the whitespace** (`serialize_tree_pretty`):
+  the source's indentation rides in the tree as `Node::Text`, and structural edits
+  (delete/group/reorder/move) strand it — blank lines, group children jammed on one line,
+  a brought-to-front node flush against `</svg>`. So the clean export drops blank text
+  nodes and pretty-prints instead: one element per line at 2-space depth, regenerated close
+  tags, self-closing when empty (that's what keeps it a **fixed point** — re-save = same
+  bytes), one trailing newline. Elements with *significant* content (`<text>`/`<tspan>`/
+  `<style>`/CDATA/`xml:space="preserve"`) emit their children inline + verbatim, so nothing
+  that renders is disturbed. Byte-for-byte preservation is dropped as a contract; a faithful
+  byte-preserving serializer (`serialize_via_tree`, no pretty pass) is retained for
+  round-trip tests + as a capability, but isn't the default. The native model — not any SVG
+  form — is the identity substrate.
 - **One representation: the document tree** (`core/src/model/tree.rs`, `Node`/`Tree`).
   Imported *and* drawn content are nodes in the same tree — imported nodes parse from
   source (verbatim spans, byte-for-byte re-emit); **drawn (added) paths** are `<path>`

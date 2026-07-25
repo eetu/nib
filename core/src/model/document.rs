@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use kurbo::{BezPath, Shape};
 
 use super::path::{parse_path_d, path_to_d_prec};
-use super::tree::{Node, Tree, serialize_tree_prec};
+use super::tree::{Node, Tree, serialize_tree_prec, serialize_tree_pretty};
 use super::types::{Gradient, PathElement, Subpath, SvgDocument, ViewBox};
 
 const DEFAULT_VIEWBOX: ViewBox = ViewBox {
@@ -678,7 +678,14 @@ fn serialize_via_tree_opt(
     // Drawn paths + live-boolean groups now live in the tree, so `serialize_tree_prec` emits the
     // whole document (imported verbatim, edited/drawn regenerated, booleans baked) — no separate
     // drawn-path append step. Gradient defs are still injected (a `<defs>` head-injection).
-    let out = serialize_tree_prec(&tree, precision);
+    // Canonical export also re-derives the *whitespace*: structural edits (delete/group/reorder)
+    // strand the source's indentation text nodes, leaving blank lines + jammed-up groups, so the
+    // clean export pretty-prints instead of carrying them. The faithful path stays byte-for-byte.
+    let out = if regenerate_all {
+        serialize_tree_pretty(&tree, precision)
+    } else {
+        serialize_tree_prec(&tree, precision)
+    };
     let with_defs = inject_defs(&out, doc);
     let evb = export_view_box(doc);
     if evb != doc.view_box {
