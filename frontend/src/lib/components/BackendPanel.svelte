@@ -4,7 +4,14 @@
   import { onMount } from "svelte";
 
   import { account } from "$lib/backend/account.svelte";
-  import { createProject, getProject, listProjects, type ProjectMeta } from "$lib/backend/client";
+  import {
+    createProject,
+    deleteProject,
+    getProject,
+    listProjects,
+    type ProjectMeta,
+    renameProject,
+  } from "$lib/backend/client";
   import { sync } from "$lib/backend/sync.svelte";
   import { editor } from "$lib/stores/document.svelte";
 
@@ -54,6 +61,90 @@
       error = e instanceof Error ? e.message : String(e);
     }
   }
+
+  // --- rename / delete -----------------------------------------------------
+  // Same shape as the Inspector's LAYERS rows: double-click (or the context menu) renames in
+  // place, right-click offers the rest. Delete is the one destructive action in this panel, so
+  // it confirms by name and is styled as danger.
+  let renaming = $state<number | null>(null);
+  let renameValue = $state("");
+
+  function startRename(p: ProjectMeta) {
+    renaming = p.id;
+    renameValue = p.name;
+  }
+
+  async function commitRename(id: number) {
+    if (renaming !== id) return;
+    const name = renameValue.trim();
+    renaming = null;
+    const current = projects.find((p) => p.id === id)?.name;
+    if (!name || name === current) return; // nothing to do — don't spend a request
+    error = null;
+    try {
+      await renameProject(id, name);
+      await refresh();
+      // The header shows the open document's name (seeded from the project name on open), so
+      // keep it in step rather than leaving a stale title above a renamed project.
+      if (sync.projectId === id) editor.fileName = name;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function remove(p: ProjectMeta) {
+    if (!confirm(`Delete "${p.name}"? This can't be undone.`)) return;
+    error = null;
+    try {
+      await deleteProject(p.id);
+      // Stop streaming edits into a project that no longer exists. The document stays open on the
+      // canvas as an unsaved local copy rather than vanishing under the user.
+      if (sync.projectId === p.id) sync.disconnect();
+      await refresh();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  type Menu = { x: number; y: number; project: ProjectMeta };
+  let menu = $state<Menu | null>(null);
+
+  function openMenu(e: MouseEvent, project: ProjectMeta) {
+    e.preventDefault();
+    menu = { x: e.clientX, y: e.clientY, project };
+  }
+
+  // Keep the menu on screen and move focus into it, so Escape/arrows work (mirrors Inspector).
+  function placeMenu(node: HTMLElement) {
+    const r = node.getBoundingClientRect();
+    const pad = 8;
+    const dx = Math.min(0, window.innerWidth - pad - r.right);
+    const dy = Math.min(0, window.innerHeight - pad - r.bottom);
+    if (dx || dy) node.style.transform = `translate(${dx}px, ${dy}px)`;
+    node.querySelector("button")?.focus();
+  }
+
+  function onMenuKeydown(e: KeyboardEvent) {
+    const items = [
+      ...(e.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>("button"),
+    ];
+    const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === "Escape") {
+      menu = null;
+      e.stopPropagation();
+      e.preventDefault();
+    } else if (e.key === "ArrowDown") {
+      items[(i + 1) % items.length]?.focus();
+      e.preventDefault();
+    } else if (e.key === "ArrowUp") {
+      items[(i - 1 + items.length) % items.length]?.focus();
+      e.preventDefault();
+    }
+  }
+
+  function autofocus(node: HTMLInputElement) {
+    node.select();
+  }
 </script>
 
 <aside class="backend">
@@ -65,9 +156,29 @@
   <ul class="list">
     {#each projects as p (p.id)}
       <li>
-        <button class="row" class:active={sync.projectId === p.id} onclick={() => open(p.id)}>
-          {p.name}
-        </button>
+        {#if renaming === p.id}
+          <input
+            class="rename"
+            bind:value={renameValue}
+            use:autofocus
+            onblur={() => commitRename(p.id)}
+            onkeydown={(e) => {
+              if (e.key === "Enter") commitRename(p.id);
+              else if (e.key === "Escape") renaming = null;
+            }}
+          />
+        {:else}
+          <button
+            class="row"
+            class:active={sync.projectId === p.id}
+            onclick={() => open(p.id)}
+            ondblclick={() => startRename(p)}
+            oncontextmenu={(e) => openMenu(e, p)}
+            title="click to open · double-click to rename · right-click for more"
+          >
+            {p.name}
+          </button>
+        {/if}
       </li>
     {/each}
     {#if projects.length === 0 && !error}<li class="empty">no projects yet</li>{/if}
@@ -77,6 +188,45 @@
     <button onclick={refresh}>refresh</button>
   </div>
 </aside>
+
+{#if menu}
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div
+    class="ctx-scrim"
+    onclick={() => (menu = null)}
+    oncontextmenu={(e) => {
+      e.preventDefault();
+      menu = null;
+    }}
+  ></div>
+  <div
+    class="ctx"
+    style:left="{menu.x}px"
+    style:top="{menu.y}px"
+    role="menu"
+    tabindex="-1"
+    use:placeMenu
+    onkeydown={onMenuKeydown}
+  >
+    <button
+      role="menuitem"
+      onclick={() => {
+        const p = menu?.project;
+        menu = null;
+        if (p) startRename(p);
+      }}>rename</button
+    >
+    <button
+      role="menuitem"
+      class="danger"
+      onclick={() => {
+        const p = menu?.project;
+        menu = null;
+        if (p) void remove(p);
+      }}>delete</button
+    >
+  </div>
+{/if}
 
 <style>
   .backend {
@@ -147,11 +297,57 @@
     color: var(--halo-accent);
   }
 
+  .rename {
+    width: 100%;
+    margin: 1px 0;
+    font-size: 13px;
+  }
+
   .empty {
     padding: 6px 8px;
     color: var(--halo-text-muted);
     font-style: italic;
     font-size: 12px;
+  }
+
+  /* right-click context menu — matches the Inspector's LAYERS rows */
+  .ctx-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+  }
+
+  .ctx {
+    position: fixed;
+    z-index: 61;
+    min-width: 120px;
+    padding: 4px;
+    border: 1px solid var(--halo-border);
+    border-radius: var(--halo-radius);
+    background: var(--halo-bg-light);
+    box-shadow: var(--halo-shadow, 0 8px 24px rgb(0 0 0 / 0.25));
+  }
+
+  .ctx button {
+    display: block;
+    width: 100%;
+    padding: 6px 10px;
+    border: none;
+    border-radius: var(--halo-radius);
+    background: transparent;
+    color: var(--halo-text-main);
+    text-align: left;
+    font-size: 13px;
+  }
+
+  .ctx button:hover {
+    background: var(--halo-accent-soft);
+    color: var(--halo-accent);
+  }
+
+  .ctx button.danger:hover {
+    background: var(--halo-accent-soft);
+    color: var(--halo-error);
   }
 
   .err {
