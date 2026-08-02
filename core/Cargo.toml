@@ -1,6 +1,6 @@
 [package]
 name = "nib-core"
-version = "0.0.0"
+version.workspace = true
 edition = "2024"
 description = "nib's document/geometry/op engine — compiles to WASM (browser) and native (backend + tests)."
 license = "MIT"

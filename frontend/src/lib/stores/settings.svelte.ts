@@ -25,9 +25,6 @@ const BG_KEY = "nib:canvasBg";
 const UI_LEVEL_KEY = "nib:uiLevel";
 const BACKEND_URL_KEY = "nib:backendUrl";
 const BACKEND_TOKEN_KEY = "nib:backendToken";
-/** Dev default so connected mode + a local MCP client work out of the box (matches the backend's
- *  seeded developer token). Overridable in Settings. */
-const DEV_TOKEN = "nib-dev-token";
 
 function read(key: string): string | null {
   return typeof localStorage !== "undefined" ? localStorage.getItem(key) : null;
@@ -59,7 +56,9 @@ export const settings = $state<{
   uiLevelChosen: boolean;
   /** Backend base URL for connected mode; "" = same origin (dev proxy / backend-embedded build). */
   backendUrl: string;
-  /** The user's bearer token — sent to the backend + pasted into an MCP client. */
+  /** The user's bearer token, mirrored from `/api/me` after sign-in — used for a cross-origin
+   *  backend and pasted into an MCP client. Same-origin, the session cookie authenticates instead,
+   *  so this being empty (signed out, or a fresh browser) is normal. */
   backendToken: string;
 }>({
   themeMode: initialMode(),
@@ -67,7 +66,7 @@ export const settings = $state<{
   uiLevel: initialUiLevel(),
   uiLevelChosen: read(UI_LEVEL_KEY) !== null,
   backendUrl: read(BACKEND_URL_KEY) ?? "",
-  backendToken: read(BACKEND_TOKEN_KEY) ?? DEV_TOKEN,
+  backendToken: read(BACKEND_TOKEN_KEY) ?? "",
 });
 
 function persist(key: string, value: string) {

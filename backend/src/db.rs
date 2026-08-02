@@ -9,14 +9,27 @@ use sqlx::FromRow;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 /// The dev token if `NIB_DEV_TOKEN` is unset — so `just dev` + a local MCP client work with zero
-/// setup. In any real deployment set `NIB_DEV_TOKEN` (or, later, real per-user tokens).
+/// setup. Seeded **only** under `NIB_DEV_AUTH`; a production deploy never creates this user, and
+/// real users mint their own token on first OIDC login.
 pub const DEV_TOKEN_DEFAULT: &str = "nib-dev-token";
+
+/// The OIDC subject of the synthetic dev identity. Sharing one `sub` between the dev-auth cookie
+/// tier and the seeded dev token means both resolve to the *same* row — otherwise `just dev` would
+/// silently give the browser and the MCP client two different users with two sets of projects.
+pub const DEV_SUB: &str = "dev";
 
 #[derive(Clone, FromRow)]
 pub struct User {
     pub id: i64,
     pub name: String,
     pub token: String,
+    /// `None` only for rows predating OIDC (and never in a fresh deployment).
+    pub email: Option<String>,
+}
+
+/// Mint a fresh bearer token. Prefixed so it's recognisable in a config file or a paste.
+pub fn mint_token() -> String {
+    format!("nib_{}", crate::config::random_hex(32))
 }
 
 /// A project row minus its (potentially large) `svg` — for listings.
@@ -49,20 +62,72 @@ pub async fn connect(url: &str) -> Result<SqlitePool, sqlx::Error> {
     Ok(pool)
 }
 
-/// Ensure a `developer` user exists with the given token (idempotent — dev bootstrap).
-pub async fn ensure_dev_user(pool: &SqlitePool, token: &str) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "insert into users (name, token) values ('developer', ?) on conflict(token) do nothing",
+/// Look up (or create) the user behind a verified OIDC subject, refreshing the mutable profile
+/// bits. Identity is the `sub` — an issuer-stable id — so a rename or a changed email address
+/// follows the same account instead of forking a new one.
+///
+/// A brand-new user gets a freshly minted bearer token here, at creation: that's the credential
+/// the UI shows in Settings and the user pastes into an MCP client.
+pub async fn resolve_user(
+    pool: &SqlitePool,
+    sub: &str,
+    email: &str,
+    name: &str,
+) -> Result<User, sqlx::Error> {
+    sqlx::query_as::<_, User>(
+        "insert into users (name, token, sub, email) values (?, ?, ?, ?) \
+         on conflict(sub) do update set email = excluded.email, name = excluded.name \
+         returning id, name, token, email",
     )
-    .bind(token)
-    .execute(pool)
-    .await?;
+    .bind(name)
+    .bind(mint_token())
+    .bind(sub)
+    .bind(email)
+    .fetch_one(pool)
+    .await
+}
+
+/// Ensure the synthetic `developer` user exists and carries `token` (idempotent — dev bootstrap).
+/// Only called under `NIB_DEV_AUTH`.
+pub async fn ensure_dev_user(pool: &SqlitePool, token: &str) -> Result<User, sqlx::Error> {
+    let user = resolve_user(pool, DEV_SUB, "dev@localhost", "developer").await?;
+    set_token(pool, user.id, token).await?;
+    Ok(User {
+        token: token.to_string(),
+        ..user
+    })
+}
+
+/// Replace a user's bearer token. Every surface re-resolves the token per request, so the old one
+/// stops working immediately — except on already-established WebSockets, which authenticate at
+/// connect time only.
+pub async fn set_token(pool: &SqlitePool, user_id: i64, token: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("update users set token = ?, token_rotated_at = datetime('now') where id = ?")
+        .bind(token)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
+/// Mint a new bearer for `user_id` and return it.
+pub async fn rotate_token(pool: &SqlitePool, user_id: i64) -> Result<String, sqlx::Error> {
+    let token = mint_token();
+    set_token(pool, user_id, &token).await?;
+    Ok(token)
+}
+
 pub async fn user_by_token(pool: &SqlitePool, token: &str) -> Result<Option<User>, sqlx::Error> {
-    sqlx::query_as::<_, User>("select id, name, token from users where token = ?")
+    sqlx::query_as::<_, User>("select id, name, token, email from users where token = ?")
         .bind(token)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Look up a user by OIDC subject — the read behind the session cookie.
+pub async fn user_by_sub(pool: &SqlitePool, sub: &str) -> Result<Option<User>, sqlx::Error> {
+    sqlx::query_as::<_, User>("select id, name, token, email from users where sub = ?")
+        .bind(sub)
         .fetch_optional(pool)
         .await
 }

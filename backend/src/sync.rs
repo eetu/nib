@@ -1,23 +1,28 @@
 //! Live op-sync (Phase C2) — a WebSocket per project. Clients (the browser; other tools) connect to
-//! `GET /ws/projects/{id}?token=…`, authenticate, and attach to the project's session. Ops from any
+//! `GET /ws/projects/{id}`, authenticate — with the session cookie, or `?token=` for anything that
+//! can't send one — and attach to the project's session. Ops from any
 //! client (WS *or* MCP) funnel through [`session::apply_ops`], which broadcasts them to every other
 //! subscriber — so the LLM's edits appear on the canvas live, and vice-versa. Messages are
 //! `{ clientId, ops }`; a client ignores the echo of its own `clientId`.
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
 use axum::extract::{Path, Query, State};
+use axum::http::request::Parts;
 use axum::response::IntoResponse;
 use serde::Deserialize;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::AppState;
-use crate::db;
+use crate::auth;
+use crate::db::User;
 use crate::session::{self, SyncMsg};
 
 #[derive(Deserialize)]
 pub struct WsAuth {
-    /// Bearer token as a query param — browsers can't set headers on a WebSocket handshake.
-    pub token: String,
+    /// Bearer token as a query param, for clients that can't send the session cookie (a
+    /// cross-origin SPA, or anything that isn't a browser). Same-origin browsers authenticate
+    /// with the cookie instead, which keeps the secret out of proxy logs and browser history.
+    pub token: Option<String>,
 }
 
 pub async fn ws_handler(
@@ -25,20 +30,44 @@ pub async fn ws_handler(
     Path(id): Path<i64>,
     Query(q): Query<WsAuth>,
     State(st): State<AppState>,
+    parts: Parts,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, id, q.token, st))
+    // Resolve before the upgrade so the caller is known by the time the socket opens.
+    let user = resolve(&st, &parts, q.token.as_deref()).await;
+    ws.on_upgrade(move |socket| handle_socket(socket, id, user, st))
 }
 
-async fn handle_socket(mut socket: WebSocket, project_id: i64, token: String, st: AppState) {
-    // Authenticate + verify the caller owns the project (open loads/attaches its session).
-    let Some(user) = db::user_by_token(&st.pool, &token).await.ok().flatten() else {
-        let _ = socket.send(Message::Close(None)).await;
+async fn resolve(st: &AppState, parts: &Parts, token: Option<&str>) -> Option<User> {
+    if let Ok(user) = auth::resolve(st, parts, auth::Tiers::SESSION).await {
+        return Some(user);
+    }
+    match token {
+        Some(t) => crate::db::user_by_token(&st.pool, t).await.ok().flatten(),
+        None => None,
+    }
+}
+
+/// Close with a real code + reason. The socket used to close with a bare `Close(None)`, so the SPA
+/// couldn't tell a bad token from someone else's project from a server fault.
+async fn reject(socket: &mut WebSocket, reason: &'static str) {
+    let _ = socket
+        .send(Message::Close(Some(CloseFrame {
+            code: close_code::POLICY,
+            reason: reason.into(),
+        })))
+        .await;
+}
+
+async fn handle_socket(mut socket: WebSocket, project_id: i64, user: Option<User>, st: AppState) {
+    let Some(user) = user else {
+        reject(&mut socket, "unauthorized").await;
         return;
     };
+    // `open` verifies the caller owns the project before handing back its session.
     let sess = match session::open(&st.pool, &st.sessions, user.id, project_id).await {
         Ok(s) => s,
         Err(_) => {
-            let _ = socket.send(Message::Close(None)).await;
+            reject(&mut socket, "no such project").await;
             return;
         }
     };

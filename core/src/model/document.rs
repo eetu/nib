@@ -402,20 +402,19 @@ fn collect_boolean_results(
                     _ => None,
                 })
                 .collect();
-            if members.len() >= 2 {
-                if let Some(subpaths) = crate::model::booleans::boolean(op, &members) {
-                    if !subpaths.is_empty() {
-                        let attributes = boolean_subject(&members)
-                            .map(effective_style)
-                            .unwrap_or_default();
-                        out.push(BooleanResult {
-                            uid: uid.clone(),
-                            subpaths,
-                            attributes,
-                            operand_uids: members.iter().map(|m| m.uid.clone()).collect(),
-                        });
-                    }
-                }
+            if members.len() >= 2
+                && let Some(subpaths) = crate::model::booleans::boolean(op, &members)
+                && !subpaths.is_empty()
+            {
+                let attributes = boolean_subject(&members)
+                    .map(effective_style)
+                    .unwrap_or_default();
+                out.push(BooleanResult {
+                    uid: uid.clone(),
+                    subpaths,
+                    attributes,
+                    operand_uids: members.iter().map(|m| m.uid.clone()).collect(),
+                });
             }
         }
         for c in children {

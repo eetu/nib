@@ -1,0 +1,25 @@
+.git
+.github
+.claude
+.githooks
+docs
+samples
+target
+core/pkg
+**/target
+**/node_modules
+frontend/dist
+frontend/build
+frontend/.svelte-kit
+frontend/test-results
+frontend/playwright-report
+
+# Yarn Berry — keep the vendored release, drop the cache
+frontend/.yarn/cache
+frontend/.yarn/install-state.gz
+frontend/.yarn/unplugged
+
+# Local runtime state
+backend/nib.db
+backend/nib.db-shm
+backend/nib.db-wal

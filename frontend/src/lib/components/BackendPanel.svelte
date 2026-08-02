@@ -3,6 +3,7 @@
   // backend projects, opens one (loading it + attaching the live-sync socket), and creates new ones.
   import { onMount } from "svelte";
 
+  import { account } from "$lib/backend/account.svelte";
   import { createProject, getProject, listProjects, type ProjectMeta } from "$lib/backend/client";
   import { sync } from "$lib/backend/sync.svelte";
   import { editor } from "$lib/stores/document.svelte";
@@ -18,7 +19,14 @@
       error = e instanceof Error ? e.message : String(e);
     }
   }
-  onMount(() => void refresh());
+
+  // One call on connect: `/api/me` carries identity, the personal token, and the project list —
+  // and, being session-authenticated, it's what bounces an unauthenticated visitor to the login.
+  onMount(async () => {
+    await account.load();
+    if (account.me) projects = account.me.projects;
+    else if (account.error) error = account.error;
+  });
 
   async function open(id: number) {
     error = null;

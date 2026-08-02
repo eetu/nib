@@ -27,7 +27,10 @@ const CORPUS: &[(&str, &str)] = &[
     ("minimal", include_str!("fixtures/minimal.svg")),
     ("icon-group", include_str!("fixtures/icon-group.svg")),
     ("gradient", include_str!("fixtures/gradient.svg")),
-    ("mixed-elements", include_str!("fixtures/mixed-elements.svg")),
+    (
+        "mixed-elements",
+        include_str!("fixtures/mixed-elements.svg"),
+    ),
     ("style-block", include_str!("fixtures/style-block.svg")),
     ("transforms", include_str!("fixtures/transforms.svg")),
     ("prolog", include_str!("fixtures/prolog.svg")),
@@ -37,17 +40,26 @@ const CORPUS: &[(&str, &str)] = &[
     ("cdata", include_str!("fixtures/cdata.svg")),
     ("use-symbol", include_str!("fixtures/use-symbol.svg")),
     ("text-tspan", include_str!("fixtures/text-tspan.svg")),
-    ("doctype-comments", include_str!("fixtures/doctype-comments.svg")),
+    (
+        "doctype-comments",
+        include_str!("fixtures/doctype-comments.svg"),
+    ),
     ("nested-deep", include_str!("fixtures/nested-deep.svg")),
     ("compact-path", include_str!("fixtures/compact-path.svg")),
     ("inkscape", include_str!("fixtures/inkscape.svg")),
     ("illustrator", include_str!("fixtures/illustrator.svg")),
     ("components", include_str!("fixtures/components.svg")),
-    ("icon-optimized", include_str!("fixtures/icon-optimized.svg")),
+    (
+        "icon-optimized",
+        include_str!("fixtures/icon-optimized.svg"),
+    ),
     // Canonical-export stress additions:
     ("svgo-oneline", include_str!("fixtures/svgo-oneline.svg")),
     ("figma-export", include_str!("fixtures/figma-export.svg")),
-    ("gradient-radial", include_str!("fixtures/gradient-radial.svg")),
+    (
+        "gradient-radial",
+        include_str!("fixtures/gradient-radial.svg"),
+    ),
     // A real Pixelmator Pro export — the manual design-app pass, folded back in as an automated
     // producer fixture (top-level clipPath, userSpaceOnUse gradients, all-paths).
     ("pixelmator", include_str!("fixtures/pixelmator.svg")),
@@ -78,14 +90,16 @@ fn canonical_export_is_render_equivalent_to_source() {
         let ph = (h * scale).round().max(1.0) as u32;
 
         let doc = parse_svg(src).unwrap_or_else(|e| panic!("[{name}] parse failed: {e}"));
-        let tree = doc.tree.as_ref().expect("a parsed doc always carries its tree");
+        let tree = doc
+            .tree
+            .as_ref()
+            .expect("a parsed doc always carries its tree");
         let canonical = serialize_canonical(&doc, tree, 3);
 
         let source_px =
             rasterize(src, pw, ph).unwrap_or_else(|| panic!("[{name}] source did not rasterize"));
-        let export_px = rasterize(&canonical, pw, ph).unwrap_or_else(|| {
-            panic!("[{name}] canonical export did not rasterize:\n{canonical}")
-        });
+        let export_px = rasterize(&canonical, pw, ph)
+            .unwrap_or_else(|| panic!("[{name}] canonical export did not rasterize:\n{canonical}"));
 
         let frac = diff_fraction(&source_px, &export_px, CHANNEL_TOL);
         if frac > MAX_DIFF {
