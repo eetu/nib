@@ -2028,3 +2028,83 @@ test("double-click a node toggles it between corner and smooth", async ({ page }
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
+
+// A <text> has no anchors to node-edit, so double-click means "edit the words": an input opens
+// over the label, seeded + selected, committing on Enter as a single undo step.
+test("double-click a text label edits it in place", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="20" y="50" font-size="10" fill="#000">Hello</text></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  const label = page.locator("svg.canvas text[data-uid]");
+  await expect(label).toHaveText("Hello");
+
+  await label.dblclick();
+  const input = page.locator("input.text-edit");
+  await expect(input).toBeVisible();
+  await expect(input).toHaveValue("Hello");
+
+  // The field opens select-all, so typing replaces (rename-field behaviour).
+  await page.keyboard.type("Goodbye");
+  await page.keyboard.press("Enter");
+  await expect(input).toHaveCount(0);
+  await expect(label).toHaveText("Goodbye");
+
+  // Escape abandons an edit rather than committing it.
+  await label.dblclick();
+  await page.keyboard.type("Discarded");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("input.text-edit")).toHaveCount(0);
+  await expect(label).toHaveText("Goodbye");
+
+  // One undo step per commit.
+  await page.keyboard.press("Meta+z");
+  await expect(label).toHaveText("Hello");
+});
+
+// Regression: an element gesture writes into the element's PARENT coordinate space, so a
+// document-space delta over-translated anything nested under a scaled <g> — inside scale(8) the
+// label ran eight times too fast and left the frame within the first few pixels of a drag.
+test("dragging a text nested in a scaled group tracks the cursor 1:1", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><g transform="scale(8)"><text x="5" y="6" font-size="2" fill="#000">Hi</text></g></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  const label = page.locator("svg.canvas text[data-uid]");
+  await expect(label).toBeAttached();
+
+  const before = await label.boundingBox();
+  if (!before) throw new Error("no label bbox");
+
+  // Select, then drag 24 screen px to the right.
+  const gx = before.x + before.width / 2;
+  const gy = before.y + before.height / 2;
+  await page.mouse.click(gx, gy);
+  await page.mouse.move(gx, gy);
+  await page.mouse.down();
+  await page.mouse.move(gx + 12, gy, { steps: 4 });
+  await page.mouse.move(gx + 24, gy, { steps: 4 });
+  await page.mouse.up();
+
+  const after = await label.boundingBox();
+  if (!after) throw new Error("no label bbox after drag");
+  // 1:1 with the cursor, within rounding. Pre-fix this moved ~192px.
+  expect(Math.abs(after.x - before.x - 24)).toBeLessThanOrEqual(2);
+  expect(Math.abs(after.y - before.y)).toBeLessThanOrEqual(2);
+});

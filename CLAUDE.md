@@ -152,6 +152,20 @@ Per-area detail in `frontend/CLAUDE.md`.
   no existing transform edits `x`/`y` for clean markup). Ops: `SetNodeAttr {uid,key,
   value?}` (any attr — x/y/width/height/transform/fill/font-size) + `SetNodeText
   {uid,text}` (content). The Inspector element section edits authored attrs + text.
+  **The gesture math runs in the element's PARENT coordinate space, not document
+  space** (`localMapper` in `EditorCanvas`, captured once per gesture) — both the
+  composed `transform` and the `x`/`y` written are interpreted there, so a doc-space
+  delta is only right for an element sitting in the artwork root. Nested under a
+  `<g transform="scale(8)">` it moved eight times too far. The transform box is still
+  *drawn* from the doc-space measured box; the grabbed anchor/centre are mapped across,
+  so the anchor stays under the handle whatever the ancestors do.
+  **Double-clicking a `<text>` edits its words in place** — an input overlaid at the
+  label's own rendered size, seeded + select-all, Enter/blur commits one `SetNodeText`
+  undo step, Escape abandons. It resolves the target through `selectedElementUid`, not
+  `e.target`: pointerdown captures the pointer on the `<svg>`, which retargets the
+  compatibility mouse events so the double-click never reports the `<text>` itself.
+  A `<text>` with element children (tspans) stays Inspector-only — a single string
+  would silently flatten that structure.
 - **Object vs node mode (one tool, like Figma), switched by double-click.** The
   select tool defaults to **object mode**: clicking a path selects it
   (`objectSelected` = a path selected with *no* node *and* not node-editing) and
