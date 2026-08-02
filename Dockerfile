@@ -13,9 +13,13 @@ FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
 # `cargo install wasm-pack` would rebuild it from source on every cache miss.
 FROM --platform=$BUILDPLATFORM rust:1-alpine AS wasm-build
 ARG WASM_PACK_VERSION=v0.15.0
+# The member is named explicitly rather than globbed: alpine's tar is BusyBox, which has no
+# --wildcards. The archive's directory name is deterministic from the version.
 RUN apk add --no-cache curl musl-dev \
-    && curl -sSfL "https://github.com/rustwasm/wasm-pack/releases/download/${WASM_PACK_VERSION}/wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
-    | tar -xz --strip-components=1 -C /usr/local/bin --wildcards '*/wasm-pack' \
+    && ASSET="wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl" \
+    && curl -sSfL "https://github.com/rustwasm/wasm-pack/releases/download/${WASM_PACK_VERSION}/${ASSET}.tar.gz" \
+    | tar -xz --strip-components=1 -C /usr/local/bin "${ASSET}/wasm-pack" \
+    && wasm-pack --version \
     && rustup target add wasm32-unknown-unknown
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
