@@ -229,11 +229,17 @@
     };
   });
 
+  // An element gesture works in the element's PARENT coordinate space, not document space. Both
+  // the `transform` matrix we compose and the `x`/`y` we write are interpreted there, so a
+  // document-space delta is only correct for an element sitting directly in the artwork root —
+  // nested under a `<g transform="scale(8)">` it moved eight times too far. `toLocal` maps a
+  // screen point into that space; its matrix is captured once per gesture (the *parent's*
+  // transform can't change mid-drag, only the element's own).
+  type ElXfBase = { uid: string; toLocal: (p: Point) => Point; moved: boolean };
   type ElXf =
-    | { uid: string; mode: "moveXy"; x0: number; y0: number; start: Point; moved: boolean }
-    | { uid: string; mode: "move"; m0: DOMMatrix; start: Point; moved: boolean }
-    | {
-        uid: string;
+    | (ElXfBase & { mode: "moveXy"; x0: number; y0: number; start: Point })
+    | (ElXfBase & { mode: "move"; m0: DOMMatrix; start: Point })
+    | (ElXfBase & {
         mode: "scale";
         m0: DOMMatrix;
         anchor: Point;
@@ -241,17 +247,28 @@
         axisX: boolean;
         axisY: boolean;
         corner: boolean;
-        moved: boolean;
-      }
-    | {
-        uid: string;
+      })
+    | (ElXfBase & {
         mode: "rotate";
         m0: DOMMatrix;
         center: Point;
         startAngle: number;
-        moved: boolean;
-      };
+      });
   let elXf: ElXf | null = null;
+
+  /** Map screen (svg-relative) points into `el`'s parent coordinate space. Falls back to document
+   *  space when the element has no measurable parent CTM (detached / display:none). */
+  function localMapper(el: SVGGraphicsElement | null): (p: Point) => Point {
+    const parent = el?.parentNode as SVGGraphicsElement | null;
+    const ctm = parent?.getScreenCTM?.() ?? null;
+    if (!ctm) return (p) => viewport.toDoc(p);
+    const inv = ctm.inverse();
+    const r = svgEl.getBoundingClientRect();
+    return (p) => {
+      const q = new DOMPoint(p.x + r.left, p.y + r.top).matrixTransform(inv);
+      return { x: q.x, y: q.y };
+    };
+  }
 
   const round2 = (v: number) => Math.round(v * 100) / 100;
   const safeDiv = (n: number, d: number) => (Math.abs(d) < 1e-6 ? 1 : n / d);
@@ -298,6 +315,78 @@
     );
   }
 
+  // --- inline text editing -------------------------------------------------
+  // Double-clicking a <text> opens an input laid over it at the label's own rendered size, so
+  // editing reads as editing the label itself. Enter/blur commits (one undo step via setNodeText),
+  // Escape abandons. Only offered for a flat label: a <text> with element children (tspans) carries
+  // structure a single string would silently flatten, so those stay Inspector-only.
+  //
+  // Size is matched, colour deliberately isn't — a white label would vanish against the input's
+  // own background, so the caret and text stay in the UI's foreground colour.
+  type TextEdit = {
+    uid: string;
+    value: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    fontPx: number;
+  };
+  let textEdit = $state<TextEdit | null>(null);
+  let textInput = $state<HTMLInputElement | null>(null);
+
+  function startTextEdit(e: MouseEvent): boolean {
+    // Resolved through the selection, not `e.target`: pointerdown captures the pointer on the
+    // <svg>, which retargets the compatibility mouse events, so the double-click never reports
+    // the <text> itself. The first click of the double-click already selected it.
+    const uid = editor.selectedElementUid;
+    if (!uid || !inElBox(screenOf(e))) return false;
+    const el = svgEl.querySelector(`[data-uid="${CSS.escape(uid)}"]`) as SVGGraphicsElement | null;
+    if (!el || el.tagName.toLowerCase() !== "text" || el.children.length > 0) return false;
+
+    const r = el.getBoundingClientRect();
+    const s = svgEl.getBoundingClientRect();
+    // The element's font-size is in its own user units; the CTM scale converts it to screen px.
+    const ctm = el.getScreenCTM();
+    const localFont = parseFloat(getComputedStyle(el).fontSize) || 16;
+    const fontPx = localFont * (ctm ? Math.hypot(ctm.a, ctm.b) : 1);
+    editor.selectElement(uid);
+    textEdit = {
+      uid,
+      value: el.textContent ?? "",
+      // A little breathing room so the caret and a descender aren't clipped by the box.
+      x: r.left - s.left - 2,
+      y: r.top - s.top - 2,
+      w: Math.max(r.width, fontPx * 2) + fontPx,
+      h: r.height + 4,
+      fontPx: Math.max(8, Math.min(fontPx, r.height || fontPx)),
+    };
+    return true;
+  }
+
+  function commitTextEdit(): void {
+    const t = textEdit;
+    textEdit = null;
+    if (t) editor.setNodeText(t.uid, t.value);
+  }
+
+  function onTextEditKey(e: KeyboardEvent): void {
+    // Stop the canvas/page shortcuts from seeing ordinary typing (Delete would remove the label).
+    e.stopPropagation();
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitTextEdit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      textEdit = null;
+    }
+  }
+
+  // Focus + select-all on open, so typing replaces the label the way a rename field does.
+  $effect(() => {
+    if (textEdit && textInput) textInput.select();
+  });
+
   // Begin a move / resize / rotate gesture on the element `uid`.
   function startElXf(
     uid: string,
@@ -306,27 +395,34 @@
   ): void {
     const el = svgEl.querySelector(`[data-uid="${CSS.escape(uid)}"]`) as SVGGraphicsElement | null;
     const m0 = el?.transform.baseVal.consolidate()?.matrix ?? new DOMMatrix();
-    const start = viewport.toDoc(screen);
+    const toLocal = localMapper(el);
+    const start = toLocal(screen);
     if (kind.t === "move") {
       // No existing transform → move via x/y (clean markup); else compose a translate.
       if (el && !el.getAttribute("transform"))
         elXf = {
           uid,
+          toLocal,
           mode: "moveXy",
           x0: Number(el.getAttribute("x") ?? "0") || 0,
           y0: Number(el.getAttribute("y") ?? "0") || 0,
           start,
           moved: false,
         };
-      else elXf = { uid, mode: "move", m0, start, moved: false };
+      else elXf = { uid, toLocal, mode: "move", m0, start, moved: false };
       return;
     }
     if (!elBounds) return;
+    // The handles are drawn on the document-space box, so take the grabbed points from there and
+    // map them across — that keeps the anchor exactly under the handle the user grabbed, whatever
+    // the ancestor transform is.
     const bb = padBounds(elBounds, viewport.toDocLength(SELECT_PAD_PX));
+    const docToLocal = (p: Point) => toLocal(viewport.toScreen(p));
     if (kind.t === "rotate") {
-      const center = boxCenter(bb);
+      const center = docToLocal(boxCenter(bb));
       elXf = {
         uid,
+        toLocal,
         mode: "rotate",
         m0,
         center,
@@ -337,10 +433,11 @@
       const { anchor, moving, sx, sy } = handleAnchor(kind.handle, bb);
       elXf = {
         uid,
+        toLocal,
         mode: "scale",
         m0,
-        anchor,
-        startPt: moving,
+        anchor: docToLocal(anchor),
+        startPt: docToLocal(moving),
         axisX: sx,
         axisY: sy,
         corner: sx && sy,
@@ -352,7 +449,7 @@
   // Apply the live transform for the in-flight element gesture at the current pointer.
   function moveElXf(screen: Point, shift: boolean): void {
     if (!elXf) return;
-    const cur = viewport.toDoc(screen);
+    const cur = elXf.toLocal(screen);
     elXf.moved = true;
     if (elXf.mode === "moveXy") {
       editor.previewNodeMove(
@@ -504,6 +601,9 @@
   // mode moves the whole shape on drag; nodes only become editable after entering here.
   function onDblClick(e: MouseEvent) {
     if (!editor.doc || tools.active !== "select") return;
+    // A `<text>` label has no anchors to node-edit, so double-click means "edit the words" —
+    // the same gesture every other editor uses, instead of a trip to the Inspector.
+    if (startTextEdit(e)) return;
     const hit = hitTest(screenOf(e));
     // Already node-editing and the double-click landed on an anchor → toggle it between corner and
     // smooth (Pixelmator-style): smooth synthesizes tangent handles, corner straightens back to a
@@ -669,6 +769,25 @@
     </g>
     <Overlay elementBounds={elBounds} />
   </svg>
+
+  {#if textEdit}
+    <!-- svelte-ignore a11y_autofocus -->
+    <input
+      bind:this={textInput}
+      class="text-edit"
+      autofocus
+      spellcheck="false"
+      aria-label="Edit text"
+      style:left="{textEdit.x}px"
+      style:top="{textEdit.y}px"
+      style:width="{textEdit.w}px"
+      style:height="{textEdit.h}px"
+      style:font-size="{textEdit.fontPx}px"
+      bind:value={textEdit.value}
+      onkeydown={onTextEditKey}
+      onblur={commitTextEdit}
+    />
+  {/if}
 </div>
 
 <style>
@@ -677,6 +796,22 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
+  }
+
+  /* The inline label editor, laid over the <text> it edits. Deliberately plain — an accent ring
+     and the page background, so it reads as the label becoming editable rather than a dialog. */
+  .text-edit {
+    position: absolute;
+    z-index: 5;
+    box-sizing: border-box;
+    padding: 0 3px;
+    border: 1px solid var(--halo-accent);
+    border-radius: 3px;
+    background: var(--halo-bg-main);
+    color: var(--halo-text-main);
+    font: inherit;
+    line-height: 1;
+    outline: none;
   }
 
   /* Backdrop the artwork previews against (settings.canvasBg). "checker" is the
