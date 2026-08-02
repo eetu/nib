@@ -371,7 +371,10 @@ client-side pro pillars, all running on the core):
     mutate → **broadcast ops** → persist model. All clients share the model (identical `uid`s), so
     ops — structural uid-ops included — replay correctly; no snapshot resync.
   - **MCP** (`mcp.rs`, `rmcp` 0.5) nested at **`/mcp`** (Streamable-HTTP): token-authed +
-    project-scoped. Tools: `list_projects`/`create_project`/`open_project`, `get_document`
+    project-scoped. Tools: `list_projects`/`create_project`/`open_project`/`rename_project`/
+    **`delete_project`** (irreversible, so it's the one tool with a guard: the caller must pass the
+    project's current `name` alongside its `id` and they must match, which turns a hallucinated or
+    stale id into a loud error instead of a destroyed drawing), `get_document`
     (a **cheap text outline** — one line per path: `#index`, name, bounds, fill/stroke),
     **`find`** (resolve a co-author's *name* — "the hand" — to candidate objects with #index +
     bounds so the LLM disambiguates "left or right?" instead of guessing), `get_svg`,

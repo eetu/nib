@@ -24,7 +24,9 @@ and exposes its editing engine to an LLM over MCP.
 - **Projects can be renamed and deleted** from the projects panel — double-click a row to rename
   in place, right-click for rename/delete (mirroring the Inspector's LAYERS rows). Backed by
   `PATCH`/`DELETE /api/projects/{id}`, both ownership-scoped in SQL; deleting drops the project's
-  in-memory session so nothing keeps serving a document whose row is gone.
+  in-memory session so nothing keeps serving a document whose row is gone. Also on MCP as
+  `rename_project` / `delete_project` — the latter requires the project's current name alongside
+  its id, so a hallucinated or stale id fails loudly instead of destroying the wrong document.
 - **Container packaging**: a 5-stage Dockerfile (the family's `xx` cross-compile → `scratch`, plus
   a wasm-pack stage for the core the SPA links) and an arm64 image published to
   `ghcr.io/eetu/nib`.

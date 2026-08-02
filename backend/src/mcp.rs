@@ -473,6 +473,24 @@ pub struct OpenParams {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct RenameProjectParams {
+    /// The project id to rename (from `list_projects`).
+    pub id: i64,
+    /// The new name.
+    pub name: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct DeleteProjectParams {
+    /// The project id to delete (from `list_projects`).
+    pub id: i64,
+    /// The project's CURRENT name, exactly as `list_projects` reports it. Required as a
+    /// confirmation: it makes an off-by-one id fail loudly instead of destroying the wrong
+    /// document.
+    pub name: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct ApplyOpParams {
     /// The operation as a JSON object tagged by `type` (the nib op vocabulary).
     pub op: serde_json::Value,
@@ -685,6 +703,62 @@ impl NibMcp {
             .map_err(bad)?;
         *self.active.lock().unwrap() = Some(p.id);
         Ok(outline(&sess.lock().unwrap()))
+    }
+
+    #[tool(
+        description = "Rename one of your projects. This renames the PROJECT, not a shape inside it — use `rename` for a shape."
+    )]
+    async fn rename_project(
+        &self,
+        Parameters(p): Parameters<RenameProjectParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let name = p.name.trim();
+        if name.is_empty() {
+            return Err(bad("name must not be empty"));
+        }
+        match db::rename_project(&self.pool, user.id, p.id, name).await {
+            Ok(true) => Ok(format!("renamed project {} to \"{name}\"", p.id)),
+            Ok(false) => Err(bad(format!("no such project: {}", p.id))),
+            Err(e) => Err(bad(e.to_string())),
+        }
+    }
+
+    #[tool(
+        description = "PERMANENTLY delete one of your projects and its artwork. There is no undo and no trash. Only call this when the human has asked for this specific project to be deleted — never to tidy up, and never on your own initiative. You must pass the project's current `name` alongside its `id`; they have to match, so call list_projects first and don't guess."
+    )]
+    async fn delete_project(
+        &self,
+        Parameters(p): Parameters<DeleteProjectParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        // Confirm against the stored name before destroying anything: a hallucinated or stale id
+        // that happens to exist would otherwise delete somebody's drawing silently.
+        let project = db::get_project(&self.pool, user.id, p.id)
+            .await
+            .map_err(|e| bad(e.to_string()))?
+            .ok_or_else(|| bad(format!("no such project: {}", p.id)))?;
+        if project.name != p.name {
+            return Err(bad(format!(
+                "name mismatch — project {} is called \"{}\", not \"{}\". Nothing deleted; call list_projects and retry with the exact name.",
+                p.id, project.name, p.name
+            )));
+        }
+        if !db::delete_project(&self.pool, user.id, p.id)
+            .await
+            .map_err(|e| bad(e.to_string()))?
+        {
+            return Err(bad(format!("no such project: {}", p.id)));
+        }
+        session::close(&self.sessions, p.id);
+        // Don't leave the connection pointed at a project that no longer exists.
+        let mut active = self.active.lock().unwrap();
+        if *active == Some(p.id) {
+            *active = None;
+        }
+        Ok(format!("deleted project {} (\"{}\")", p.id, project.name))
     }
 
     #[tool(
