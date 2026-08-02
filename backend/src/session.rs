@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use nib_core::Editor;
 use nib_core::ops::Op;
@@ -67,10 +68,10 @@ fn ensure_create_uid(op: &mut serde_json::Value) {
             }
         }
         "addPath" | "addShape" | "booleanOp" | "combinePaths" | "outlineStroke" | "offsetPath"
-        | "stampInstance" | "setDropShadow" | "addText" => {
-            if op.get("uid").and_then(|v| v.as_str()).is_none() {
-                op["uid"] = serde_json::json!(nib_core::model::tree::new_id());
-            }
+        | "stampInstance" | "setDropShadow" | "addText"
+            if op.get("uid").and_then(|v| v.as_str()).is_none() =>
+        {
+            op["uid"] = serde_json::json!(nib_core::model::tree::new_id());
         }
         _ => {}
     }
@@ -81,22 +82,31 @@ pub struct ProjectSession {
     pub project_id: i64,
     pub editor: Editor,
     pub tx: broadcast::Sender<SyncMsg>,
+    /// When this session was last opened or edited — drives idle eviction.
+    pub last_touched: Instant,
 }
 
 /// Get (or lazily load from the DB) the session for a project the `user_id` owns.
+///
+/// **Ownership is checked before the cache**, deliberately. The check used to sit *after* the
+/// cache lookup, which meant only the first caller to open a project was verified: once it was
+/// resident, any authenticated user could attach to it — read and write — for the lifetime of the
+/// process, via the WebSocket, MCP `open_project`, or any MCP tool. Invisible with a single
+/// seeded user; a cross-tenant breach the moment real users exist. It's one indexed read.
 pub async fn open(
     pool: &SqlitePool,
     sessions: &Sessions,
     user_id: i64,
     project_id: i64,
 ) -> Result<Arc<Mutex<ProjectSession>>, String> {
-    if let Some(s) = sessions.lock().unwrap().get(&project_id).cloned() {
-        return Ok(s);
-    }
     let project = db::get_project(pool, user_id, project_id)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no such project: {project_id}"))?;
+    if let Some(s) = sessions.lock().unwrap().get(&project_id).cloned() {
+        s.lock().unwrap().last_touched = Instant::now();
+        return Ok(s);
+    }
     let mut editor = Editor::new();
     if project.model.is_empty() {
         // Legacy / freshly-created row: import the SVG once, then persist the native model so every
@@ -113,9 +123,51 @@ pub async fn open(
         project_id,
         editor,
         tx,
+        last_touched: Instant::now(),
     }));
     sessions.lock().unwrap().insert(project_id, session.clone());
     Ok(session)
+}
+
+/// How long a project with no live subscribers stays resident before being dropped.
+const IDLE_EVICT: Duration = Duration::from_secs(15 * 60);
+const SWEEP_EVERY: Duration = Duration::from_secs(60);
+
+/// Periodically drop idle sessions.
+///
+/// Nothing used to leave the registry, so every project ever opened kept a whole `Editor` resident
+/// for the process lifetime — on a memory-capped Pi that's what eventually OOM-restarts the unit.
+/// A session is evictable when it has no broadcast subscribers (no WebSocket attached) and hasn't
+/// been touched recently; its model is flushed once more on the way out, since `apply_ops`
+/// persists via a detached task that may not have landed.
+pub fn spawn_evictor(sessions: Sessions, pool: SqlitePool) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(SWEEP_EVERY);
+        loop {
+            tick.tick().await;
+            let stale: Vec<(i64, String, String)> = {
+                let mut map = sessions.lock().unwrap();
+                let mut drained = Vec::new();
+                map.retain(|&id, sess| {
+                    let s = sess.lock().unwrap();
+                    let idle = s.tx.receiver_count() == 0 && s.last_touched.elapsed() > IDLE_EVICT;
+                    if idle {
+                        drained.push((
+                            id,
+                            s.editor.to_model_json().unwrap_or_default(),
+                            s.editor.to_svg(),
+                        ));
+                    }
+                    !idle
+                });
+                drained
+            };
+            for (id, model, svg) in stale {
+                tracing::debug!(project = id, "evicting idle project session");
+                let _ = db::update_project(&pool, id, &model, &svg).await;
+            }
+        }
+    });
 }
 
 /// Apply a batch of JSON ops to a project session: mutate the editor (one undo step), broadcast the
@@ -147,6 +199,7 @@ pub fn apply_ops(
         if applied == 0 {
             return Ok(0);
         }
+        s.last_touched = Instant::now();
         s.editor.commit();
         // The native model is the source of truth (persisted); the svg is a cached export.
         let model = s.editor.to_model_json().unwrap_or_default();

@@ -11,6 +11,31 @@ permissions:
   contents: read
 
 jobs:
+  # The backend was never compiled in CI — it now ships as a container and owns auth, so it gets
+  # the same clippy/fmt/test gate the rest of the workspace has.
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Backend tests
+        run: cargo test -p nib-backend
+
   test:
     runs-on: ubuntu-latest
     steps:

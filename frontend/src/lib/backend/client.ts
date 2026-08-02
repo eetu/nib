@@ -1,6 +1,11 @@
-// The nib backend REST client (connected mode). Only imported behind the `BACKEND` flag. Talks to
-// the token-authed projects API; the base URL defaults to same-origin (the dev Vite proxy / the
-// backend-embedded build), or an explicit `settings.backendUrl`.
+// The nib backend REST client (connected mode). Only imported behind the `BACKEND` flag. The base
+// URL defaults to same-origin (the dev Vite proxy / the backend-embedded build), or an explicit
+// `settings.backendUrl`.
+//
+// Two credentials, by design. Same-origin the browser sends the `nib_session` cookie the OIDC
+// login set, and that's what authorizes the account endpoints. A bearer token is sent too when one
+// is configured, which is how a *cross-origin* SPA (an explicit `backendUrl`) authenticates, since
+// the production server serves no CORS credentials.
 
 import { base } from "$app/paths";
 import { settings } from "$lib/stores/settings.svelte";
@@ -9,18 +14,63 @@ export type ProjectMeta = { id: number; name: string; updated_at: string };
 // `model` is the native document-model JSON (the source of truth); `svg` is a cached export. A
 // brand-new project has an empty `model` until first opened (then the backend imports svg → model).
 export type Project = { id: number; name: string; model: string; svg: string };
+/** Identity + the personal bearer token, from `/api/me` (session-authenticated). */
+export type Me = {
+  id: number;
+  name: string;
+  email: string | null;
+  token: string;
+  projects: ProjectMeta[];
+};
 
 function apiBase(): string {
   return settings.backendUrl || base; // "" → same-origin (respecting the Pages base path)
 }
 
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  return { Authorization: `Bearer ${settings.backendToken}`, ...(extra ?? {}) };
+  const auth: Record<string, string> = settings.backendToken
+    ? { Authorization: `Bearer ${settings.backendToken}` }
+    : {};
+  return { ...auth, ...(extra ?? {}) };
+}
+
+/** Bounce to the OIDC login and come back where we were. */
+export function signIn(): void {
+  const here = location.pathname + location.search + location.hash;
+  location.assign(`${apiBase()}/auth/login?next=${encodeURIComponent(here)}`);
 }
 
 async function json<T>(res: Response, what: string): Promise<T> {
-  if (!res.ok) throw new Error(`${what}: ${res.status} ${await res.text().catch(() => "")}`.trim());
+  if (!res.ok) {
+    // A 401 means "not signed in", not "broken" — send them through the login flow. Anything else
+    // is a real failure and must surface as one, or a down backend becomes a redirect loop.
+    if (res.status === 401) {
+      signIn();
+      throw new Error("not signed in");
+    }
+    throw new Error(`${what}: ${res.status} ${await res.text().catch(() => "")}`.trim());
+  }
   return res.json() as Promise<T>;
+}
+
+/** Who am I, my token, and my projects — one call on connect. Session cookie only. */
+export async function me(): Promise<Me> {
+  return json(await fetch(`${apiBase()}/api/me`, { headers: authHeaders() }), "me");
+}
+
+/** Mint a replacement bearer token. Invalidates the previous one immediately. */
+export async function rotateToken(): Promise<string> {
+  const { token } = await json<{ token: string }>(
+    await fetch(`${apiBase()}/api/token/rotate`, { method: "POST", headers: authHeaders() }),
+    "rotate token",
+  );
+  return token;
+}
+
+/** Drop the session cookie. The bearer token survives, so a configured MCP client keeps working. */
+export async function signOut(): Promise<void> {
+  await fetch(`${apiBase()}/auth/logout`, { method: "POST", headers: authHeaders() });
+  location.assign(`${apiBase()}/auth/login?next=/`);
 }
 
 export async function listProjects(): Promise<ProjectMeta[]> {

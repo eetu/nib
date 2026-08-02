@@ -357,10 +357,10 @@ impl Editor {
     #[wasm_bindgen(js_name = setTree)]
     pub fn set_tree(&mut self, json: JsValue) -> Result<(), JsValue> {
         let tree: Option<Tree> = serde_wasm_bindgen::from_value(json)?;
-        if let Some(doc) = self.doc.as_mut() {
-            if tree.is_some() {
-                doc.tree = tree;
-            }
+        if let Some(doc) = self.doc.as_mut()
+            && tree.is_some()
+        {
+            doc.tree = tree;
         }
         self.history.reset(self.snapshot());
         Ok(())

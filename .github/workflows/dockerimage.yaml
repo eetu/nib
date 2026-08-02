@@ -1,0 +1,113 @@
+name: Create and publish Docker image
+
+# Builds the self-hosted image (backend + connected-mode SPA) and pushes it to ghcr.
+# The Pi tracks the rolling `:main` tag via AutoUpdate=registry, so merging here deploys;
+# `v*` tags additionally publish semver + rolling major/minor aliases for pinning.
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  # Dockerfile-touching PRs build (without pushing) so a broken image fails its own PR — the
+  # other CI jobs run on the runner, not in the image, and can't catch that class of break.
+  pull_request:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Detect build-relevant changes
+        id: filter
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
+        with:
+          filters: |
+            image:
+              - 'core/**'
+              - 'backend/**'
+              - 'frontend/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - '.github/workflows/dockerimage.yaml'
+
+      - name: Decide whether to build
+        id: gate
+        run: |
+          if [[ "${{ github.event_name }}" != "push" ]] || [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "image=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=${{ steps.filter.outputs.image }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up QEMU
+        if: steps.gate.outputs.image == 'true'
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: "arm64"
+
+      - name: Set up Buildx
+        if: steps.gate.outputs.image == 'true'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to ghcr
+        if: steps.gate.outputs.image == 'true' && github.event_name != 'pull_request'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        if: steps.gate.outputs.image == 'true'
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            # Rolling aliases: `0` follows the latest v0.x.y, `0.1` the latest v0.1.x — so a host
+            # can pin a major (or minor) and pick up releases without an IaC edit per bump.
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Build and push
+        if: steps.gate.outputs.image == 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          target: runner
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # The Pi is the only target. Skip provenance + SBOM attestations: each becomes its own
+          # GHCR "version", inflating the package version count for no benefit on one platform.
+          platforms: linux/arm64
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Prune untagged versions
+        if: steps.gate.outputs.image == 'true' && github.event_name != 'pull_request'
+        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5
+        with:
+          package-name: nib
+          package-type: container
+          delete-only-untagged-versions: true
+          min-versions-to-keep: 5

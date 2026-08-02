@@ -41,7 +41,10 @@ fn rotate_90_swaps_a_portrait_shape_to_landscape() {
     );
     let (before, w, h) = render(&d);
     let (bx0, by0, bx1, by1) = ink_bbox(&before, w, h).expect("bar renders");
-    assert!(by1 - by0 > bx1 - bx0, "starts portrait: {bx0},{by0}..{bx1},{by1}");
+    assert!(
+        by1 - by0 > bx1 - bx0,
+        "starts portrait: {bx0},{by0}..{bx1},{by1}"
+    );
 
     assert!(apply(
         &mut d,
@@ -54,7 +57,10 @@ fn rotate_90_swaps_a_portrait_shape_to_landscape() {
     ));
     let (after, w2, h2) = render(&d);
     let (ax0, ay0, ax1, ay1) = ink_bbox(&after, w2, h2).expect("rotated bar renders");
-    assert!(ax1 - ax0 > ay1 - ay0, "rotates to landscape: {ax0},{ay0}..{ax1},{ay1}");
+    assert!(
+        ax1 - ax0 > ay1 - ay0,
+        "rotates to landscape: {ax0},{ay0}..{ax1},{ay1}"
+    );
 
     // Rotating about its own centre keeps the centre roughly put (not translated off).
     let before_cx = (bx0 + bx1) / 2;
@@ -132,7 +138,10 @@ fn rounded_rect_hollows_the_corners() {
     );
     // Sanity: the centre is still filled, so we didn't just erase the shape.
     let c = (50.0 * scale) as u32;
-    assert!(inked(&rounded, w2, c, c), "centre still filled after rounding");
+    assert!(
+        inked(&rounded, w2, c, c),
+        "centre still filled after rounding"
+    );
 }
 
 #[test]

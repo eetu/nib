@@ -1,14 +1,23 @@
 [package]
 name = "nib-backend"
-version = "0.0.0"
+version.workspace = true
 edition = "2024"
 description = "nib's rust-axum backend (Phase C): serves the SPA + owns the .svg files, links nib-core natively."
 publish = false
 
 [dependencies]
 axum = { version = "0.8.9", features = ["ws"] }
+# Signed cookies carry the OIDC session (`sub|email`) — no server-side session store.
+axum-extra = { version = "0.12", features = ["cookie", "cookie-signed"] }
 nib-core = { path = "../core" }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate"] }
+openidconnect = "4"
+# `rustls-tls` (not the default features) resolves to ring, which cross-compiles under xx-cargo with
+# just musl-dev + gcc; aws-lc-rs would drag in cmake + nasm. Don't flip the provider.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
 rmcp = { version = "0.5", features = [
     "server",
     "macros",
@@ -21,3 +30,15 @@ tokio = { version = "1.52.3", features = ["full"] }
 tower-http = { version = "0.7.0", features = ["fs", "cors"] }
 resvg = "0.47.0"
 base64 = "0.22.1"
+thiserror = "2"
+url = "2"
+hex = "0.4"
+rand = "0.9"
+time = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+# Drives the router directly (`ServiceExt::oneshot`) so auth is tested at the HTTP layer.
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

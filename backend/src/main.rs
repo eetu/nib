@@ -4,14 +4,16 @@
 //! at `/mcp`, and (C2) live op-sync over WebSocket — all editing the same in-memory sessions.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::sync::Arc;
 
+use axum::extract::FromRef;
 use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    routing::get,
+    routing::{get, post},
 };
+use axum_extra::extract::cookie::Key;
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
@@ -21,12 +23,17 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 mod auth;
+mod config;
 mod db;
+mod login;
 mod mcp;
+mod oidc;
 mod session;
 mod sync;
 
-use auth::AuthUser;
+use auth::{AuthSession, AuthUser};
+use config::Config;
+use oidc::OidcLazy;
 use session::Sessions;
 
 const BLANK_SVG: &str =
@@ -36,10 +43,21 @@ const BLANK_SVG: &str =
 pub struct AppState {
     pub pool: SqlitePool,
     pub sessions: Sessions,
+    pub cfg: Arc<Config>,
+    pub oidc: Arc<OidcLazy>,
+    pub cookie_key: Key,
+}
+
+/// Lets handlers take a bare `SignedCookieJar` argument.
+impl FromRef<AppState> for Key {
+    fn from_ref(state: &AppState) -> Self {
+        state.cookie_key.clone()
+    }
 }
 
 fn ise<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    tracing::error!(error = %e, "request failed");
+    (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())
 }
 
 #[derive(Serialize)]
@@ -59,23 +77,38 @@ async fn version() -> Json<Version> {
 struct Me {
     id: i64,
     name: String,
-    /// The caller's own token — surfaced so the SPA can display it for copy/paste into an MCP client.
+    email: Option<String>,
+    /// The caller's own token — surfaced so the SPA can display it for copy/paste into an MCP
+    /// client. This is why the endpoint is session-only: a leaked token must not be able to read
+    /// itself back (nor, via `/api/token/rotate`, mint its own replacement).
     token: String,
     projects: Vec<db::ProjectMeta>,
 }
 
-/// Who am I + my projects (a token check + a listing in one call for the SPA on connect).
+/// Who am I + my projects (identity + a listing in one call for the SPA on connect).
 async fn me(
-    AuthUser(user): AuthUser,
+    AuthSession(user): AuthSession,
     State(st): State<AppState>,
 ) -> Result<Json<Me>, (StatusCode, String)> {
     let projects = db::list_projects(&st.pool, user.id).await.map_err(ise)?;
     Ok(Json(Me {
         id: user.id,
         name: user.name,
+        email: user.email,
         token: user.token,
         projects,
     }))
+}
+
+/// Replace the caller's bearer token. Any MCP client configured with the old one starts failing
+/// immediately — that's the point of the button.
+async fn rotate_token(
+    AuthSession(user): AuthSession,
+    State(st): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let token = db::rotate_token(&st.pool, user.id).await.map_err(ise)?;
+    tracing::info!(user = user.id, "bearer token rotated");
+    Ok(Json(serde_json::json!({ "token": token })))
 }
 
 async fn list_projects(
@@ -146,25 +179,11 @@ async fn put_project(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[tokio::main]
-async fn main() {
-    let db_url = std::env::var("NIB_DB").unwrap_or_else(|_| "sqlite:nib.db".to_string());
-    let dist =
-        PathBuf::from(std::env::var("NIB_DIST").unwrap_or_else(|_| "../frontend/dist".to_string()));
-    let dev_token =
-        std::env::var("NIB_DEV_TOKEN").unwrap_or_else(|_| db::DEV_TOKEN_DEFAULT.to_string());
-
-    let pool = db::connect(&db_url).await.expect("open database");
-    db::ensure_dev_user(&pool, &dev_token)
-        .await
-        .expect("seed dev user");
-
-    let state = AppState {
-        pool,
-        sessions: session::new_sessions(),
-    };
-
+/// Build the router. Split out of `main` so tests can drive the real HTTP surface — auth included —
+/// with `tower::ServiceExt::oneshot` instead of poking at `db::` functions underneath it.
+pub fn app(state: AppState) -> Router {
     // Serve the SPA, falling back to index.html for client-side deep links (family contract).
+    let dist = state.cfg.dist.clone();
     let spa = ServeDir::new(&dist).fallback(ServeFile::new(dist.join("index.html")));
 
     // MCP tool surface (C3), nested at /mcp; each connection shares the process's project sessions.
@@ -175,43 +194,151 @@ async fn main() {
         StreamableHttpServerConfig::default(),
     );
 
-    let app = Router::new()
+    let router = Router::new()
         .route("/api/version", get(version))
         .route("/api/me", get(me))
+        .route("/api/token/rotate", post(rotate_token))
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/projects/{id}", get(get_project).put(put_project))
+        .route("/auth/login", get(login::login))
+        .route("/auth/callback", get(login::callback))
+        .route("/auth/logout", post(login::logout))
         .route("/ws/projects/{id}", get(sync::ws_handler))
         .nest_service("/mcp", mcp_service)
-        .fallback_service(spa)
-        .layer(CorsLayer::permissive()) // dev: the :5173 SPA may call the :4321 API
-        .with_state(state);
+        .fallback_service(spa);
 
-    let port: u16 = std::env::var("NIB_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(4321);
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    println!(
-        "nib-backend on http://{addr}  (db: {db_url}, dist: {})",
-        dist.display()
+    // Permissive CORS exists only for the dev split (the :5173 SPA calling the :4321 API). In
+    // production the SPA is same-origin, and a wide-open CORS policy alongside a session cookie is
+    // how you get CSRF — so it is never applied there.
+    let router = if state.cfg.dev_auth {
+        router.layer(CorsLayer::permissive())
+    } else {
+        router
+    };
+
+    router.with_state(state)
+}
+
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "nib_backend=info,tower_http=warn".into()),
+        )
+        .init();
+
+    let cfg = match Config::from_env() {
+        Ok(c) => Arc::new(c),
+        Err(e) => {
+            tracing::error!("{e}");
+            std::process::exit(1);
+        }
+    };
+    if cfg.dev_auth {
+        tracing::warn!("NIB_DEV_AUTH=1 — auth gate bypassed; do not use in production");
+    }
+    if !cfg.oidc.is_some() && !cfg.dev_auth {
+        // The deploy-1 state: nib is up and healthy, but nobody can sign in until kanidm has
+        // minted the client secret and the second deploy writes the OIDC_* block.
+        tracing::warn!("no OIDC_* configured — sign-in is unavailable until it is");
+    }
+
+    let pool = db::connect(&cfg.db_url).await.expect("open database");
+    if cfg.dev_auth {
+        db::ensure_dev_user(&pool, &cfg.dev_token)
+            .await
+            .expect("seed dev user");
+    }
+
+    let sessions = session::new_sessions();
+    session::spawn_evictor(sessions.clone(), pool.clone());
+
+    let state = AppState {
+        pool,
+        sessions,
+        cookie_key: Key::from(&hex::decode(&cfg.session_key).expect("session key is hex")),
+        oidc: Arc::new(OidcLazy::new(cfg.oidc.clone())),
+        cfg: cfg.clone(),
+    };
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], cfg.port));
+    tracing::info!(
+        "nib-backend on http://{addr} (db: {}, dist: {})",
+        cfg.db_url,
+        cfg.dist.display()
     );
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("bind listener");
-    axum::serve(listener, app).await.expect("serve");
+    axum::serve(listener, app(state)).await.expect("serve");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
 
-    #[tokio::test]
-    async fn db_auth_project_session_roundtrip() {
-        let path = std::env::temp_dir().join(format!("nib-test-{}.db", std::process::id()));
+    /// A throwaway SQLite file. Named per test so the suite can run in parallel.
+    async fn test_pool(tag: &str) -> (SqlitePool, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!("nib-{tag}-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let pool = db::connect(&format!("sqlite:{}", path.display()))
             .await
             .unwrap();
+        (pool, path)
+    }
+
+    /// Production-shaped state: dev auth **off**, so the tests exercise the real credential tiers
+    /// rather than falling through to the synthetic identity.
+    fn test_state(pool: SqlitePool) -> AppState {
+        let session_key = config::random_hex(64);
+        let cfg = Arc::new(Config {
+            db_url: String::new(),
+            dist: std::env::temp_dir(),
+            port: 0,
+            dev_auth: false,
+            dev_token: String::new(),
+            session_key: session_key.clone(),
+            oidc: None,
+        });
+        AppState {
+            pool,
+            sessions: session::new_sessions(),
+            cookie_key: Key::from(&hex::decode(&session_key).unwrap()),
+            oidc: Arc::new(OidcLazy::new(None)),
+            cfg,
+        }
+    }
+
+    async fn get(state: &AppState, uri: &str, token: Option<&str>) -> (StatusCode, String) {
+        send(state, Request::builder().method("GET").uri(uri), token).await
+    }
+
+    async fn send(
+        state: &AppState,
+        req: axum::http::request::Builder,
+        token: Option<&str>,
+    ) -> (StatusCode, String) {
+        let req = match token {
+            Some(t) => req.header("authorization", format!("Bearer {t}")),
+            None => req,
+        };
+        let res = app(state.clone())
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = res.status();
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8_lossy(&body).to_string())
+    }
+
+    #[tokio::test]
+    async fn db_auth_project_session_roundtrip() {
+        let (pool, path) = test_pool("test").await;
         db::ensure_dev_user(&pool, "tkn").await.unwrap();
         db::ensure_dev_user(&pool, "tkn").await.unwrap(); // idempotent
 
@@ -236,8 +363,9 @@ mod tests {
         );
 
         // ownership: a different user can't see or open it.
-        db::ensure_dev_user(&pool, "other").await.unwrap();
-        let other = db::user_by_token(&pool, "other").await.unwrap().unwrap();
+        let other = db::resolve_user(&pool, "sub-other", "other@example.com", "other")
+            .await
+            .unwrap();
         assert!(
             db::get_project(&pool, other.id, id)
                 .await
@@ -277,11 +405,7 @@ mod tests {
 
     #[tokio::test]
     async fn apply_ops_broadcasts_to_subscribers() {
-        let path = std::env::temp_dir().join(format!("nib-bcast-{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let pool = db::connect(&format!("sqlite:{}", path.display()))
-            .await
-            .unwrap();
+        let (pool, path) = test_pool("bcast").await;
         db::ensure_dev_user(&pool, "tkn").await.unwrap();
         let user = db::user_by_token(&pool, "tkn").await.unwrap().unwrap();
         let id = db::create_project(&pool, user.id, "p", BLANK_SVG)
@@ -328,11 +452,7 @@ mod tests {
     // the same native model, so the origin's node uids resolve identically on a peer (no snapshot).
     #[tokio::test]
     async fn structural_op_replays_as_op() {
-        let path = std::env::temp_dir().join(format!("nib-struct-{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let pool = db::connect(&format!("sqlite:{}", path.display()))
-            .await
-            .unwrap();
+        let (pool, path) = test_pool("struct").await;
         db::ensure_dev_user(&pool, "tkn").await.unwrap();
         let user = db::user_by_token(&pool, "tkn").await.unwrap().unwrap();
         let id = db::create_project(&pool, user.id, "p", BLANK_SVG)
@@ -386,6 +506,124 @@ mod tests {
             svg.contains("<g"),
             "grouped in the authoritative editor: {svg}"
         );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The bearer token is an *API* credential: good enough to drive projects (that's what an MCP
+    /// client does), never good enough to read itself back or mint its replacement.
+    #[tokio::test]
+    async fn bearer_drives_the_api_but_not_the_account() {
+        let (pool, path) = test_pool("bearer").await;
+        let user = db::resolve_user(&pool, "sub-a", "a@example.com", "a")
+            .await
+            .unwrap();
+        let st = test_state(pool);
+
+        let (status, _) = get(&st, "/api/projects", Some(&user.token)).await;
+        assert_eq!(status, StatusCode::OK, "bearer drives the project API");
+
+        let (status, _) = get(&st, "/api/me", Some(&user.token)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "bearer can't read itself");
+
+        let (status, _) = send(
+            &st,
+            Request::builder().method("POST").uri("/api/token/rotate"),
+            Some(&user.token),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "bearer can't mint its own replacement"
+        );
+
+        // …and no credential at all is a 401, not a fallthrough.
+        let (status, _) = get(&st, "/api/projects", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn rotate_invalidates_the_previous_token() {
+        let (pool, path) = test_pool("rotate").await;
+        let user = db::resolve_user(&pool, "sub-a", "a@example.com", "a")
+            .await
+            .unwrap();
+        let old = user.token.clone();
+
+        let fresh = db::rotate_token(&pool, user.id).await.unwrap();
+        assert_ne!(fresh, old);
+
+        let st = test_state(pool.clone());
+        let (status, _) = get(&st, "/api/projects", Some(&old)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "old token is dead");
+        let (status, _) = get(&st, "/api/projects", Some(&fresh)).await;
+        assert_eq!(status, StatusCode::OK, "new token works");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Regression: `session::open` used to check ownership only on the cold path, so once a
+    /// project was resident any authenticated user could attach to it. Every surface — the
+    /// WebSocket, MCP `open_project`, and every MCP tool via `active_session` — funnels through
+    /// this one call, so verifying it here covers all three.
+    #[tokio::test]
+    async fn a_cached_session_still_refuses_a_foreign_user() {
+        let (pool, path) = test_pool("tenancy").await;
+        let owner = db::resolve_user(&pool, "sub-owner", "owner@example.com", "owner")
+            .await
+            .unwrap();
+        let intruder = db::resolve_user(&pool, "sub-intruder", "x@example.com", "x")
+            .await
+            .unwrap();
+        let id = db::create_project(&pool, owner.id, "private", BLANK_SVG)
+            .await
+            .unwrap();
+
+        // The owner opens it — the project is now resident in the registry.
+        let sessions = session::new_sessions();
+        assert!(
+            session::open(&pool, &sessions, owner.id, id).await.is_ok(),
+            "owner can open their own project"
+        );
+
+        // The intruder hits the warm cache. This is the exact path that used to succeed.
+        assert!(
+            session::open(&pool, &sessions, intruder.id, id)
+                .await
+                .is_err(),
+            "a cached session must not be attachable by a non-owner"
+        );
+
+        // …and the REST surface agrees, indistinguishably from a missing project.
+        let st = AppState {
+            sessions,
+            ..test_state(pool)
+        };
+        let (status, _) = get(&st, &format!("/api/projects/{id}"), Some(&intruder.token)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The raspi deploy-1 state: no `OIDC_*` yet, kanidm hasn't minted the client secret. nib must
+    /// stay up and answer honestly rather than crash or let anyone in.
+    #[tokio::test]
+    async fn without_oidc_the_service_stays_up_and_closed() {
+        let (pool, path) = test_pool("nooidc").await;
+        let st = test_state(pool);
+
+        let (status, _) = get(&st, "/api/version", None).await;
+        assert_eq!(status, StatusCode::OK, "health check is unauthenticated");
+
+        let (status, body) = get(&st, "/auth/login", None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("auth not configured"), "actionable: {body}");
+
+        let (status, _) = get(&st, "/api/me", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
 
         let _ = std::fs::remove_file(&path);
     }

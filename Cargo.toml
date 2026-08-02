@@ -6,6 +6,11 @@
 members = ["core", "backend"]
 resolver = "3"
 
+# One version for the whole workspace; `frontend/package.json` mirrors it. `/api/version` reports
+# both halves, so a deployed instance says exactly what it is.
+[workspace.package]
+version = "0.1.0"
+
 [profile.release]
 # Small, fast WASM: optimize for size, strip, fat LTO. Matters because the .wasm
 # ships to the browser alongside the SPA.

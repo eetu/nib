@@ -1493,23 +1493,22 @@ impl Tree {
         }
         let mut any = false;
         walk(&mut self.root, &mut any);
-        if any {
-            if let Node::Element { attrs, edited, .. } = &mut self.root {
-                if !attrs.iter().any(|(k, _)| k == "xmlns:xlink") {
-                    let pos = attrs
-                        .iter()
-                        .position(|(k, _)| k == "xmlns")
-                        .map_or(0, |i| i + 1);
-                    attrs.insert(
-                        pos,
-                        (
-                            "xmlns:xlink".to_string(),
-                            "http://www.w3.org/1999/xlink".to_string(),
-                        ),
-                    );
-                    *edited = true;
-                }
-            }
+        if any
+            && let Node::Element { attrs, edited, .. } = &mut self.root
+            && !attrs.iter().any(|(k, _)| k == "xmlns:xlink")
+        {
+            let pos = attrs
+                .iter()
+                .position(|(k, _)| k == "xmlns")
+                .map_or(0, |i| i + 1);
+            attrs.insert(
+                pos,
+                (
+                    "xmlns:xlink".to_string(),
+                    "http://www.w3.org/1999/xlink".to_string(),
+                ),
+            );
+            *edited = true;
         }
     }
 
@@ -1682,6 +1681,9 @@ fn remove_node(node: &mut Node, uid: &str) -> Option<Node> {
 
 /// Replace the element with `uid` by `new`, in place (same slot). `Err(new)` bubbles the node back if
 /// `uid` isn't in this subtree, so a sibling can take it (mirrors `insert_rel`'s carry).
+// The big `Err` is the point: it carries the node's *ownership* back up the recursion, it isn't an
+// error payload. Boxing it would allocate on every miss along the walk.
+#[allow(clippy::result_large_err)]
 fn replace_node(node: &mut Node, uid: &str, new: Node) -> Result<(), Node> {
     let Node::Element { children, .. } = node else {
         return Err(new);
@@ -1803,6 +1805,7 @@ fn href_name(attrs: &[(String, String)]) -> Option<String> {
 
 /// Insert `new` relative to `ref_uid` (`before`/`after` as a sibling, `inside` as a child). Returns
 /// `Err(new)` if `ref_uid` isn't in this subtree, bubbling the node back so a sibling can take it.
+#[allow(clippy::result_large_err)] // ownership carry, not an error payload — see `replace_node`
 fn insert_rel(node: &mut Node, ref_uid: &str, new: Node, pos: &str) -> Result<(), Node> {
     let Node::Element { children, .. } = node else {
         return Err(new);
@@ -1897,6 +1900,7 @@ fn reorder_extreme_in(node: &mut Node, uid: &str, front: bool) -> Option<bool> {
 /// Lift the sibling `members` out of their shared parent (like `group_in`), inserting `replacement`
 /// at the first member's slot, and return the grabbed member nodes (order preserved). `Err` carries
 /// `replacement` back if the members aren't all direct children of one node (so a sibling can retry).
+#[allow(clippy::result_large_err)] // ownership carry, not an error payload — see `replace_node`
 fn lift_into(node: &mut Node, members: &[String], replacement: Node) -> Result<Vec<Node>, Node> {
     if let Node::Element { children, .. } = node {
         let positions: Vec<usize> = children
@@ -2274,7 +2278,7 @@ mod tests {
         );
 
         // The render node carries the hidden flag so the canvas can skip the subtree.
-        fn find<'a>(nodes: &'a [RenderNode], uid: &str) -> Option<bool> {
+        fn find(nodes: &[RenderNode], uid: &str) -> Option<bool> {
             for n in nodes {
                 if let RenderNode::Element {
                     uid: u,

@@ -38,11 +38,15 @@ install: build-core
 # Dev: the backend (bacon, :4321) AND the frontend (Vite, :5173, connected mode) together, so
 # co-editing works from one command. Ctrl-C stops both. The SPA proxies /api,/mcp,/ws to the
 # backend; bacon hot-reloads the Rust on change. Frontend-only: `just dev-frontend`.
+#
+# NIB_DEV_AUTH=1 stands in for kanidm locally: it synthesizes a `developer` identity, seeds it with
+# NIB_DEV_TOKEN so a local MCP client works with no setup, allows a random ephemeral SESSION_KEY,
+# and re-enables the permissive CORS the :5173 → :4321 split needs. Never set in production.
 dev: build-core
     #!/usr/bin/env bash
     set -euo pipefail
     trap 'kill 0' EXIT
-    ( cd backend && bacon --headless -j run ) &
+    ( cd backend && NIB_DEV_AUTH=1 bacon --headless -j run ) &
     cd frontend && VITE_NIB_BACKEND=1 node .yarn/releases/yarn-*.cjs dev
 
 # Frontend dev server only (:5173) — standalone local editor, no backend.
@@ -56,9 +60,12 @@ build: opt-core
 # Phase C backend (:4321): build the SPA, then serve it + the projects API/MCP/WS through **bacon**
 # (auto-reloads the Rust on source changes; `cargo install bacon`). Links nib-core natively — the
 # same engine the browser drives via WASM. Runs from backend/, so NIB_DIST defaults to
-# ../frontend/dist, NIB_DB→backend/nib.db, NIB_DEV_TOKEN→nib-dev-token, NIB_PORT→4321. Mirrors ../scene.
+# ../frontend/dist, NIB_DB→backend/nib.db, NIB_DEV_TOKEN→nib-dev-token, NIB_PORT→4321.
+#
+# NOTE: the SPA built by `just build` has connected mode OFF (no VITE_NIB_BACKEND), so this serves
+# the standalone editor over the backend's API. Use `just dev` for the co-editing surface.
 backend: build
-    cd backend && bacon --headless -j run
+    cd backend && NIB_DEV_AUTH=1 bacon --headless -j run
 
 # Typecheck + lint + format check.
 validate:

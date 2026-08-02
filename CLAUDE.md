@@ -330,14 +330,27 @@ client-side pro pillars, all running on the core):
   browser-only editor stays fully functional without it.
 - **Phase C (additive, flag-gated): the backend co-editing track — mostly LANDED.** A
   rust-axum backend (`backend/`) links the **same `nib-core` natively** and now persists
-  **projects** in **SQLite** (sqlx), owned by **token-authed users** — a real multiuser scaffold
-  (a seeded `developer` user + per-user bearer token; no login yet). **The op vocabulary the
-  editor already runs on IS the surface** (`moveNode` … `booleanOp` … `groupNodes`). What's live:
-  - **Persistence + auth** (`db.rs`, `auth.rs`): `migrations/` (users, projects). The store of
-    record is the **native model JSON** (`projects.model`, migration `0002`; the `projects.svg`
-    column is a cached export). `Authorization: Bearer <token>` (an `AuthUser` extractor + an MCP
-    helper). REST: `/api/me`, `/api/projects` (list/create), `/api/projects/{id}` (get → model+svg /
-    put imports svg → model) — token-authed + ownership-scoped, validated through the parser.
+  **projects** in **SQLite** (sqlx), owned by **real OIDC users** (kanidm in production).
+  **The op vocabulary the editor already runs on IS the surface**
+  (`moveNode` … `booleanOp` … `groupNodes`). What's live:
+  - **Persistence** (`db.rs`): `migrations/` (users, projects). The store of record is the
+    **native model JSON** (`projects.model`, migration `0002`; the `projects.svg` column is a
+    cached export). REST: `/api/me`, `/api/token/rotate`, `/api/projects` (list/create),
+    `/api/projects/{id}` (get → model+svg / put imports svg → model) — ownership-scoped,
+    validated through the parser.
+  - **Auth — one resolver, three credentials, and each surface picks which it accepts**
+    (`auth.rs` `resolve` + `Tiers`; the OIDC dance in `login.rs`/`oidc.rs`/`config.rs`, ported
+    from the sibling apps). A **signed `nib_session` cookie** (the browser) carries the OIDC
+    `sub`; a **per-user bearer token** (`users.token`, minted at first login, rotatable) is the
+    API credential; `NIB_DEV_AUTH` synthesizes a `developer` identity so `just dev` needs no
+    kanidm. Two deliberate asymmetries: **`/api/me` + rotate are cookie-only** (a leaked token
+    must not read itself back or mint its replacement), and **`/mcp` is bearer-only** — that's
+    what "the MCP path bypasses SSO" means, and it's also the CSRF answer, since `/mcp` is
+    same-origin with the SPA. There is **no forward-auth tier**: nib runs its own OIDC client
+    rather than sitting behind oauth2-proxy, so trusting `X-Auth-Request-*` would mean trusting
+    a header nothing sets. Config is **all-four-`OIDC_*`-or-none** and discovery is **lazy**
+    (`OidcLazy`), which is what makes raspi's two-deploy kanidm bootstrap safe: deploy 1 runs
+    healthy with no OIDC and simply can't sign anyone in.
   - **Sessions** (`session.rs`): one authoritative in-memory `Editor` per open project (keyed by
     id, shared registry), hydrated **from the model** (legacy svg-only rows import once). Every edit
     funnels through `apply_ops` → `ensure_create_uid` (stamp a uid on create-ops that lack one) →
@@ -359,12 +372,24 @@ client-side pro pillars, all running on the core):
   - **C2 live sync** (`sync.rs`): `GET /ws/projects/{id}?token=…` — the browser + the LLM edit the
     **same project live**; MCP `apply_op` broadcasts to the WS, and WS ops broadcast back
     (echo-guarded by `clientId`).
-  - **Frontend connected mode — LANDED (flagged):** build-flagged (`PUBLIC_NIB_BACKEND`) so the
+  - **Frontend connected mode — LANDED (flagged):** build-flagged (`VITE_NIB_BACKEND`) so the
     **standalone / GitHub-Pages build ships zero backend code** and stays a pure local file editor;
-    when on, a projects list + token-in-Settings + `ProjectSync` (WS) + `DocumentStore.applyRemote`
-    make the co-editing visible in the browser. Plan: `~/.claude/plans/happy-crunching-blum.md`.
-    **Phase C is functionally complete as a co-editing scaffold; a real login/multi-tenant story +
-    hardening (rate limits, conflict UX) remain before it's production-grade.**
+    when on, a projects list + `ProjectSync` (WS) + `DocumentStore.applyRemote` +
+    `AccountSettings` (who you're signed in as, your token with copy/rotate) make the co-editing
+    visible in the browser. Everything backend-side is reached through a **dynamic import behind
+    the flag** — a static one would pull the client into the Pages bundle, so new connected-mode
+    UI belongs in its own component, not inline in a shared one. A 401 on an `/api` path bounces
+    to `/auth/login?next=…` from inside the fetch wrapper; any other error surfaces as
+    "backend unreachable" rather than a redirect loop. Plan:
+    `~/.claude/plans/happy-crunching-blum.md`.
+  - **Deployment — LANDED (v0.1.0).** A 5-stage `Dockerfile` (the family's `xx` cross-compile →
+    `scratch`, plus a wasm-pack stage no sibling needs, because `frontend/` consumes `core/pkg`
+    via a `link:` dep) publishes `ghcr.io/eetu/nib` for arm64 via
+    `.github/workflows/dockerimage.yaml`. `../raspi` runs it as a podman quadlet
+    (`tasks/nib.py`) on **port 3009**, `Network=host` + loopback bind with Traefik as the only
+    way in, state in `/var/lib/nib`. **Not in Traefik's `_gated_hosts`** — see the auth note
+    above. Deploy twice: kanidm mints the client secret on the first pass.
+    **Still ahead of production-grade: rate limits and conflict UX.**
 - **Phase D — LANDED (folded into E3):** arbitrary *nested* groups are the object tree
   itself — `GroupNodes`/`UngroupNode`/`ReorderNode`/`SetNodeHidden` on stable-id (`uid`)
   addressing; drawn + imported content unified into one tree, `<g>`-wrapped on export.

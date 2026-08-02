@@ -12,15 +12,17 @@ const CLIENT_ID = crypto.randomUUID();
 type SyncMsg = { clientId: string; ops: unknown[] };
 
 function wsUrl(id: number): string {
-  const token = encodeURIComponent(settings.backendToken);
-  const path = `${base}/ws/projects/${id}?token=${token}`;
   if (settings.backendUrl) {
+    // Cross-origin: the session cookie won't ride along, so the token has to.
     const u = new URL(settings.backendUrl);
     const proto = u.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${u.host}${path}`;
+    const token = encodeURIComponent(settings.backendToken);
+    return `${proto}//${u.host}${base}/ws/projects/${id}?token=${token}`;
   }
+  // Same-origin: the browser sends `nib_session` on the handshake. Keeping the token out of the
+  // URL keeps it out of proxy access logs and browser history.
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${location.host}${path}`;
+  return `${proto}//${location.host}${base}/ws/projects/${id}`;
 }
 
 class ProjectSync {

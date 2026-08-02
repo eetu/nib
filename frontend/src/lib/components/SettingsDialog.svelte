@@ -7,14 +7,7 @@
 
   import { focusTrap } from "$lib/actions/focusTrap";
   import { BACKEND } from "$lib/backend/flag";
-  import {
-    setBackendToken,
-    setBackendUrl,
-    setCanvasBg,
-    setThemeMode,
-    settings,
-    setUiLevel,
-  } from "$lib/stores/settings.svelte";
+  import { setCanvasBg, setThemeMode, settings, setUiLevel } from "$lib/stores/settings.svelte";
 
   let { open, onClose }: { open: boolean; onClose: () => void } = $props();
 
@@ -93,28 +86,11 @@
         </span>
       </div>
 
+      <!-- Dynamically imported so the standalone build never bundles the backend client. -->
       {#if BACKEND}
-        <div class="setting">
-          <span class="setting-label">backend</span>
-          <input
-            class="field"
-            type="text"
-            placeholder="backend url (blank = same origin)"
-            value={settings.backendUrl}
-            onchange={(e) => setBackendUrl(e.currentTarget.value)}
-          />
-          <span class="setting-label" style="margin-top:2px">token (paste into an MCP client)</span>
-          <input
-            class="field"
-            type="text"
-            spellcheck="false"
-            value={settings.backendToken}
-            onchange={(e) => setBackendToken(e.currentTarget.value)}
-          />
-          <span class="setting-hint">
-            connect an MCP client with <code>Authorization: Bearer &lt;token&gt;</code> to co-edit.
-          </span>
-        </div>
+        {#await import("$lib/components/AccountSettings.svelte") then M}
+          <M.default />
+        {/await}
       {/if}
 
       <div class="actions">
@@ -165,16 +141,6 @@
   .setting-hint {
     font-size: 12px;
     color: var(--halo-text-muted);
-  }
-
-  .field {
-    width: 100%;
-    font-size: 12px;
-  }
-
-  code {
-    font-family: ui-monospace, "SF Mono", monospace;
-    font-size: 11px;
   }
 
   .seg {

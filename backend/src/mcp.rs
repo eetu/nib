@@ -77,6 +77,8 @@ pub struct NibMcp {
     active: Arc<std::sync::Mutex<Option<i64>>>,
     /// Monotonic suffix for generated element ids.
     next_id: Arc<AtomicU64>,
+    /// Whether the dev-auth bypass is on (a local MCP client with no token under `just dev`).
+    dev_auth: bool,
     tool_router: ToolRouter<NibMcp>,
 }
 
@@ -87,22 +89,35 @@ impl NibMcp {
             sessions: state.sessions.clone(),
             active: Arc::new(std::sync::Mutex::new(None)),
             next_id: Arc::new(AtomicU64::new(1)),
+            dev_auth: state.cfg.dev_auth,
             tool_router: Self::tool_router(),
         }
     }
 
-    /// Resolve the authenticated user from the request's bearer token.
+    /// Resolve the caller from the request's bearer token.
+    ///
+    /// Bearer only — deliberately. `/mcp` is same-origin with the SPA, so honouring the session
+    /// cookie here would let any page in the browser drive the tool surface. It also means the
+    /// MCP path never touches SSO: the personal token is the whole credential.
     async fn user(&self, ctx: &RequestContext<RoleServer>) -> Result<User, ErrorData> {
         let parts = ctx
             .extensions
             .get::<Parts>()
             .ok_or_else(|| bad("no request context"))?;
-        auth::user_from_parts(&self.pool, parts)
+        auth::mcp_user(&self.pool, self.dev_auth, parts)
             .await
-            .ok_or_else(|| bad("unauthorized — set Authorization: Bearer <token>"))
+            .ok_or_else(|| {
+                ErrorData::invalid_request(
+                    "unauthorized — set Authorization: Bearer <token>".to_string(),
+                    None,
+                )
+            })
     }
 
     /// The active project's session (the one `open_project`/`create_project` selected).
+    ///
+    /// `session::open` re-checks ownership against `user` on every call, so an `active` id set
+    /// while holding one token can't be reused to reach that project with another.
     async fn active_session(
         &self,
         user: &User,
@@ -308,12 +323,12 @@ fn count_uses(nodes: &[RenderNode], uses: &mut std::collections::HashMap<String,
             ..
         } = n
         {
-            if tag == "use" {
-                if let Some(h) = attrs.get("href").or_else(|| attrs.get("xlink:href")) {
-                    *uses
-                        .entry(h.trim_start_matches('#').to_string())
-                        .or_insert(0) += 1;
-                }
+            if tag == "use"
+                && let Some(h) = attrs.get("href").or_else(|| attrs.get("xlink:href"))
+            {
+                *uses
+                    .entry(h.trim_start_matches('#').to_string())
+                    .or_insert(0) += 1;
             }
             count_uses(children, uses);
         }
@@ -349,20 +364,18 @@ fn collect_components(
                     uid,
                     ..
                 } = c
+                    && ct == "g"
+                    && let Some(id) = attrs.get("id")
                 {
-                    if ct == "g" {
-                        if let Some(id) = attrs.get("id") {
-                            let mut parts = Vec::new();
-                            collect_part_uids(c, &mut parts);
-                            for p in &parts {
-                                part_comp.insert(p.clone(), id.clone());
-                            }
-                            summaries.push(json!({
-                                "name": id, "uid": uid, "parts": parts.len(),
-                                "instances": uses.get(id).copied().unwrap_or(0),
-                            }));
-                        }
+                    let mut parts = Vec::new();
+                    collect_part_uids(c, &mut parts);
+                    for p in &parts {
+                        part_comp.insert(p.clone(), id.clone());
                     }
+                    summaries.push(json!({
+                        "name": id, "uid": uid, "parts": parts.len(),
+                        "instances": uses.get(id).copied().unwrap_or(0),
+                    }));
                 }
             }
         } else {
