@@ -107,3 +107,22 @@ export async function putProject(id: number, svg: string): Promise<void> {
   });
   if (!res.ok) throw new Error(`save project: ${res.status}`);
 }
+
+/** Rename a project. PATCH, not PUT — PUT replaces the *document*. */
+export async function renameProject(id: number, name: string): Promise<void> {
+  const res = await fetch(`${apiBase()}/api/projects/${id}`, {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`rename project: ${res.status}`);
+}
+
+/** Delete a project and its stored document. Irreversible — callers confirm first. */
+export async function deleteProject(id: number): Promise<void> {
+  const res = await fetch(`${apiBase()}/api/projects/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`delete project: ${res.status}`);
+}

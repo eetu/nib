@@ -173,6 +173,35 @@ pub async fn create_project(
     Ok(res.last_insert_rowid())
 }
 
+/// Rename a project. Ownership-scoped in the statement itself, so a non-owner's rename simply
+/// affects no rows — indistinguishable from a missing project, which is what the caller reports.
+pub async fn rename_project(
+    pool: &SqlitePool,
+    user_id: i64,
+    id: i64,
+    name: &str,
+) -> Result<bool, sqlx::Error> {
+    let res = sqlx::query(
+        "update projects set name = ?, updated_at = datetime('now') where id = ? and user_id = ?",
+    )
+    .bind(name)
+    .bind(id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Delete a project. Ownership-scoped the same way as [`rename_project`].
+pub async fn delete_project(pool: &SqlitePool, user_id: i64, id: i64) -> Result<bool, sqlx::Error> {
+    let res = sqlx::query("delete from projects where id = ? and user_id = ?")
+        .bind(id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
 /// Persist a project's native model (source of truth) plus its cached SVG export, in one write.
 pub async fn update_project(
     pool: &SqlitePool,

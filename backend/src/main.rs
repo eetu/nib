@@ -153,6 +153,47 @@ async fn get_project(
         .ok_or((StatusCode::NOT_FOUND, "no such project".to_string()))
 }
 
+#[derive(Deserialize)]
+struct RenameProject {
+    name: String,
+}
+
+/// Rename a project. Separate from `put_project`, which replaces the *document* — overloading one
+/// verb for "new name" and "new artwork" would make an accidental rename destroy the drawing.
+async fn patch_project(
+    AuthUser(user): AuthUser,
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<RenameProject>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "name must not be empty".into()));
+    }
+    match db::rename_project(&st.pool, user.id, id, name).await {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err((StatusCode::NOT_FOUND, "no such project".to_string())),
+        Err(e) => Err(ise(e)),
+    }
+}
+
+/// Delete a project, and drop its in-memory session so nothing keeps serving (or re-persisting)
+/// a document whose row is gone.
+async fn delete_project(
+    AuthUser(user): AuthUser,
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    match db::delete_project(&st.pool, user.id, id).await {
+        Ok(true) => {
+            session::close(&st.sessions, id);
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Ok(false) => Err((StatusCode::NOT_FOUND, "no such project".to_string())),
+        Err(e) => Err(ise(e)),
+    }
+}
+
 /// Replace a project's document by importing a posted SVG: parse it into the native model (the
 /// source of truth), then persist model + cached SVG. Broken markup never persists (BAD_REQUEST).
 async fn put_project(
@@ -199,7 +240,13 @@ pub fn app(state: AppState) -> Router {
         .route("/api/me", get(me))
         .route("/api/token/rotate", post(rotate_token))
         .route("/api/projects", get(list_projects).post(create_project))
-        .route("/api/projects/{id}", get(get_project).put(put_project))
+        .route(
+            "/api/projects/{id}",
+            get(get_project)
+                .put(put_project)
+                .patch(patch_project)
+                .delete(delete_project),
+        )
         .route("/auth/login", get(login::login))
         .route("/auth/callback", get(login::callback))
         .route("/auth/logout", post(login::logout))
@@ -604,6 +651,119 @@ mod tests {
         };
         let (status, _) = get(&st, &format!("/api/projects/{id}"), Some(&intruder.token)).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Rename + delete are scoped in the SQL itself, so a non-owner gets the same 404 as for a
+    /// project that doesn't exist — and deleting drops the resident session rather than leaving an
+    /// `Editor` serving a row that's gone.
+    #[tokio::test]
+    async fn projects_can_be_renamed_and_deleted_by_their_owner_only() {
+        let (pool, path) = test_pool("crud").await;
+        let owner = db::resolve_user(&pool, "sub-owner", "owner@example.com", "owner")
+            .await
+            .unwrap();
+        let intruder = db::resolve_user(&pool, "sub-intruder", "x@example.com", "x")
+            .await
+            .unwrap();
+        let id = db::create_project(&pool, owner.id, "sketch", BLANK_SVG)
+            .await
+            .unwrap();
+        let st = test_state(pool.clone());
+
+        let rename = |token: String, name: &str| {
+            let body = serde_json::json!({ "name": name }).to_string();
+            let st = st.clone();
+            async move {
+                let res = app(st)
+                    .oneshot(
+                        Request::builder()
+                            .method("PATCH")
+                            .uri(format!("/api/projects/{id}"))
+                            .header("authorization", format!("Bearer {token}"))
+                            .header("content-type", "application/json")
+                            .body(Body::from(body))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                res.status()
+            }
+        };
+
+        assert_eq!(
+            rename(intruder.token.clone(), "stolen").await,
+            StatusCode::NOT_FOUND,
+            "a non-owner can't rename"
+        );
+        assert_eq!(
+            rename(owner.token.clone(), "  final  ").await,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            db::get_project(&pool, owner.id, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .name,
+            "final",
+            "the stored name is trimmed"
+        );
+        assert_eq!(
+            rename(owner.token.clone(), "   ").await,
+            StatusCode::BAD_REQUEST,
+            "an all-whitespace name is refused, not stored"
+        );
+
+        // Open it so there's a resident session to evict.
+        session::open(&pool, &st.sessions, owner.id, id)
+            .await
+            .unwrap();
+        assert!(st.sessions.lock().unwrap().contains_key(&id));
+
+        let del = |token: String| {
+            let st = st.clone();
+            async move {
+                let res = app(st)
+                    .oneshot(
+                        Request::builder()
+                            .method("DELETE")
+                            .uri(format!("/api/projects/{id}"))
+                            .header("authorization", format!("Bearer {token}"))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                res.status()
+            }
+        };
+
+        assert_eq!(
+            del(intruder.token).await,
+            StatusCode::NOT_FOUND,
+            "a non-owner can't delete"
+        );
+        assert!(
+            db::get_project(&pool, owner.id, id)
+                .await
+                .unwrap()
+                .is_some(),
+            "…and the project survives the attempt"
+        );
+
+        assert_eq!(del(owner.token).await, StatusCode::NO_CONTENT);
+        assert!(
+            db::get_project(&pool, owner.id, id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            !st.sessions.lock().unwrap().contains_key(&id),
+            "the resident session is dropped with the row"
+        );
 
         let _ = std::fs::remove_file(&path);
     }

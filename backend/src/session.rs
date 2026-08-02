@@ -129,6 +129,15 @@ pub async fn open(
     Ok(session)
 }
 
+/// Drop a project's in-memory session, if it has one.
+///
+/// Called when the project is deleted: the resident `Editor` would otherwise keep serving the
+/// document to anyone still attached, and the idle sweep would try to flush it back to a row that
+/// no longer exists. Any live WebSocket sees its broadcast channel close and disconnects.
+pub fn close(sessions: &Sessions, project_id: i64) {
+    sessions.lock().unwrap().remove(&project_id);
+}
+
 /// How long a project with no live subscribers stays resident before being dropped.
 const IDLE_EVICT: Duration = Duration::from_secs(15 * 60);
 const SWEEP_EVERY: Duration = Duration::from_secs(60);

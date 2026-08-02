@@ -388,9 +388,12 @@ client-side pro pillars, all running on the core):
     (echo-guarded by `clientId`).
   - **Frontend connected mode — LANDED (flagged):** build-flagged (`VITE_NIB_BACKEND`) so the
     **standalone / GitHub-Pages build ships zero backend code** and stays a pure local file editor;
-    when on, a projects list + `ProjectSync` (WS) + `DocumentStore.applyRemote` +
+    when on, a projects list (open · new · **rename** by double-click or context menu · **delete**,
+    the LAYERS-row pattern) + `ProjectSync` (WS) + `DocumentStore.applyRemote` +
     `AccountSettings` (who you're signed in as, your token with copy/rotate) make the co-editing
-    visible in the browser. Everything backend-side is reached through a **dynamic import behind
+    visible in the browser. Project CRUD is plain REST, **not** the op vocabulary — `PATCH`/`DELETE
+    /api/projects/{id}`, ownership-scoped in the SQL itself so a non-owner gets the same 404 as for
+    a project that doesn't exist; a delete also drops the in-memory session. Everything backend-side is reached through a **dynamic import behind
     the flag** — a static one would pull the client into the Pages bundle, so new connected-mode
     UI belongs in its own component, not inline in a shared one. A 401 on an `/api` path bounces
     to `/auth/login?next=…` from inside the fetch wrapper; any other error surfaces as

@@ -21,6 +21,10 @@ and exposes its editing engine to an LLM over MCP.
   copy + rotate; it's the credential an MCP client presents. Reading or rotating it requires the
   browser session — a leaked token can't read itself back or mint its replacement.
 - **`/mcp` bypasses SSO** and authenticates with the bearer alone.
+- **Projects can be renamed and deleted** from the projects panel — double-click a row to rename
+  in place, right-click for rename/delete (mirroring the Inspector's LAYERS rows). Backed by
+  `PATCH`/`DELETE /api/projects/{id}`, both ownership-scoped in SQL; deleting drops the project's
+  in-memory session so nothing keeps serving a document whose row is gone.
 - **Container packaging**: a 5-stage Dockerfile (the family's `xx` cross-compile → `scratch`, plus
   a wasm-pack stage for the core the SPA links) and an arm64 image published to
   `ghcr.io/eetu/nib`.
