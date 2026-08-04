@@ -30,6 +30,11 @@ pub struct SyncMsg {
     #[serde(rename = "clientId")]
     pub client_id: String,
     pub ops: Vec<serde_json::Value>,
+    /// Set when the whole document was replaced (an import through `PUT /api/projects/{id}`)
+    /// rather than edited. Ops can't express that, so peers re-fetch the project instead of
+    /// replaying anything.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reload: bool,
 }
 
 /// Stamp a fresh globally-unique `uid` (or `uids`, for `releaseCompound`) onto a create-op that
@@ -129,6 +134,37 @@ pub async fn open(
     Ok(session)
 }
 
+/// Replace a live session's whole document with freshly imported source.
+///
+/// Without this, `PUT /api/projects/{id}` wrote the database while the resident `Editor` kept the
+/// *old* document — so an open browser (or the LLM over MCP) went on editing the previous
+/// drawing, and the next `apply_ops` persisted that back over the import. Returns the new
+/// (model, svg) when a session was live, so the caller persists exactly what the session now
+/// holds; `None` when the project isn't open and the caller should persist its own parse.
+///
+/// Peers are told to re-fetch rather than sent ops: a whole-document swap mints new node uids, so
+/// there is nothing for them to replay against.
+pub fn replace_document(
+    sessions: &Sessions,
+    project_id: i64,
+    source: &str,
+) -> Result<Option<(String, String)>, String> {
+    let Some(sess) = sessions.lock().unwrap().get(&project_id).cloned() else {
+        return Ok(None);
+    };
+    let mut s = sess.lock().unwrap();
+    s.editor.load_source(source)?;
+    s.last_touched = Instant::now();
+    let model = s.editor.to_model_json().unwrap_or_default();
+    let svg = s.editor.to_svg();
+    let _ = s.tx.send(SyncMsg {
+        client_id: String::new(),
+        ops: Vec::new(),
+        reload: true,
+    });
+    Ok(Some((model, svg)))
+}
+
 /// Drop a project's in-memory session, if it has one.
 ///
 /// Called when the project is deleted: the resident `Editor` would otherwise keep serving the
@@ -218,6 +254,7 @@ pub fn apply_ops(
         let _ = s.tx.send(SyncMsg {
             client_id: origin.to_string(),
             ops,
+            reload: false,
         });
         (model, svg, s.project_id, applied)
     };

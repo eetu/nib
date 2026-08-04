@@ -153,6 +153,7 @@
     <span class="status {sync.status}" title="live sync">{sync.status}</span>
   </div>
   {#if error}<p class="err">{error}</p>{/if}
+  {#if sync.error}<p class="err">{sync.error}</p>{/if}
   <ul class="list">
     {#each projects as p (p.id)}
       <li>

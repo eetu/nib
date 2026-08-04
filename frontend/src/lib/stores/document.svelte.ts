@@ -81,6 +81,12 @@ type CoreState = {
 
 type Clipboard = { subpaths: Subpath[]; attributes: Record<string, string>; name: string };
 
+/** A whole-document swap, as opposed to an edit. `import` = the user brought a document in (drop /
+ *  open file / paste / source edit); `new` = they started a blank one. Connected mode listens so a
+ *  project can't silently keep receiving ops for a document it no longer holds. */
+export type DocumentReplacement =
+  { kind: "import"; svg: string; name: string | null } | { kind: "new" };
+
 const SESSION_KEY = "session";
 
 function clone<T>(value: T): T {
@@ -148,6 +154,9 @@ class DocumentStore {
   // ones included — stream as-is; no SVG-snapshot resync.
   #syncSink: ((ops: unknown[]) => void) | null = null;
   #syncBuffer: unknown[] = [];
+  // Told when the whole document is replaced rather than edited — ops can't express that, so
+  // connected mode needs to react (push the import into the project, or detach).
+  #replaceSink: ((r: DocumentReplacement) => void) | null = null;
   #persist = debounce(() => {
     saveState<Session>(SESSION_KEY, {
       doc: this.doc,
@@ -353,6 +362,7 @@ class DocumentStore {
     this.nodeEditIndex = null;
     this.fileName = name;
     this.dirty = false;
+    this.#replaceSink?.({ kind: "new" });
     this.#sync();
     this.#persist();
   }
@@ -1196,6 +1206,23 @@ class DocumentStore {
   setSyncSink(sink: ((ops: unknown[]) => void) | null): void {
     this.#syncSink = sink;
     this.#syncBuffer = [];
+  }
+
+  /** Wire (or clear, `null`) a sink told when the whole document is swapped out from under an
+   *  open project — see [`DocumentReplacement`]. */
+  setReplaceSink(sink: ((r: DocumentReplacement) => void) | null): void {
+    this.#replaceSink = sink;
+  }
+
+  /** Load a document the *user* brought in (drop, open file, paste, source edit) — as opposed to
+   *  [`load`], which is also how a project's own document is restored.
+   *
+   *  The distinction matters in connected mode: ops describe edits to a document, so replacing the
+   *  document wholesale while attached to a project desynced the two silently. The import is
+   *  announced here so connected mode can push it into the project instead. */
+  importDocument(source: string, name: string | null = null): void {
+    this.load(source, name);
+    this.#replaceSink?.({ kind: "import", svg: source, name: this.fileName });
   }
 
   /** Apply ops received from a remote peer (backend sync): mutate + re-render. Doesn't buffer (they

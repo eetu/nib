@@ -209,12 +209,20 @@ async fn put_project(
     {
         return Err((StatusCode::NOT_FOUND, "no such project".to_string()));
     }
+    // Parse first so broken markup is rejected before anything is touched…
     let mut editor = nib_core::Editor::new();
     editor
         .load_source(&body)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-    let model = editor.to_model_json().unwrap_or_default();
-    db::update_project(&st.pool, id, &model, &editor.to_svg())
+    // …then, if the project is open, make the *live session* take the import and persist what it
+    // holds. Writing only the row would leave the resident editor on the old document, and its
+    // next edit would overwrite the import.
+    let (model, svg) = match session::replace_document(&st.sessions, id, &body) {
+        Ok(Some(from_session)) => from_session,
+        Ok(None) => (editor.to_model_json().unwrap_or_default(), editor.to_svg()),
+        Err(e) => return Err((StatusCode::BAD_REQUEST, e)),
+    };
+    db::update_project(&st.pool, id, &model, &svg)
         .await
         .map_err(ise)?;
     Ok(StatusCode::NO_CONTENT)
@@ -764,6 +772,59 @@ mod tests {
             !st.sessions.lock().unwrap().contains_key(&id),
             "the resident session is dropped with the row"
         );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Importing an SVG into an *open* project has to reach the live session, not just the row.
+    /// It used to write only the DB, so a browser (or the LLM over MCP) went on editing the
+    /// previous document and its next edit persisted that back over the import.
+    #[tokio::test]
+    async fn importing_into_an_open_project_updates_the_live_session() {
+        let (pool, path) = test_pool("import").await;
+        let user = db::resolve_user(&pool, "sub-a", "a@example.com", "a")
+            .await
+            .unwrap();
+        let id = db::create_project(&pool, user.id, "target", BLANK_SVG)
+            .await
+            .unwrap();
+        let st = test_state(pool.clone());
+
+        // Open it, as a browser or an MCP connection would, then subscribe like a peer.
+        let sess = session::open(&pool, &st.sessions, user.id, id)
+            .await
+            .unwrap();
+        let mut rx = sess.lock().unwrap().tx.subscribe();
+        assert!(!sess.lock().unwrap().editor.to_svg().contains("circle"));
+
+        // r##…##: the colour literal contains `"#`, which would close an `r#"…"#` string early.
+        let imported = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="30" fill="#e11"/></svg>"##;
+        let res = app(st.clone())
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/projects/{id}"))
+                    .header("authorization", format!("Bearer {}", user.token))
+                    .body(Body::from(imported))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+        // The resident editor now holds the import…
+        assert!(
+            sess.lock().unwrap().editor.to_svg().contains("circle"),
+            "the live session took the import"
+        );
+        // …the row agrees…
+        let stored = db::get_project(&pool, user.id, id).await.unwrap().unwrap();
+        assert!(stored.svg.contains("circle"), "persisted: {}", stored.svg);
+        assert!(!stored.model.is_empty(), "model persisted too");
+        // …and peers are told to re-fetch, since a whole-document swap isn't expressible as ops.
+        let msg = rx.recv().await.unwrap();
+        assert!(msg.reload, "peers get a reload signal");
+        assert!(msg.ops.is_empty(), "and no ops to replay");
 
         let _ = std::fs::remove_file(&path);
     }

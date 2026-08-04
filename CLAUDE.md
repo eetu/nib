@@ -396,7 +396,15 @@ client-side pro pillars, all running on the core):
     `AccountSettings` (who you're signed in as, your token with copy/rotate) make the co-editing
     visible in the browser. Project CRUD is plain REST, **not** the op vocabulary — `PATCH`/`DELETE
     /api/projects/{id}`, ownership-scoped in the SQL itself so a non-owner gets the same 404 as for
-    a project that doesn't exist; a delete also drops the in-memory session. Everything backend-side is reached through a **dynamic import behind
+    a project that doesn't exist; a delete also drops the in-memory session.
+    **Ops describe edits *to* a document, so replacing the document wholesale is a separate
+    event.** `editor.importDocument` (drop / open file / paste / source-drawer apply) announces it
+    via a replace sink — the twin of `setSyncSink`; connected mode pushes the SVG to the open
+    project with `PUT`, then re-loads the server's model so node `uid`s stay shared, while a **New**
+    document detaches instead. `PUT /api/projects/{id}` updates the **live session**, not just the
+    row. Skipping any of this is how the canvas and the project silently diverge: sync stays
+    connected, later ops address nodes the backend never had, and the project ends up storing
+    something that matches neither side. Everything backend-side is reached through a **dynamic import behind
     the flag** — a static one would pull the client into the Pages bundle, so new connected-mode
     UI belongs in its own component, not inline in a shared one. A 401 on an `/api` path bounces
     to `/auth/login?next=…` from inside the fetch wrapper; any other error surfaces as
