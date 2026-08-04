@@ -21,6 +21,10 @@ and exposes its editing engine to an LLM over MCP.
   copy + rotate; it's the credential an MCP client presents. Reading or rotating it requires the
   browser session — a leaked token can't read itself back or mint its replacement.
 - **`/mcp` bypasses SSO** and authenticates with the bearer alone.
+- **Importing an SVG into an open project.** Drop a file on the canvas (or Open / Paste / edit the
+  source) while a project is open and it now goes *into* that project — pushed with
+  `PUT /api/projects/{id}`, then re-loaded from the server so every client and the LLM share the
+  same node identity. Starting a New document detaches from the project instead.
 - **Projects can be renamed and deleted** from the projects panel — double-click a row to rename
   in place, right-click for rename/delete (mirroring the Inspector's LAYERS rows). Backed by
   `PATCH`/`DELETE /api/projects/{id}`, both ownership-scoped in SQL; deleting drops the project's
@@ -34,6 +38,13 @@ and exposes its editing engine to an LLM over MCP.
 
 ### Fixed
 
+- **A document replaced while a project was open silently corrupted it.** Dropping or opening an
+  SVG swapped the canvas but left the project untouched, and sync stayed connected — so later
+  edits were ops built against the imported document but applied to the server's old one. The
+  project ended up holding a degenerate path matching neither. Whole-document swaps are now an
+  explicit event (`importDocument`) that connected mode either pushes to the project or detaches
+  on; and `PUT /api/projects/{id}` updates the **live session**, not just the row, so an attached
+  browser or MCP client sees the import instead of editing on over the top of it.
 - **Cross-tenant session bypass.** `session::open` checked project ownership only on the cold
   path, so once a project was resident in memory any authenticated user could attach to it — read
   and write — via the WebSocket, MCP `open_project`, or any MCP tool. The check now precedes the
