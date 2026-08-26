@@ -41,7 +41,9 @@
   // (parseSvg throws before load mutates anything) and the error is shown.
   function apply() {
     try {
-      editor.load(draft, editor.fileName);
+      // importDocument, not load: hand-editing the source replaces the whole document, so an open
+      // project has to receive it rather than drift from what's on screen.
+      editor.importDocument(draft, editor.fileName);
       editor.dirty = true;
       dirty = false;
       error = null;

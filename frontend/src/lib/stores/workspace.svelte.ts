@@ -115,7 +115,7 @@ class Workspace {
     this.error = null;
     try {
       const source = await file.text();
-      editor.load(source, file.name);
+      editor.importDocument(source, file.name);
       this.#clearHandle();
     } catch (e) {
       this.error = errMessage(e);
@@ -167,7 +167,7 @@ class Workspace {
   importText(source: string, name = "untitled.svg"): void {
     this.error = null;
     try {
-      editor.load(source, name);
+      editor.importDocument(source, name);
       this.#clearHandle();
     } catch (e) {
       this.error = errMessage(e);
@@ -203,7 +203,7 @@ class Workspace {
     this.error = null;
     try {
       const source = await readFile(handle);
-      editor.load(source, name);
+      editor.importDocument(source, name);
       this.#activeHandle = handle;
       this.savesInPlace = savesInPlace;
       void saveHandle(ACTIVE_FILE, handle);
