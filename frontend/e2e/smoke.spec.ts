@@ -2108,3 +2108,87 @@ test("dragging a text nested in a scaled group tracks the cursor 1:1", async ({ 
   expect(Math.abs(after.x - before.x - 24)).toBeLessThanOrEqual(2);
   expect(Math.abs(after.y - before.y)).toBeLessThanOrEqual(2);
 });
+
+// Regression (engine-specific, hence @cross): the start matrix of an element gesture is snapshotted
+// rather than held as the live `consolidate().matrix` view — Firefox mutates that object as the
+// transform attribute is written, so composing onto it made each pointermove build on the previous
+// frame. A move accelerated away from the cursor and a rotate spun far past the knob.
+test(
+  "moving and rotating an already-transformed text tracks the cursor",
+  { tag: "@cross" },
+  async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+      timeout: 30_000,
+    });
+
+    await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+    await page
+      .locator("textarea")
+      .fill(
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text transform="translate(20 40)" font-size="10" fill="#000">Hello</text></svg>`,
+      );
+    await page.keyboard.press("Meta+Enter");
+    await page.keyboard.press("v");
+    const label = page.locator("svg.canvas text[data-uid]");
+    await expect(label).toBeAttached();
+
+    // Client rects read in-page, not via Playwright's boundingBox: the mouse drives client
+    // coordinates and the editor measures the element the same way, and the two disagree in WebKit.
+    const rectOf = (l: typeof label) => l.evaluate((el) => el.getBoundingClientRect().toJSON());
+
+    const before = await rectOf(label);
+    // Selecting a label needs the pointer on painted ink, and a <text>'s client rect is roomier
+    // than its glyphs (by different amounts per engine), so probe for a point that actually hits.
+    const ink = await page.evaluate((r) => {
+      for (let fy = 0.2; fy < 0.9; fy += 0.1)
+        for (let fx = 0.05; fx < 0.9; fx += 0.05) {
+          const x = r.x + r.width * fx;
+          const y = r.y + r.height * fy;
+          if (document.elementFromPoint(x, y)?.closest("text[data-uid]")) return { x, y };
+        }
+      return null;
+    }, before);
+    if (!ink) throw new Error("no point on the label's glyphs");
+    const gx = ink.x;
+    const gy = ink.y;
+    await page.mouse.click(gx, gy);
+    await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
+    // Past the double-click interval, else the drag's mousedown reads as a double-click and opens
+    // the inline label editor instead.
+    await page.waitForTimeout(600);
+    await page.mouse.move(gx, gy);
+    await page.mouse.down();
+    await page.mouse.move(gx + 20, gy, { steps: 4 });
+    await page.mouse.move(gx + 40, gy, { steps: 4 });
+    await page.mouse.move(gx + 60, gy, { steps: 4 });
+    await page.mouse.up();
+
+    const moved = await rectOf(label);
+    // 1:1 with the cursor: the third step compounded to ~120px before the fix.
+    expect(Math.abs(moved.x - before.x - 60)).toBeLessThanOrEqual(3);
+    expect(Math.abs(moved.y - before.y)).toBeLessThanOrEqual(3);
+
+    // Rotate: the label turns by exactly the angle the knob was dragged through, around the box
+    // centre. Pre-fix each pointermove composed onto the previous frame, so the angle compounded.
+    const cx = moved.x + moved.width / 2;
+    const cy = moved.y + moved.height / 2;
+    const knob = await rectOf(page.locator("svg.canvas g.overlay circle.rotate-knob"));
+    const kx = knob.x + knob.width / 2;
+    const ky = knob.y + knob.height / 2;
+    await page.mouse.move(kx, ky);
+    await page.mouse.down();
+    await page.mouse.move(kx + 10, ky + 4, { steps: 3 });
+    await page.mouse.move(kx + 20, ky + 12, { steps: 3 });
+    await page.mouse.move(kx + 30, ky + 20, { steps: 3 });
+    await page.mouse.up();
+
+    const deg = (rad: number) => (rad * 180) / Math.PI;
+    const dragged =
+      deg(Math.atan2(ky + 20 - cy, kx + 30 - cx)) - deg(Math.atan2(ky - cy, kx - cx));
+    const matrix = await label.evaluate((el) => el.getAttribute("transform") ?? "");
+    const [, a, b] = matrix.match(/matrix\(\s*([-\d.]+)[\s,]+([-\d.]+)/) ?? [];
+    const turned = deg(Math.atan2(Number(b), Number(a)));
+    expect(Math.abs(turned - dragged)).toBeLessThanOrEqual(2);
+  },
+);
