@@ -63,6 +63,18 @@ jobs:
         if: steps.gate.outputs.image == 'true'
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
+      # The runtime is `scratch`, so the faces the image copies in are the only ones the server
+      # ever has — a renamed alpine package or a typo in the curated list would silently ship an
+      # instance that can't outline or render text. The stage runs on the build platform, so this
+      # is a couple of seconds and needs no emulation.
+      - name: Fonts are bundled
+        if: steps.gate.outputs.image == 'true'
+        run: |
+          docker buildx build --target fonts --load -t nib-fonts .
+          count=$(docker run --rm nib-fonts sh -c 'ls /fonts/*.ttf | wc -l')
+          echo "bundled faces: $count"
+          test "$count" -ge 18
+
       - name: Log in to ghcr
         if: steps.gate.outputs.image == 'true' && github.event_name != 'pull_request'
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3

@@ -13,16 +13,30 @@ FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
 # `cargo install wasm-pack` would rebuild it from source on every cache miss.
 FROM --platform=$BUILDPLATFORM rust:1-alpine AS wasm-build
 ARG WASM_PACK_VERSION=v0.15.0
-# The member is named explicitly rather than globbed: alpine's tar is BusyBox, which has no
-# --wildcards. The archive's directory name is deterministic from the version.
+WORKDIR /app
+# Copied before the tools so the wasm-bindgen CLI version can be read out of the lockfile below.
+COPY Cargo.toml Cargo.lock ./
+# Both tools follow `uname -m`, because this stage runs on the *build* platform — x86_64 in CI, but
+# aarch64 on an Apple Silicon machine, where a hardcoded arch makes the whole image unbuildable.
+# wasm-pack would fetch wasm-bindgen itself, except it only knows how to fetch an x86_64 one; taking
+# it from the release here instead is what makes the stage arch-agnostic. Its version comes from
+# Cargo.lock, so the CLI can't drift from the crate the core is compiled against (wasm-pack rejects
+# a mismatch), and a `cargo update` needs no edit here.
+#
+# Archive members are named explicitly rather than globbed: alpine's tar is BusyBox, which has no
+# --wildcards. Each archive's directory name is deterministic from its version.
 RUN apk add --no-cache curl musl-dev \
-    && ASSET="wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl" \
+    && ARCH="$(uname -m)" \
+    && WBG_VERSION="$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | cut -d'"' -f2)" \
+    && ASSET="wasm-pack-${WASM_PACK_VERSION}-${ARCH}-unknown-linux-musl" \
     && curl -sSfL "https://github.com/rustwasm/wasm-pack/releases/download/${WASM_PACK_VERSION}/${ASSET}.tar.gz" \
     | tar -xz --strip-components=1 -C /usr/local/bin "${ASSET}/wasm-pack" \
+    && WBG_ASSET="wasm-bindgen-${WBG_VERSION}-${ARCH}-unknown-linux-musl" \
+    && curl -sSfL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${WBG_VERSION}/${WBG_ASSET}.tar.gz" \
+    | tar -xz --strip-components=1 -C /usr/local/bin "${WBG_ASSET}/wasm-bindgen" \
     && wasm-pack --version \
+    && wasm-bindgen --version \
     && rustup target add wasm32-unknown-unknown
-WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
 COPY core core
 # The backend member must exist for the workspace to load, but isn't built here.
 COPY backend/Cargo.toml backend/Cargo.toml
@@ -72,7 +86,28 @@ RUN touch core/src/lib.rs backend/src/main.rs \
     && xx-cargo build --release -p nib-backend \
     && cp target/*/release/nib-backend /nib-backend
 
-# --- Stage 5: Runtime (scratch + static musl binary + dist + CA certs) ---
+# --- Stage 5: Fonts for the runtime image ---
+# `scratch` ships none, and without a face the server can neither outline a label (MCP
+# `outline_text`) nor draw one in a preview (`render_document`) — both would degrade to "no font
+# found" on the deployed instance while working fine on a developer's machine. DejaVu covers wide
+# Unicode; Liberation is metric-compatible with Arial/Times/Courier, the names real SVGs ask for,
+# so an outlined label keeps the advances (and therefore the centring) it was authored with.
+# Font files are architecture-independent, hence $BUILDPLATFORM.
+#
+# Curated, not wholesale: the two packages together are 14.8 MB, most of it faces nobody asks for
+# (Condensed cuts, ExtraLight, a TeX math face, X11 encodings). Keeping the four Liberation
+# families and DejaVu's Sans styles plus one Serif/Mono covers Latin/Greek/Cyrillic in both roman
+# and italic at roughly half the weight.
+FROM --platform=$BUILDPLATFORM alpine:3 AS fonts
+RUN apk add --no-cache font-dejavu font-liberation \
+    && mkdir -p /fonts \
+    && cp /usr/share/fonts/liberation/*.ttf /fonts/ \
+    && cd /usr/share/fonts/dejavu \
+    && cp DejaVuSans.ttf DejaVuSans-Bold.ttf DejaVuSans-Oblique.ttf DejaVuSans-BoldOblique.ttf \
+          DejaVuSerif.ttf DejaVuSansMono.ttf /fonts/ \
+    && du -sh /fonts
+
+# --- Stage 6: Runtime (scratch + static musl binary + dist + CA certs + fonts) ---
 FROM scratch AS runner
 WORKDIR /app
 LABEL org.opencontainers.image.description="nib — a direct-manipulation SVG path editor with an MCP surface"
@@ -82,13 +117,16 @@ LABEL org.opencontainers.image.source="https://github.com/eetu/nib"
 COPY --from=backend-build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=backend-build /nib-backend ./nib-backend
 COPY --from=frontend-build /app/frontend/dist ./dist
+# fontdb scans /usr/share/fonts recursively, so the faces land where it already looks. For brand
+# faces, mount a directory and point NIB_FONT_DIR at it — no rebuild needed.
+COPY --from=fonts /fonts /usr/share/fonts/nib
 
 ENV NIB_DIST=./dist
 ENV NIB_DB=sqlite:/data/nib.db
 ENV NIB_PORT=3009
 
 # The process binds 127.0.0.1; the quadlet runs with Network=host, so Traefik on the same host is
-# the only way in (the mcp-chat pattern). No font packages: resvg never loads system fonts.
+# the only way in (the mcp-chat pattern).
 USER 1000
 EXPOSE 3009
 CMD ["./nib-backend"]
