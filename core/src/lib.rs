@@ -19,10 +19,11 @@ pub mod history;
 pub mod model;
 pub mod ops;
 pub mod snap;
+pub mod text;
 
 use history::History;
 use model::document::{parse_svg, serialize_canonical, serialize_svg, tree_boolean_results};
-use model::tree::{Tree, parse_tree};
+use model::tree::{TextInfo, Tree, parse_tree};
 use model::types::{Gradient, NodeRef, PathElement, Subpath, SvgDocument};
 use ops::Op;
 
@@ -173,6 +174,31 @@ impl Editor {
     pub fn set_selected_path(&mut self, index: Option<usize>) {
         self.selected_path = index;
         self.selection = None;
+    }
+
+    /// What the `<text>` node `uid` says and which font it asks for — the host resolves that
+    /// family/weight/style to real font bytes (installed fonts in the browser, fontdb natively).
+    /// `None` unless `uid` is a flat `<text>` (see [`Tree::text_info`]).
+    pub fn text_info(&self, uid: &str) -> Option<TextInfo> {
+        self.doc.as_ref()?.tree.as_ref()?.text_info(uid)
+    }
+
+    /// Every outlinable label in the document, in document order — for a caller resolving a name
+    /// ("the title") to a target, or outlining all of them.
+    pub fn text_infos(&self) -> Vec<TextInfo> {
+        self.doc
+            .as_ref()
+            .and_then(|d| d.tree.as_ref())
+            .map(Tree::text_infos)
+            .unwrap_or_default()
+    }
+
+    /// Shape the `<text>` node `uid` with `font` and return its glyph outlines as a path `d` — the
+    /// payload of a `TextToPath` op. Pure: nothing is mutated until that op is applied.
+    /// `face_index` picks a face out of a `.ttc` collection (0 for a plain `.ttf`/`.otf`).
+    pub fn text_outline_d(&self, uid: &str, font: &[u8], face_index: u32) -> Option<String> {
+        let info = self.text_info(uid)?;
+        text::outline_d(font, face_index, &info.layout(), 3)
     }
 
     pub fn doc(&self) -> Option<&SvgDocument> {
@@ -390,6 +416,42 @@ impl Editor {
             .unwrap_or_default();
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
         nodes.serialize(&serializer).map_err(Into::into)
+    }
+
+    /// What the `<text>` node `uid` says and which font it asks for (`{text, family, weight, style,
+    /// fontSize, x, y, letterSpacing, anchor}`), so the app can find matching font bytes. `null`
+    /// when `uid` isn't a flat `<text>` — a label built from `<tspan>`s can't be outlined as one run.
+    #[wasm_bindgen(js_name = textInfo)]
+    pub fn text_info_js(&self, uid: &str) -> Result<JsValue, JsValue> {
+        let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+        self.text_info(uid)
+            .serialize(&serializer)
+            .map_err(Into::into)
+    }
+
+    /// Every outlinable label in the document, in document order — what an "outline all text"
+    /// pass walks, and how a caller starting from a name finds its target.
+    #[wasm_bindgen(js_name = textInfos)]
+    pub fn text_infos_js(&self) -> Result<JsValue, JsValue> {
+        let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+        self.text_infos().serialize(&serializer).map_err(Into::into)
+    }
+
+    /// Glyph outlines for the `<text>` node `uid`, shaped with the given font bytes, as a path `d`
+    /// — hand this to a `textToPath` op to do the conversion. `undefined` when the label can't be
+    /// outlined (not a flat `<text>`, no ink, or bytes that aren't a raw `.ttf`/`.otf`/`.ttc` face
+    /// — a compressed `.woff2` is not).
+    #[wasm_bindgen(js_name = outlineText)]
+    pub fn outline_text_js(&self, uid: &str, font: &[u8], face_index: u32) -> Option<String> {
+        self.text_outline_d(uid, font, face_index)
+    }
+
+    /// Which face inside these font bytes carries `postscriptName` — a system font is often a
+    /// collection (`Helvetica.ttc`), and the browser hands over the whole file plus the name of the
+    /// face it matched. Pass the result as `outlineText`'s `faceIndex`; 0 for a plain `.ttf`/`.otf`.
+    #[wasm_bindgen(js_name = faceIndexFor)]
+    pub fn face_index_for_js(font: &[u8], postscript_name: &str) -> u32 {
+        text::face_index_for(font, postscript_name)
     }
 
     /// Current document exported to SVG — the **canonical** export (the native model is the source

@@ -881,6 +881,246 @@ fn attr<'a>(attrs: &'a [(String, String)], key: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
+// --- text → outlines --------------------------------------------------------------------------
+
+/// Attributes that only mean something while the element still has words. They're dropped when a
+/// `<text>` converts to a `<path>`, so the resulting markup says nothing about type-setting a
+/// shape that is now pure geometry.
+fn is_type_setting_attr(key: &str) -> bool {
+    matches!(
+        key,
+        "x" | "y"
+            | "dx"
+            | "dy"
+            | "rotate"
+            | "textLength"
+            | "lengthAdjust"
+            | "text-anchor"
+            | "dominant-baseline"
+            | "alignment-baseline"
+            | "baseline-shift"
+            | "writing-mode"
+            | "letter-spacing"
+            | "word-spacing"
+            | "xml:space"
+    ) || key.starts_with("font")
+}
+
+/// The font properties in force at a node — SVG inherits these down the tree, so a `<g>` can set
+/// the size for a label that declares none.
+#[derive(Debug, Clone)]
+struct TextProps {
+    family: String,
+    weight: String,
+    style: String,
+    size: f64,
+    letter_spacing: f64,
+    anchor: String,
+}
+
+impl TextProps {
+    /// The initial values SVG starts from at the root.
+    fn root() -> TextProps {
+        TextProps {
+            family: "sans-serif".to_string(),
+            weight: "normal".to_string(),
+            style: "normal".to_string(),
+            size: 16.0,
+            letter_spacing: 0.0,
+            anchor: "start".to_string(),
+        }
+    }
+
+    /// Fold in whatever this element declares, leaving the rest inherited.
+    fn inherit(&self, attrs: &[(String, String)]) -> TextProps {
+        let style = parse_style_attr(attrs);
+        let get = |key: &str| style_or_attr(attrs, &style, key).map(str::to_string);
+        let number = |key: &str, fallback: f64| {
+            style_or_attr(attrs, &style, key)
+                .map(|v| leading_number(v, fallback))
+                .unwrap_or(fallback)
+        };
+        TextProps {
+            family: get("font-family").unwrap_or_else(|| self.family.clone()),
+            weight: get("font-weight").unwrap_or_else(|| self.weight.clone()),
+            style: get("font-style").unwrap_or_else(|| self.style.clone()),
+            size: number("font-size", self.size),
+            letter_spacing: number("letter-spacing", self.letter_spacing),
+            anchor: get("text-anchor").unwrap_or_else(|| self.anchor.clone()),
+        }
+    }
+}
+
+/// Everything the host needs to pick a font for a label, plus everything the outliner needs to
+/// shape it. The host resolves `family`/`weight`/`style` to actual font bytes (installed fonts in
+/// the browser, fontdb on the backend); the rest is pure layout.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextInfo {
+    pub uid: String,
+    /// The human-facing label (the SVG `id`), empty when it has none — what a co-author calls it.
+    pub name: String,
+    pub text: String,
+    /// The CSS font-family *list* as authored (e.g. `Inter, Helvetica, sans-serif`) — the host
+    /// walks it in order, since only it knows which faces exist.
+    pub family: String,
+    pub weight: String,
+    pub style: String,
+    #[serde(rename = "fontSize")]
+    pub font_size: f64,
+    pub x: f64,
+    pub y: f64,
+    #[serde(rename = "letterSpacing")]
+    pub letter_spacing: f64,
+    pub anchor: String,
+}
+
+impl TextInfo {
+    /// The layout half of this info — what [`crate::text::outline_d`] shapes.
+    pub fn layout(&self) -> crate::text::TextLayout {
+        crate::text::TextLayout {
+            text: self.text.clone(),
+            x: self.x,
+            y: self.y,
+            font_size: self.font_size,
+            letter_spacing: self.letter_spacing,
+            anchor: crate::text::Anchor::parse(&self.anchor),
+        }
+    }
+}
+
+/// Parse an inline `style="font-size:20px;fill:red"` into its declarations.
+fn parse_style_attr(attrs: &[(String, String)]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Some(style) = attr(attrs, "style") else {
+        return out;
+    };
+    for decl in style.split(';') {
+        if let Some((k, v)) = decl.split_once(':') {
+            out.insert(k.trim().to_lowercase(), v.trim().to_string());
+        }
+    }
+    out
+}
+
+/// A presentation property, inline `style` first (CSS beats the attribute), then the attribute.
+fn style_or_attr<'a>(
+    attrs: &'a [(String, String)],
+    style: &'a HashMap<String, String>,
+    key: &str,
+) -> Option<&'a str> {
+    style
+        .get(key)
+        .map(String::as_str)
+        .or_else(|| attr(attrs, key))
+}
+
+/// The leading number of an SVG length (`"20"`, `"20px"`, `"20 30"` → 20); `fallback` for
+/// anything relative or keyword-valued (`em`, `larger`, `normal`), which nib doesn't resolve.
+fn leading_number(value: &str, fallback: f64) -> f64 {
+    let t = value.trim_start();
+    let end = t
+        .find(|c: char| !(c.is_ascii_digit() || matches!(c, '+' | '-' | '.' | 'e' | 'E')))
+        .unwrap_or(t.len());
+    let Ok(n) = t[..end].parse::<f64>() else {
+        return fallback;
+    };
+    // Relative units resolve against the inherited size / viewport, which needs a CSS cascade nib
+    // doesn't run — so keep inheriting rather than read "1.5em" as 1.5 user units.
+    let unit = t[end..].trim_start();
+    if unit.starts_with("em") || unit.starts_with("ex") || unit.starts_with('%') {
+        fallback
+    } else {
+        n
+    }
+}
+
+/// Read `node` as an outlinable label, given the font properties it inherits. `None` for anything
+/// that isn't a flat `<text>`.
+fn text_info_of(node: &Node, props: &TextProps) -> Option<TextInfo> {
+    let Node::Element {
+        uid,
+        tag,
+        attrs,
+        children,
+        ..
+    } = node
+    else {
+        return None;
+    };
+    if tag != "text" {
+        return None;
+    }
+    // Any element child (a `<tspan>`) positions and styles its own run; one shaped string would
+    // drop that, so those labels stay Inspector-only.
+    if children.iter().any(|c| matches!(c, Node::Element { .. })) {
+        return None;
+    }
+    let text: String = children
+        .iter()
+        .filter_map(|c| match c {
+            Node::Text(t) => Some(t.as_str()),
+            _ => None,
+        })
+        .collect();
+    let style = parse_style_attr(attrs);
+    let coord = |key: &str, delta: &str| {
+        style_or_attr(attrs, &style, key)
+            .map(|v| leading_number(v, 0.0))
+            .unwrap_or(0.0)
+            + style_or_attr(attrs, &style, delta)
+                .map(|v| leading_number(v, 0.0))
+                .unwrap_or(0.0)
+    };
+    Some(TextInfo {
+        uid: uid.clone(),
+        name: attr(attrs, "id").unwrap_or_default().to_string(),
+        text,
+        family: props.family.clone(),
+        weight: props.weight.clone(),
+        style: props.style.clone(),
+        font_size: props.size,
+        x: coord("x", "dx"),
+        y: coord("y", "dy"),
+        letter_spacing: props.letter_spacing,
+        anchor: props.anchor.clone(),
+    })
+}
+
+/// Depth-first hunt for `uid`, carrying the inherited font properties down as it goes.
+fn find_text_info(node: &Node, uid: &str, inherited: &TextProps) -> Option<TextInfo> {
+    let Node::Element {
+        uid: node_uid,
+        attrs,
+        children,
+        ..
+    } = node
+    else {
+        return None;
+    };
+    let props = inherited.inherit(attrs);
+    if node_uid == uid {
+        return text_info_of(node, &props);
+    }
+    children.iter().find_map(|c| find_text_info(c, uid, &props))
+}
+
+/// Collect every outlinable label in the subtree, in document order.
+fn collect_text_infos(node: &Node, inherited: &TextProps, out: &mut Vec<TextInfo>) {
+    let Node::Element {
+        attrs, children, ..
+    } = node
+    else {
+        return;
+    };
+    let props = inherited.inherit(attrs);
+    if let Some(info) = text_info_of(node, &props) {
+        out.push(info);
+    }
+    for child in children {
+        collect_text_infos(child, &props, out);
+    }
+}
+
 fn collect_paths(node: &Node, out: &mut Vec<PathElement>) {
     let Node::Element {
         uid,
@@ -1195,6 +1435,58 @@ impl Tree {
                     *original_close = format!("</{tag}>");
                 }
                 *children = vec![Node::Text(text.to_string())];
+                *edited = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Resolve everything needed to outline the `<text>` node `uid`: its words plus the font
+    /// properties in force there, each inherited down the ancestor chain the way SVG inherits them
+    /// (a `font-size` on an enclosing `<g>` governs a label that sets none) and with an inline
+    /// `style="…"` winning over the presentation attribute, as CSS does.
+    ///
+    /// `None` for a missing node, a non-`<text>` one, or a label with element children: `<tspan>`s
+    /// carry their own positions and font properties, and flattening them into one shaped run would
+    /// silently move the words.
+    pub fn text_info(&self, uid: &str) -> Option<TextInfo> {
+        find_text_info(&self.root, uid, &TextProps::root())
+    }
+
+    /// Every label in the document that can be outlined, in document order — how a caller that
+    /// starts from a *name* ("the title") rather than a uid finds its target, and what an
+    /// "outline all text" pass walks.
+    pub fn text_infos(&self) -> Vec<TextInfo> {
+        let mut out = Vec::new();
+        collect_text_infos(&self.root, &TextProps::root(), &mut out);
+        out
+    }
+
+    /// Replace the `<text>` node `uid` with a `<path d=…>` carrying its outlined glyphs — the
+    /// destructive half of "convert to outlines". Presentation (fill/stroke/opacity/transform/
+    /// class/id) rides along so the shape looks identical; the type-setting attributes go, since
+    /// there are no words left to set. Returns whether the node was found and converted.
+    pub fn text_to_path(&mut self, uid: &str, d: &str) -> bool {
+        match self.root.find_by_uid_mut(uid) {
+            Some(Node::Element {
+                tag,
+                attrs,
+                children,
+                edited,
+                original_close,
+                ..
+            }) if tag == "text" => {
+                attrs.retain(|(k, _)| !is_type_setting_attr(k));
+                match attrs.iter_mut().find(|(k, _)| k == "d") {
+                    Some((_, v)) => *v = d.to_string(),
+                    None => attrs.push(("d".to_string(), d.to_string())),
+                }
+                *tag = "path".to_string();
+                // The words were the only children, and a `<path>` holds none — so it emits
+                // self-closing, like every other shape nib writes.
+                *children = Vec::new();
+                *original_close = String::new();
                 *edited = true;
                 true
             }

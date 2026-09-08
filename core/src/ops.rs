@@ -14,7 +14,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::model::geometry::{distance, normalize};
-use crate::model::path::{close_subpath, insert_node_at, reversed_subpath};
+use crate::model::path::{close_subpath, insert_node_at, parse_path_d, reversed_subpath};
 use crate::model::shapes::{ellipse_nodes, line_nodes, polygon_nodes, rect_nodes, star_nodes};
 use crate::model::types::{
     Gradient, NodeRef, NodeType, PathElement, PathNode, Point, Subpath, SvgDocument,
@@ -265,6 +265,14 @@ pub enum Op {
     },
     /// Replace a text-bearing element's content (its child text) — editing a `<text>` label.
     SetNodeText { uid: String, text: String },
+    /// Convert the `<text>` node `uid` into a `<path>` carrying its outlined glyphs — the words
+    /// become editable geometry (node-editable, boolean-able, offsettable) and stop being words.
+    /// Destructive and one undo step.
+    ///
+    /// The geometry travels **in the op**: whoever runs the conversion has the font and shapes it
+    /// (`crate::text::outline_d`), so a peer replaying this reproduces the author's exact outlines
+    /// without needing that font installed. Re-projects the paths — a new editable path appears.
+    TextToPath { uid: String, d: String },
     /// Add a `<text x y ...>text</text>` element at the top of z (the text tool + MCP). `uid` carried
     /// (minted if absent); `attributes` may set font-size/fill (defaults filled in if absent).
     AddText {
@@ -1041,6 +1049,23 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             .as_mut()
             .map(|t| t.set_node_text(uid, text))
             .unwrap_or(false),
+        Op::TextToPath { uid, d } => {
+            // The geometry arrives from outside (another client, MCP), so it earns the same
+            // scrutiny as any other op payload: markup that yields no path is refused rather than
+            // written in as a `<path>` nothing can render or edit.
+            if parse_path_d(d).is_empty() {
+                return false;
+            }
+            let converted = doc
+                .tree
+                .as_mut()
+                .map(|t| t.text_to_path(uid, d))
+                .unwrap_or(false);
+            if converted {
+                reproject_paths(doc); // the label became an editable path
+            }
+            converted
+        }
         Op::AddText {
             uid,
             x,
@@ -1654,6 +1679,86 @@ mod tests {
             out.contains(r#"font-size="16""#),
             "default font-size: {out}"
         );
+    }
+
+    #[test]
+    fn text_to_path_turns_a_label_into_an_editable_shape() {
+        use crate::model::document::{parse_svg, serialize_canonical};
+        let mut doc = parse_svg(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text id="label" x="10" y="20" font-size="12" fill="#f60" transform="translate(4 4)">Hi</text></svg>"##,
+        )
+        .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        assert!(doc.paths.is_empty(), "a label projects no editable path");
+        let uid = text_uid(&doc);
+
+        assert!(apply(
+            &mut doc,
+            &Op::TextToPath {
+                uid: uid.clone(),
+                d: "M 0 0 L 10 0 L 10 10 Z".into(),
+            }
+        ));
+        assert_eq!(doc.paths.len(), 1, "the label is now an editable path");
+
+        let out = serialize_canonical(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(!out.contains("<text"), "no label left: {out}");
+        assert!(out.contains("<path"), "emitted as a path: {out}");
+        // Presentation rides along; type-setting attributes don't.
+        assert!(out.contains(r##"fill="#f60""##), "fill kept: {out}");
+        assert!(out.contains(r#"id="label""#), "name kept: {out}");
+        assert!(out.contains("translate(4 4)"), "transform kept: {out}");
+        assert!(!out.contains("font-size"), "font-size dropped: {out}");
+        assert!(!out.contains(r#"x="10""#), "text position dropped: {out}");
+    }
+
+    #[test]
+    fn text_to_path_refuses_junk_geometry_and_non_text_nodes() {
+        use crate::model::document::parse_svg;
+        let mut doc = parse_svg(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="1" y="2">Hi</text><rect x="0" y="0" width="4" height="4"/></svg>"#,
+        )
+        .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        let uid = text_uid(&doc);
+        assert!(
+            !apply(
+                &mut doc,
+                &Op::TextToPath {
+                    uid: uid.clone(),
+                    d: "not a path".into()
+                }
+            ),
+            "unparseable geometry is refused"
+        );
+        let rect_uid = doc.paths[0].uid.clone();
+        assert!(
+            !apply(
+                &mut doc,
+                &Op::TextToPath {
+                    uid: rect_uid,
+                    d: "M 0 0 L 1 1 Z".into()
+                }
+            ),
+            "only a <text> converts"
+        );
+    }
+
+    /// The uid of the first `<text>` element in the document's tree.
+    fn text_uid(doc: &SvgDocument) -> String {
+        fn walk(node: &crate::model::tree::Node) -> Option<String> {
+            let crate::model::tree::Node::Element {
+                uid, tag, children, ..
+            } = node
+            else {
+                return None;
+            };
+            if tag == "text" {
+                return Some(uid.clone());
+            }
+            children.iter().find_map(walk)
+        }
+        walk(&doc.tree.as_ref().unwrap().root).expect("a <text> in the fixture")
     }
 
     #[test]

@@ -25,6 +25,7 @@ use tower_http::services::{ServeDir, ServeFile};
 mod auth;
 mod config;
 mod db;
+mod fonts;
 mod login;
 mod mcp;
 mod oidc;
@@ -317,9 +318,18 @@ async fn main() {
         cfg: cfg.clone(),
     };
 
+    // Load the fonts at boot rather than on the first label: it costs milliseconds, and a runtime
+    // with no faces (a `scratch` image built without the fonts stage, a mount that didn't land)
+    // then says so in the startup log instead of surfacing much later as "no font found" from a
+    // conversion the user was in the middle of.
+    let faces = fonts::database().len();
+    if faces == 0 {
+        tracing::warn!("no fonts available — outlining text and rendering labels will not work");
+    }
+
     let addr = SocketAddr::from(([127, 0, 0, 1], cfg.port));
     tracing::info!(
-        "nib-backend on http://{addr} (db: {}, dist: {})",
+        "nib-backend on http://{addr} (db: {}, dist: {}, fonts: {faces})",
         cfg.db_url,
         cfg.dist.display()
     );
@@ -829,8 +839,8 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// The raspi deploy-1 state: no `OIDC_*` yet, kanidm hasn't minted the client secret. nib must
-    /// stay up and answer honestly rather than crash or let anyone in.
+    /// The pre-registration state: no `OIDC_*` yet, kanidm hasn't issued the client secret. nib
+    /// must stay up and answer honestly rather than crash or let anyone in.
     #[tokio::test]
     async fn without_oidc_the_service_stays_up_and_closed() {
         let (pool, path) = test_pool("nooidc").await;

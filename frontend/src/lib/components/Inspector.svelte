@@ -26,6 +26,7 @@
   import { editor } from "$lib/stores/document.svelte";
   import { settings } from "$lib/stores/settings.svelte";
   import { tools } from "$lib/stores/tool.svelte";
+  import { outlineText } from "$lib/text/outline";
   import { scaleSubpaths, shearSubpaths } from "$lib/tools/transform";
 
   import ColorInput from "./ColorInput.svelte";
@@ -581,6 +582,13 @@
           onchange={(v) =>
             elementSel?.kind === "element" && editor.setNodeAttr(elementSel.uid, "fill", v)}
         />
+        <button
+          class="detach-btn"
+          title="turn the words into editable path geometry — node-editable, boolean-able, and it renders anywhere without the font (undo brings the text back)"
+          onclick={() => elementSel?.kind === "element" && outlineText(elementSel.uid)}
+        >
+          convert to outlines
+        </button>
       {/if}
       {#if elTag === "use"}
         <button

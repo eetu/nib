@@ -3,6 +3,7 @@
   import { editor } from "$lib/stores/document.svelte";
   import { tools } from "$lib/stores/tool.svelte";
   import { workspace } from "$lib/stores/workspace.svelte";
+  import { canOutlineText, outlineAllText, outlineText } from "$lib/text/outline";
   import { TOOL_GROUPS } from "$lib/tools";
   import { fitToView } from "$lib/view";
 
@@ -125,6 +126,16 @@
       label: "offset path inward",
       run: () => editor.offsetPath(-4),
       enabled: () => editor.selectedPathIndex !== null,
+    },
+    {
+      label: "convert text to outlines",
+      run: () => void outlineText(editor.selectedElementUid as string),
+      enabled: () => canOutlineText(editor.selectedElementUid),
+    },
+    {
+      label: "convert all text to outlines",
+      run: () => void outlineAllText(),
+      enabled: () => editor.textInfos().length > 0,
     },
     { label: "toggle snap to grid", run: () => (tools.gridEnabled = !tools.gridEnabled) },
     { label: "toggle snap to points", run: () => (tools.snapEnabled = !tools.snapEnabled) },

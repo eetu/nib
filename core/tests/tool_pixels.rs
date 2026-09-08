@@ -2,13 +2,15 @@
 //! canonical export with resvg, and assert the pixels actually changed the way the tool promises —
 //! not just that the model mutated (ops.rs unit-tests the model; this proves it *renders*).
 //!
-//! Covered here (deterministic, font-free): rotate, flip, rounded-rect, drop-shadow. Not here:
-//! **text** (resvg needs system fonts to raster glyphs — that's the manual pass), and **eyedropper**
-//! (a frontend pixel-sample → set-fill, covered by the Playwright e2e "eyedropper samples one
-//! shape's fill"). Both are noted in the roadmap's pixel-verify item.
+//! Covered here (deterministic, font-free): rotate, flip, rounded-rect, drop-shadow, and
+//! text→outlines — which is *itself* the proof, since the outlined label renders with no font
+//! loaded where the `<text>` rendered nothing. Placing a `<text>` (resvg needs system fonts to
+//! raster glyphs) stays the manual pass, as does **eyedropper** (a frontend pixel-sample →
+//! set-fill, covered by the Playwright e2e "eyedropper samples one shape's fill").
 
 mod common;
 use common::{ink_bbox, left_right_ink, pixel_at, render_fit};
+use nib_core::Editor;
 use nib_core::model::document::{parse_svg, serialize_canonical};
 use nib_core::model::types::SvgDocument;
 use nib_core::ops::{Op, ShapeSpec, apply};
@@ -170,5 +172,49 @@ fn drop_shadow_paints_ink_beyond_the_shape() {
     assert!(
         ax1 > bx1 + 4 && ay1 > by1 + 4,
         "shadow extends down-right past the shape: before max ({bx1},{by1}), after ({ax1},{ay1})"
+    );
+}
+
+/// Any real outline font off the host — the same system-font database the backend resolves with.
+/// `None` on a machine with no fonts at all, and the outlining test below then no-ops rather than
+/// failing on the environment.
+fn system_font() -> Option<Vec<u8>> {
+    let mut db = fontdb::Database::new();
+    db.load_system_fonts();
+    let id = db.faces().find(|f| f.index == 0)?.id;
+    db.with_face_data(id, |data, _| data.to_vec())
+}
+
+#[test]
+fn text_converts_to_outlines_that_render_with_no_font_loaded() {
+    let Some(font) = system_font() else { return };
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="8" y="64" font-size="48" fill="#111111">Hi</text></svg>"##;
+
+    // resvg here loads no fonts, so a `<text>` rasters to nothing — which is exactly the gap
+    // outlining closes: after conversion the same label is pure geometry that renders anywhere.
+    let (before, w, h) = render_fit(svg, 300.0);
+    assert!(
+        ink_bbox(&before, w, h).is_none(),
+        "a label needs a font to raster"
+    );
+
+    let mut editor = Editor::new();
+    editor.load_source(svg).expect("parses");
+    let label = editor.text_infos().first().cloned().expect("one label");
+    assert_eq!(label.text, "Hi");
+    let d = editor
+        .text_outline_d(&label.uid, &font, 0)
+        .expect("outlined");
+    assert!(editor.apply(&Op::TextToPath { uid: label.uid, d }));
+
+    let outlined = editor.to_svg();
+    assert!(!outlined.contains("<text"), "no label left: {outlined}");
+    let (after, w2, h2) = render_fit(&outlined, 300.0);
+    let (x0, y0, x1, y1) = ink_bbox(&after, w2, h2).expect("outlines render");
+    // Ink lands where the label sat: right of its x, and standing on the baseline.
+    assert!(x0 > 10 && x1 < w2, "ink within the artboard: {x0}..{x1}");
+    assert!(
+        y1 > h2 / 2 && y0 < y1,
+        "ink sits around the baseline: {y0}..{y1}"
     );
 }

@@ -16,6 +16,9 @@ src/lib/model/      client view helpers over the WASM data contract: types (the 
                     shape of the core's JSON), geometry math, pathToD +
                     nearestOnSubpath (render + hit-test), shapes (ellipse), STYLE_KEYS
 src/lib/snap/       client snapping over the doc mirror (nearest anchor, close-loop, grid)
+src/lib/text/       finding font bytes for "convert to outlines" (Local Font Access →
+                    picked file, cached in IndexedDB) + the flow the UI calls; the
+                    shaping itself is in the Rust core
 src/lib/canvas/     gesture statechart (XState) — idle / panning / dragging
 src/lib/tools/      pluggable editing tools + hit-testing (select / pen / circle / add / delete)
 src/lib/workspace/  File System Access API wrappers + fallbacks

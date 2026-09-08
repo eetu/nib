@@ -64,7 +64,13 @@ every instance (`list_components` shows what's defined).\n\
 (get_document gives structure; this gives pixels). Images are token-heavy — render at checkpoints, \
 not after every edit; pass a small `width` for a quick glance.\n\
 6. Structural ops (group, boolean_op, reorder) RENUMBER #indices. Call get_document afterwards before \
-you address paths by index again.\n\n\
+you address paths by index again.\n\
+7. TEXT is not a path: a label has no anchors, no #index, and no geometry to boolean or reshape — \
+get_document lists labels separately. add_text places one; outline_text converts one (or all) into \
+editable glyph outlines, after which it behaves like any other shape and renders identically \
+everywhere, with no font needed. Outlining is destructive (the words stop being editable text), so do \
+it when the shape matters more than the wording — and never as a shortcut for restyling a label, \
+which apply_op setNodeAttr does non-destructively.\n\n\
 MULTI-AGENT TIP: this loop splits well — a strong model plans + edits while reading the cheap text \
 outline; a cheaper vision pass calls render_document and reports a terse critique, so the expensive \
 context never carries images across iterations.";
@@ -203,6 +209,25 @@ fn outline(s: &ProjectSession) -> String {
             .collect();
         lines.push(format!(
             "components: {} — a `<use>` renders one; edit a part to update all",
+            names.join(", ")
+        ));
+    }
+    // Labels have no geometry, so they never appear in the path list below — say they exist, or the
+    // words in the drawing are invisible to a reader of this outline.
+    let labels = s.editor.text_infos();
+    if !labels.is_empty() {
+        let names: Vec<String> = labels
+            .iter()
+            .map(|l| {
+                if l.name.is_empty() {
+                    format!("\"{}\"", l.text.trim())
+                } else {
+                    format!("{} (\"{}\")", l.name, l.text.trim())
+                }
+            })
+            .collect();
+        lines.push(format!(
+            "text labels (not paths — no #index): {} — outline_text converts one to editable geometry",
             names.join(", ")
         ));
     }
@@ -438,9 +463,13 @@ fn shape_spec(
 
 /// Rasterize an SVG string to PNG bytes with resvg, scaled so its longest side is ~`target` px
 /// and composited on white (a preview surface — nib's canvas backdrop is orthogonal). Pure-Rust,
-/// in-process; text without embedded/system fonts won't render (this is a path editor's preview).
+/// in-process. Labels render with the host's system fonts; on a `scratch` image there are none, so
+/// `<text>` silently doesn't draw — one more reason to outline text before it leaves nib.
 fn render_png(svg: &str, target: f32) -> Result<Vec<u8>, String> {
-    let opt = usvg::Options::default();
+    let opt = usvg::Options {
+        fontdb: crate::fonts::database(),
+        ..usvg::Options::default()
+    };
     let tree = usvg::Tree::from_str(svg, &opt).map_err(|e| e.to_string())?;
     let size = tree.size();
     let (w, h) = (size.width(), size.height());
@@ -596,6 +625,60 @@ pub struct RotateParams {
     pub cx: Option<f64>,
     #[serde(default)]
     pub cy: Option<f64>,
+}
+
+/// The one label `name` refers to — by its id or its words, exact match first, then a partial one.
+/// Ambiguity is an error listing the candidates, not a guess: outlining is destructive, so picking
+/// the wrong "title" costs the co-author their text.
+fn pick_label<'a>(
+    labels: &'a [nib_core::model::tree::TextInfo],
+    name: &str,
+) -> Result<&'a nib_core::model::tree::TextInfo, ErrorData> {
+    let needle = name.trim().to_lowercase();
+    let describe = |ls: &[&nib_core::model::tree::TextInfo]| {
+        ls.iter()
+            .map(|l| {
+                if l.name.is_empty() {
+                    format!("\"{}\"", l.text)
+                } else {
+                    format!("{} (\"{}\")", l.name, l.text)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let exact: Vec<&_> = labels
+        .iter()
+        .filter(|l| l.name.to_lowercase() == needle || l.text.trim().to_lowercase() == needle)
+        .collect();
+    let matches = if exact.is_empty() {
+        labels
+            .iter()
+            .filter(|l| {
+                l.name.to_lowercase().contains(&needle) || l.text.to_lowercase().contains(&needle)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        exact
+    };
+    match matches.len() {
+        1 => Ok(matches[0]),
+        0 => Err(bad(format!(
+            "no label matches \"{name}\" — this document has: {}",
+            describe(&labels.iter().collect::<Vec<_>>())
+        ))),
+        _ => Err(bad(format!(
+            "\"{name}\" matches several labels: {} — ask which one, then use its exact id or words",
+            describe(&matches)
+        ))),
+    }
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct OutlineTextParams {
+    /// Which label to convert — its id, or the words it shows. Omit to convert every label.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -800,7 +883,7 @@ impl NibMcp {
     }
 
     #[tool(
-        description = "Render the active project to a PNG and return it as an image, so you can SEE the drawing and verify it reads correctly (get_document gives structure; this gives pixels). Image-heavy — render at checkpoints, not after every edit; pass a smaller `width` for a cheap glance. Composited on white; text needs fonts and may not render."
+        description = "Render the active project to a PNG and return it as an image, so you can SEE the drawing and verify it reads correctly (get_document gives structure; this gives pixels). Image-heavy — render at checkpoints, not after every edit; pass a smaller `width` for a cheap glance. Composited on white; labels render with the server's fonts, which may substitute a different face than the author saw."
     )]
     async fn render_document(
         &self,
@@ -886,7 +969,7 @@ impl NibMcp {
     }
 
     #[tool(
-        description = "Add a text label at (x, y) — a `<text>` element (baseline at y). Optional font size + fill. Note: text isn't a path, so it won't appear in get_document's path outline; render_document needs system fonts to show it."
+        description = "Add a text label at (x, y) — a `<text>` element (baseline at y). Optional font size + fill. Note: text isn't a path, so it has no #index and won't appear in get_document's path list (labels are listed separately); outline_text converts it to editable geometry when you need to reshape it."
     )]
     async fn add_text(
         &self,
@@ -910,6 +993,60 @@ impl NibMcp {
             return Err(bad("add_text did not apply (no active document?)"));
         }
         Ok(format!("added text \"{}\" at ({}, {})", p.text, p.x, p.y))
+    }
+
+    #[tool(
+        description = "Convert text labels to outlines: the words become an editable path of their glyph shapes, which renders identically everywhere (no font needed) and can then be node-edited, boolean'd or offset like any shape. Destructive — the label stops being text — and one undo step per label. Pass `name` to convert one (matches its id or its words); omit it to convert every label. Renumbers #indices, so call get_document after."
+    )]
+    async fn outline_text(
+        &self,
+        Parameters(p): Parameters<OutlineTextParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+
+        // Shape first (a read), then apply — so the lock isn't held across the session write, and a
+        // font that can't be found is reported before anything in the document changes.
+        let (ops, labels) = {
+            let s = sess.lock().unwrap();
+            let all = s.editor.text_infos();
+            if all.is_empty() {
+                return Err(bad("no labels in this document to outline"));
+            }
+            let targets = match &p.name {
+                Some(name) => vec![pick_label(&all, name)?],
+                None => all.iter().collect(),
+            };
+            let mut ops = Vec::new();
+            let mut labels = Vec::new();
+            for info in targets {
+                let (font, index) = crate::fonts::face_for(info).ok_or_else(|| {
+                    bad(format!(
+                        "no font on this server matches \"{}\" — outline it in the browser, which can use your installed fonts",
+                        info.family
+                    ))
+                })?;
+                let d = s
+                    .editor
+                    .text_outline_d(&info.uid, &font, index)
+                    .ok_or_else(|| bad(format!("\"{}\" produced no outlines", info.text)))?;
+                ops.push(json!({ "type": "textToPath", "uid": info.uid, "d": d }));
+                labels.push(info.text.clone());
+            }
+            (ops, labels)
+        };
+
+        let n = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
+        if n == 0 {
+            return Err(bad("outline_text did not apply (no active document?)"));
+        }
+        let s = sess.lock().unwrap();
+        Ok(format!(
+            "outlined {n} label(s) [{}] · now editable paths · #indices renumbered, call get_document · {} paths",
+            labels.join(", "),
+            count_paths(&s)
+        ))
     }
 
     #[tool(
@@ -1301,7 +1438,7 @@ impl ServerHandler for NibMcp {
 
 #[cfg(test)]
 mod tests {
-    use super::{component_info, find_by_name, render_png};
+    use super::{component_info, find_by_name, pick_label, render_png};
 
     #[test]
     fn component_info_lists_components_and_labels_parts() {
@@ -1389,5 +1526,70 @@ mod tests {
         );
         // The gap between the two instances is untouched backdrop — not one giant fill.
         assert_eq!(px(85, 50), [255, 255, 255], "gap stays white");
+    }
+
+    /// Outlining is destructive, so `outline_text`'s addressing must never guess: an exact id or
+    /// the exact words resolve, an ambiguous fragment is an error that names the candidates.
+    #[test]
+    fn pick_label_resolves_by_id_or_words_and_refuses_to_guess() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <text id="title" x="10" y="20">Hello</text>
+  <text id="subtitle" x="10" y="40">Hello again</text>
+  <text x="10" y="60">Untitled</text>
+</svg>"##;
+        let mut ed = nib_core::Editor::new();
+        ed.load_source(svg).unwrap();
+        let labels = ed.text_infos();
+        assert_eq!(labels.len(), 3, "three labels: {labels:?}");
+
+        // By id, by words, case-insensitively.
+        assert_eq!(pick_label(&labels, "title").unwrap().text, "Hello");
+        assert_eq!(pick_label(&labels, "SUBTITLE").unwrap().name, "subtitle");
+        assert_eq!(pick_label(&labels, "Untitled").unwrap().name, "");
+        // "Hello" matches one exactly even though it's a prefix of the other's words.
+        assert_eq!(pick_label(&labels, "Hello").unwrap().name, "title");
+
+        // A fragment matching two, and a miss, both fail loudly and list what's there.
+        let ambiguous = pick_label(&labels, "titl").unwrap_err().to_string();
+        assert!(
+            ambiguous.contains("title") && ambiguous.contains("subtitle"),
+            "{ambiguous}"
+        );
+        let missing = pick_label(&labels, "dragon").unwrap_err().to_string();
+        assert!(missing.contains("no label matches"), "{missing}");
+    }
+
+    /// The server-side half of outlining: resolve a face from the system font database, shape the
+    /// label with it, and apply the op. Skips on a host with no fonts (a `scratch` container), which
+    /// is the same condition the tool reports to the caller.
+    #[test]
+    fn outlines_a_label_with_a_system_font() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text id="title" x="10" y="60" font-size="40" fill="#111111">Hi</text></svg>"##;
+        let mut ed = nib_core::Editor::new();
+        ed.load_source(svg).unwrap();
+        let label = ed.text_infos().first().cloned().expect("one label");
+        let Some((font, index)) = crate::fonts::face_for(&label) else {
+            return; // no system fonts here
+        };
+        let d = ed
+            .text_outline_d(&label.uid, &font, index)
+            .expect("glyph outlines");
+        assert!(
+            ed.apply(&nib_core::ops::Op::TextToPath {
+                uid: label.uid.clone(),
+                d,
+            }),
+            "the op applies"
+        );
+        let svg_out = ed.to_svg();
+        assert!(!svg_out.contains("<text"), "label converted: {svg_out}");
+        assert!(svg_out.contains("<path"), "…into a path: {svg_out}");
+        // And it renders without any font loaded, which is the whole point.
+        let png = render_png(&svg_out, 200.0).expect("render");
+        let pm = resvg::tiny_skia::Pixmap::decode_png(&png).expect("decode");
+        assert!(
+            pm.data().as_chunks::<4>().0.iter().any(|p| p[0] < 235),
+            "outlined glyphs paint ink"
+        );
     }
 }

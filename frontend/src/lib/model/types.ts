@@ -144,6 +144,24 @@ export type SvgDocument = {
   gradients?: Gradient[];
 };
 
+/** A `<text>` label's type-setting, as the core reads it off the document (`Editor.textInfo`) —
+ *  what the app needs to find matching font bytes before outlining it. `family` is the CSS list as
+ *  authored (`Inter, Helvetica, sans-serif`), since only the host knows which faces exist. */
+export type TextInfo = {
+  uid: string;
+  /** The human-facing label (its SVG `id`), empty when it has none. */
+  name: string;
+  text: string;
+  family: string;
+  weight: string;
+  style: string;
+  fontSize: number;
+  x: number;
+  y: number;
+  letterSpacing: number;
+  anchor: string;
+};
+
 /** Addresses one anchor node inside the document — the unit of selection and
  *  the identity a drag operates on. */
 export type NodeRef = {
