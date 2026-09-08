@@ -166,6 +166,26 @@ Per-area detail in `frontend/CLAUDE.md`.
   compatibility mouse events so the double-click never reports the `<text>` itself.
   A `<text>` with element children (tspans) stays Inspector-only — a single string
   would silently flatten that structure.
+- **Text converts to outlines** (`TextToPath {uid,d}`) — the escape hatch out of the
+  previous bullet's limits: a label carries no anchor geometry, so it can't be node-edited,
+  boolean'd or offset, and it renders wrong wherever the font is missing. Converting replaces
+  the `<text>` node **in place, keeping its uid** with a `<path>` of its shaped glyphs, so it
+  projects as an ordinary editable path; presentation (fill/stroke/transform/class/id) rides
+  along, type-setting attrs (`font-*`/`x`/`y`/`text-anchor`/…) drop. Destructive + one undo
+  step, and **explicit** — a text is never auto-outlined into a boolean (`node_operands` skips
+  non-shape children, so a label in a boolean group is simply ignored until converted).
+  **Shaping lives in the core** (`core/src/text.rs`, rustybuzz + ttf-parser → HarfBuzz-grade
+  ligatures/kerning/RTL/complex scripts; ~590KB of the shipped `.wasm`), but **font bytes are a
+  host resource, not document state**: the browser reads them from the **Local Font Access API**
+  (Chromium-only, permission-gated) or a **picked `.ttf`/`.otf`/`.ttc` file, cached per
+  family+weight+style in IndexedDB (`lib/text/fonts.ts`, `lib/persistence/idb.ts`); the backend
+  resolves them with **fontdb** (`backend/src/fonts.rs`, which also gives `render_document` real
+  text; the container image bundles a curated Liberation + DejaVu set — see Deployment).
+  A `.woff2` is compressed, so it isn't a face nib can read. The op carries the
+  **computed `d`** — the author has the font, a peer replaying the op doesn't need it, which is
+  what keeps sync and MCP correct. Only a **flat** `<text>` converts (a tspan label positions
+  its own runs); `Editor::text_info`/`text_infos` resolve what's outlinable + which font it asks
+  for. Surfaces: Inspector "convert to outlines", ⌘K (one / all), MCP `outline_text`.
 - **Object vs node mode (one tool, like Figma), switched by double-click.** The
   select tool defaults to **object mode**: clicking a path selects it
   (`objectSelected` = a path selected with *no* node *and* not node-editing) and
@@ -292,8 +312,10 @@ client-side pro pillars, all running on the core):
   stamp, edit-once-propagates, plus **detach**-to-bake and **delete**-cascade) with a full MCP surface
   (`create_component`/`stamp`/`list_components`/`group_named`); **export-fidelity fixes** (canonical
   export was dropping the root `xmlns` and mangling namespaced attribute prefixes; `<use>` now emits
-  `xlink:href` back-compat). Header/rail **UX pass** (cluster dividers, centred document title,
-  consolidated tool groups).
+  `xlink:href` back-compat); **text → outlines** (`TextToPath`, shaped in-core with rustybuzz —
+  see the convention above — via the Inspector, ⌘K one/all, and MCP `outline_text`, which also
+  gave `render_document` real text through fontdb). Header/rail **UX pass** (cluster dividers,
+  centred document title, consolidated tool groups).
 - **Open issues → 1.0 (finalization — verification + polish, not new capability):**
   1. **Export fidelity on a real-SVG corpus — automated half LANDED.** `core/tests/fidelity.rs`
      rasterizes **source vs. canonical export** with resvg (a dev-dep, so it never touches the WASM
@@ -318,10 +340,11 @@ client-side pro pillars, all running on the core):
      canonically exports, rasterizes with resvg, and asserts the *pixels* changed as promised (not
      just the model): rotate 90° swaps a portrait bbox to landscape, flip-H mirrors an asymmetric
      shape's mass across the centre (bbox preserved), rounded-rect hollows the corners, drop-shadow
-     paints ink past the shape (which also confirms resvg renders `feDropShadow`). Shared resvg
-     helpers factored to `tests/common/`. **text** stays the manual pass (resvg needs system fonts to
-     raster glyphs); **eyedropper** (a frontend pixel-sample→set-fill) is covered by its Playwright
-     e2e.
+     paints ink past the shape (which also confirms resvg renders `feDropShadow`), and
+     **text→outlines** — itself the proof, since the outlined label paints ink where the `<text>`
+     rendered nothing with no fonts loaded. Shared resvg helpers factored to `tests/common/`.
+     *Placing* a `<text>` stays the manual pass (resvg needs system fonts to raster glyphs);
+     **eyedropper** (a frontend pixel-sample→set-fill) is covered by its Playwright e2e.
   4. **Large-document performance — LANDED (measured linear).** `core/tests/perf.rs` times
      parse → project → canonical-serialize + a deep apply-op at n=1k…8k (min-of-3 for noise) and
      asserts near-linear scaling (per-node growth 4k→8k stays ~1.0, gate fails >1.8 = quadratic).
@@ -363,8 +386,9 @@ client-side pro pillars, all running on the core):
     same-origin with the SPA. There is **no forward-auth tier**: nib runs its own OIDC client
     rather than sitting behind oauth2-proxy, so trusting `X-Auth-Request-*` would mean trusting
     a header nothing sets. Config is **all-four-`OIDC_*`-or-none** and discovery is **lazy**
-    (`OidcLazy`), which is what makes raspi's two-deploy kanidm bootstrap safe: deploy 1 runs
-    healthy with no OIDC and simply can't sign anyone in.
+    (`OidcLazy`), which is what makes a fleet bootstrap safe: a client secret is issued by a
+    *running* kanidm, and until it exists nib runs healthy with no OIDC and simply can't sign
+    anyone in — rather than crash-looping on an issuer that isn't up yet.
   - **Sessions** (`session.rs`): one authoritative in-memory `Editor` per open project (keyed by
     id, shared registry), hydrated **from the model** (legacy svg-only rows import once). Every edit
     funnels through `apply_ops` → `ensure_create_uid` (stamp a uid on create-ops that lack one) →
@@ -379,9 +403,12 @@ client-side pro pillars, all running on the core):
     **`find`** (resolve a co-author's *name* — "the hand" — to candidate objects with #index +
     bounds so the LLM disambiguates "left or right?" instead of guessing), `get_svg`,
     **`render_document`** (rasterize to a PNG via `resvg` + return it as an **image** so the LLM can
-    *see*/verify its work; opt-in `width` cost knob), **`apply_op`** (full op vocabulary), + ergonomic
+    *see*/verify its work; opt-in `width` cost knob — labels render with the host's system fonts via
+    fontdb, so a `scratch` image still draws none), **`apply_op`** (full op vocabulary), + ergonomic
     wrappers `add_shape` (optional `name`)/`set_style`/`boolean_op`/**`group`** (indices→`GroupNodes`
-    by tree uid)/**`rename`**. The surface is **shaped to coach the model** (mirrors the sibling
+    by tree uid)/**`rename`**/**`outline_text`** (one label by id-or-words, or all of them → editable
+    glyph outlines; ambiguity is an error listing candidates, since outlining is destructive — and
+    `get_document` now lists labels, which have no `#index`, so the LLM can see the words at all). The surface is **shaped to coach the model** (mirrors the sibling
     `../maquette`): a workflow playbook in the server `instructions`, per-tool descriptions that say
     when *not* to spend an expensive call, and mutations that return a **one-line ack** (never the
     whole doc) — so the LLM names + groups shapes into a labeled hierarchy and spends few tokens per
@@ -410,13 +437,39 @@ client-side pro pillars, all running on the core):
     to `/auth/login?next=…` from inside the fetch wrapper; any other error surfaces as
     "backend unreachable" rather than a redirect loop. Plan:
     `~/.claude/plans/happy-crunching-blum.md`.
-  - **Deployment — LANDED (v0.1.0).** A 5-stage `Dockerfile` (the family's `xx` cross-compile →
+  - **Deployment — LANDED (v0.1.0).** A 6-stage `Dockerfile` (the family's `xx` cross-compile →
     `scratch`, plus a wasm-pack stage no sibling needs, because `frontend/` consumes `core/pkg`
-    via a `link:` dep) publishes `ghcr.io/eetu/nib` for arm64 via
-    `.github/workflows/dockerimage.yaml`. `../raspi` runs it as a podman quadlet
-    (`tasks/nib.py`) on **port 3009**, `Network=host` + loopback bind with Traefik as the only
-    way in, state in `/var/lib/nib`. **Not in Traefik's `_gated_hosts`** — see the auth note
-    above. Deploy twice: kanidm mints the client secret on the first pass.
+    via a `link:` dep, and a **fonts** stage) publishes `ghcr.io/eetu/nib` for arm64 via
+    `.github/workflows/dockerimage.yaml`. **`../keel`** deploys it (Pulumi-managed quadlets;
+    successor to the deprecated pyinfra repo `../raspi`) as a **`houseApp` stamp** in
+    `src/config/services.local.ts`: `ghcr.io/eetu/nib:main` on **port 3009**, `/var/lib/nib`
+    mounted at `/data` (so the nightly snapshot covers the SQLite file), a **256MB cap**
+    (measured ~60 — twice a plain app's, since it rasterizes for MCP and holds an `Editor` per
+    open project), and **`auth: "oidc"`**, which is the one thing that changes its networking:
+    an OIDC stamp shares the **host network namespace** rather than the internal bridge, because
+    the login's back channel (discovery, token exchange, JWKS) is made by nib itself to kanidm's
+    vhost, and a bridge address is in no route allowlist. Its `OIDC_*` are composed by keel from
+    whichever entry claims the identity role, with the client secret read from **kanidm's own
+    vault item** (field `nib_client_secret`) — see the bootstrap note in the auth section above.
+    nib's own `env` (`NIB_PORT`/`NIB_DB`/`NIB_DIST`) stays the entry's, since a deployment can't
+    guess an app's variable names. The image builds on
+    either builder arch (x86_64 CI *or* an Apple Silicon machine): stage 1's wasm-pack **and**
+    wasm-bindgen come from `uname -m`-matched releases, the CLI version read out of `Cargo.lock` so
+    it can't drift from the crate (wasm-pack rejects a mismatch, and only knows how to fetch an
+    x86_64 one itself).
+    **Fonts ship in the image** (`/usr/share/fonts/nib`, ~7.5MB): a `scratch` runtime otherwise has
+    none, which would leave server-side `outline_text` with nothing to shape and `render_document`
+    drawing no words — working locally, broken deployed. The set is curated from alpine's
+    `font-liberation` + `font-dejavu` (the two packages whole are 14.8MB of Condensed/ExtraLight/
+    TeX-math faces nobody asks for): all four **Liberation** families, which are *metric-compatible*
+    with Arial/Times/Courier so an outlined label keeps its authored advances and centring, plus
+    DejaVu Sans's four styles and one Serif/Mono for wider coverage. There's no fontconfig in the
+    image, so `backend/src/fonts.rs` does its two jobs explicitly: **generic families**
+    (`sans-serif`→Liberation Sans, …, since fontdb defaults them to Microsoft core fonts nothing
+    has) and an **alias table** mapping the names documents actually carry (Arial, Helvetica,
+    Segoe UI, Inter, Georgia, Consolas, …) onto the bundled faces, with an unmatched family
+    falling back to sans-serif rather than failing the conversion. **`NIB_FONT_DIR`** adds a
+    mounted directory on top, for brand faces, without a rebuild.
     **Still ahead of production-grade: rate limits and conflict UX.**
 - **Phase D — LANDED (folded into E3):** arbitrary *nested* groups are the object tree
   itself — `GroupNodes`/`UngroupNode`/`ReorderNode`/`SetNodeHidden` on stable-id (`uid`)
