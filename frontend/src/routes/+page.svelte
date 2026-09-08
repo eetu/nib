@@ -204,6 +204,19 @@
     onSettings={() => (settingsOpen = true)}
   />
 
+  <!-- The font picker for "convert to outlines" — how every browser without the Local Font Access
+       API supplies a face, and the fallback when a family isn't installed. It lives in the DOM
+       (visually hidden, not `display:none`, so the click still opens the dialog) rather than being
+       created per use, so one element serves every call site. -->
+  <input
+    class="offscreen"
+    type="file"
+    accept=".ttf,.otf,.ttc"
+    data-font-picker
+    aria-hidden="true"
+    tabindex="-1"
+  />
+
   <!-- A workspace error (failed save/open, permission denied, bad markup) — shown regardless of
        whether a document is loaded, so save-back failures aren't silent. Clears on the next op. -->
   {#if workspace.error}
@@ -374,6 +387,16 @@
   .empty-actions .sample {
     border-color: var(--halo-accent);
     color: var(--halo-accent);
+  }
+
+  /* Out of sight but still clickable by script — `display:none` would make the file dialog a no-op
+     in some browsers. */
+  .offscreen {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
   }
 
   .errbar {

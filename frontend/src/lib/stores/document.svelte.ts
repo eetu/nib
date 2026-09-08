@@ -15,6 +15,7 @@ import type {
   ShapeSpec,
   Subpath,
   SvgDocument,
+  TextInfo,
 } from "$lib/model/types";
 import { debounce, loadState, saveState } from "$lib/persistence";
 
@@ -795,6 +796,31 @@ class DocumentStore {
       this.commit();
       this.treeVersion++;
     }
+  }
+
+  /** What the `<text>` node `uid` says and which font it asks for, so a caller can find the bytes.
+   *  `null` when it isn't a label that can be outlined as one run (a `<tspan>` label isn't). */
+  textInfo(uid: string): TextInfo | null {
+    return (this.#wasm?.textInfo(uid) as TextInfo | null) ?? null;
+  }
+
+  /** Every outlinable label in the document, in document order. */
+  textInfos(): TextInfo[] {
+    return (this.#wasm?.textInfos() as TextInfo[] | undefined) ?? [];
+  }
+
+  /** Convert the label `uid` into a path of its glyph outlines, shaped with `font` — one undo step,
+   *  after which it's an ordinary editable shape (node-editable, boolean-able). The resulting path
+   *  is selected, since the label the user was working on is now that path. Returns whether it
+   *  converted: `false` if the font can't shape it (not a raw `.ttf`/`.otf`/`.ttc`, or no ink). */
+  outlineText(uid: string, font: Uint8Array, faceIndex: number): boolean {
+    const d = this.#wasm?.outlineText(uid, font, faceIndex);
+    if (!d || !this.#apply({ type: "textToPath", uid, d })) return false;
+    this.commit();
+    this.treeVersion++;
+    const index = this.doc?.paths.findIndex((p) => p.uid === uid) ?? -1;
+    if (index >= 0) this.selectPath(index);
+    return true;
   }
 
   markSaved(): void {
