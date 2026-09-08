@@ -1,10 +1,12 @@
 //! Boot configuration, read once from the environment.
 //!
-//! The load-bearing rule here is that **OIDC is all-four-or-nothing**. raspi's two-deploy
-//! bootstrap writes `/etc/secrets/nib.env` with `SESSION_KEY` on deploy 1 and only appends the
-//! `OIDC_*` block on deploy 2 (once kanidm has generated the client secret). A *present-but-empty*
-//! `OIDC_CLIENT_SECRET` is exactly the deploy-1 state, so it must yield `None` — not a
-//! half-configured client that fails at runtime.
+//! The load-bearing rule here is that **OIDC is all-four-or-nothing**. A client secret is issued
+//! by a *running* kanidm, so on a fresh fleet install there is a window where the other three
+//! variables can be composed and that one cannot: a present-but-empty `OIDC_CLIENT_SECRET` must
+//! therefore yield `None` — the service stays up and closed — rather than a half-configured client
+//! that fails at the first login. (`../keel` deploys nib; a sealed environment there fails by name
+//! until the secret is in the vault, so this is the safety net under that bootstrap, not a stage
+//! of it.)
 
 use std::path::PathBuf;
 

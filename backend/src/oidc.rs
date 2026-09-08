@@ -192,8 +192,9 @@ pub struct VerifiedClaims {
 /// after the issuer comes up) discovers and caches, so a retry self-heals with no restart. The
 /// write lock single-flights concurrent retries so a burst makes at most one discovery call.
 ///
-/// This is also what makes raspi's **two-deploy bootstrap** safe: deploy 1 starts nib with no
-/// `OIDC_*` at all (kanidm hasn't minted the client secret yet), deploy 2 supplies them.
+/// It is also what makes a **fleet bootstrap** safe: until kanidm is running and has issued nib's
+/// client secret there are no usable `OIDC_*`, and nib boots healthy without them instead of
+/// crash-looping on an issuer that isn't there yet.
 pub struct OidcLazy {
     settings: Option<OidcSettings>,
     cached: RwLock<Option<Arc<OidcContext>>>,
