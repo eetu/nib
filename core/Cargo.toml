@@ -23,9 +23,17 @@ serde_json = "1.0.150"
 # Stable, globally-unique node ids minted at creation (carried in ops, stored in the model) so no
 # two processes ever invent a different id for the same node. `js` = getrandom's wasm backend.
 uuid = { version = "1.11.0", features = ["v4", "js"] }
+# Text → outlines (`TextToPath`). HarfBuzz-grade shaping, so ligatures/kerning/RTL/complex scripts
+# convert correctly rather than as naively concatenated glyphs; `ttf_parser` (re-exported by
+# rustybuzz, so the two can't version-skew) walks the glyph outlines. Ships in the .wasm — the
+# browser has no other way to reach glyph geometry.
+rustybuzz = "0.20.1"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.76"
+# System-font lookup for the outlining tests (and how the backend picks a face); never in the
+# .wasm — a browser has no font database.
+fontdb = "0.23.0"
 # Render-fidelity gate (tests/fidelity.rs only): rasterize source vs. canonical export and
 # pixel-diff. A dev-dep, so it never touches the WASM build — only `cargo test`. Same version the
 # backend renders with (MCP `render_document`).

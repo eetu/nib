@@ -1573,6 +1573,7 @@ dependencies = [
  "axum",
  "axum-extra",
  "base64 0.22.1",
+ "fontdb",
  "hex",
  "http-body-util",
  "nib-core",
@@ -1598,11 +1599,13 @@ dependencies = [
 name = "nib-core"
 version = "0.1.0"
 dependencies = [
+ "fontdb",
  "i_overlay",
  "indexmap 2.14.0",
  "kurbo",
  "resvg",
  "roxmltree 0.21.1",
+ "rustybuzz",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
