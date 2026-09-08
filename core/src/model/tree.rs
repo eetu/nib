@@ -74,7 +74,9 @@ fn parse_points(s: &str) -> Vec<PathNode> {
         .filter(|t| !t.is_empty())
         .filter_map(|t| t.parse::<f64>().ok())
         .collect();
-    nums.chunks_exact(2)
+    nums.as_chunks::<2>()
+        .0
+        .iter()
         .map(|p| PathNode::corner(Point::new(p[0], p[1])))
         .collect()
 }

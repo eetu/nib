@@ -270,6 +270,11 @@
     };
   }
 
+  /** A detached copy of `m` (identity when absent) — never a live SVGMatrix view of an element. */
+  function snapshotMatrix(m: DOMMatrix | undefined): DOMMatrix {
+    return m ? new DOMMatrix([m.a, m.b, m.c, m.d, m.e, m.f]) : new DOMMatrix();
+  }
+
   const round2 = (v: number) => Math.round(v * 100) / 100;
   const safeDiv = (n: number, d: number) => (Math.abs(d) < 1e-6 ? 1 : n / d);
   const matrixStr = (m: DOMMatrix) => `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})`;
@@ -394,7 +399,11 @@
     screen: Point,
   ): void {
     const el = svgEl.querySelector(`[data-uid="${CSS.escape(uid)}"]`) as SVGGraphicsElement | null;
-    const m0 = el?.transform.baseVal.consolidate()?.matrix ?? new DOMMatrix();
+    // A *copy* of the element's start matrix, deliberately: `consolidate().matrix` is live in some
+    // engines (Firefox), so keeping the reference would make every pointermove compose onto the
+    // previous frame's result instead of the gesture's start — the element runs away from the
+    // cursor, accelerating (move/rotate visibly, scale subtly).
+    const m0 = snapshotMatrix(el?.transform.baseVal.consolidate()?.matrix);
     const toLocal = localMapper(el);
     const start = toLocal(screen);
     if (kind.t === "move") {
