@@ -215,6 +215,34 @@ export async function rememberFont(info: TextInfo, font: LoadedFont): Promise<vo
   await idbPut(STORE, fontKey(info), font);
 }
 
+/** Is the Local Font Access API available at all? (Chromium only, and permission-gated.) */
+export function canReadInstalledFonts(): boolean {
+  return typeof window !== "undefined" && !!window.queryLocalFonts;
+}
+
+/**
+ * A face for `info` from this session's cache — **synchronously**, which is the point.
+ *
+ * Opening a file dialog requires the user's gesture to still be in force, and Safari only counts
+ * that within the gesture's own task: one `await` of real I/O (an IndexedDB read, say) and
+ * `input.click()` is silently ignored. So the click path has to be able to answer "do I already
+ * have this font?" without awaiting anything, and {@link warmFont} is what keeps the answer useful.
+ */
+export function cachedFont(info: TextInfo): LoadedFont | null {
+  return memory.get(fontKey(info)) ?? null;
+}
+
+/**
+ * Pull a stored face for `info` into the session cache, so a later click can find it
+ * synchronously. Called when a label is selected — ahead of the gesture, not during it.
+ */
+export async function warmFont(info: TextInfo): Promise<void> {
+  const key = fontKey(info);
+  if (memory.has(key)) return;
+  const stored = await idbGet<LoadedFont>(STORE, key);
+  if (stored) memory.set(key, stored);
+}
+
 /**
  * Font bytes for `info` without asking the user anything: the session cache, the stored one, then
  * the installed fonts. `null` means nib can't answer on its own — the caller offers

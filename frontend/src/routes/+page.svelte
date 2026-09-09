@@ -207,11 +207,13 @@
   <!-- The font picker for "convert to outlines" — how every browser without the Local Font Access
        API supplies a face, and the fallback when a family isn't installed. It lives in the DOM
        (visually hidden, not `display:none`, so the click still opens the dialog) rather than being
-       created per use, so one element serves every call site. -->
+       created per use, so one element serves every call site. The accept list names MIME types
+       as well as extensions, because Safari matches on type and greys out every file when it
+       cannot map one. -->
   <input
     class="offscreen"
     type="file"
-    accept=".ttf,.otf,.ttc,.woff2"
+    accept="font/ttf,font/otf,font/collection,font/woff2,.ttf,.otf,.ttc,.woff2"
     data-font-picker
     aria-hidden="true"
     tabindex="-1"

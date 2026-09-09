@@ -10,7 +10,16 @@ import type { TextInfo } from "$lib/model/types";
 import { editor } from "$lib/stores/document.svelte";
 import { workspace } from "$lib/stores/workspace.svelte";
 
-import { findFont, type LoadedFont, pickFontFile, rememberFont } from "./fonts";
+import {
+  cachedFont,
+  canReadInstalledFonts,
+  findFont,
+  type LoadedFont,
+  type PickedFont,
+  pickFontFile,
+  rememberFont,
+  warmFont,
+} from "./fonts";
 
 /** The family the document actually asked for first, quotes and generics included. */
 function askedFamily(info: TextInfo): string {
@@ -69,10 +78,24 @@ export async function outlineText(uid: string, allowPrompt = true): Promise<bool
     return false;
   }
 
-  let font: LoadedFont | null = await findFont(info);
-  if (!font && allowPrompt) {
+  // Everything up to opening the file dialog stays synchronous, because the dialog needs the
+  // click's user activation and Safari only honours that inside the gesture's own task — one
+  // awaited IndexedDB read and `input.click()` is ignored with no error, which looks exactly like
+  // a dead button. So: the session cache is consulted synchronously (warmFontFor fills it when a
+  // label is selected), and where there's no Local Font Access API to ask, the picker opens right
+  // here, before anything is awaited.
+  let font: LoadedFont | null = cachedFont(info);
+  let pending: Promise<PickedFont> | null = null;
+  if (!font && allowPrompt && !canReadInstalledFonts()) pending = pickFontFile(info);
+
+  // With the API available, asking it first is worth the await: it answers without a dialog, and
+  // Chromium — the only engine that has it — keeps activation across the call.
+  if (!font && !pending) font = await findFont(info);
+  if (!font && allowPrompt && !pending) pending = pickFontFile(info);
+
+  if (pending) {
     workspace.error = null;
-    const picked = await pickFontFile(info);
+    const picked = await pending;
     if (picked && "error" in picked) {
       workspace.error = picked.error;
       return false;
@@ -96,6 +119,17 @@ export async function outlineText(uid: string, allowPrompt = true): Promise<bool
 /** Whether `uid` names a label this can convert — what the UI gates its button on. */
 export function canOutlineText(uid: string | null): boolean {
   return !!uid && !!editor.textInfo(uid);
+}
+
+/**
+ * Pull the font this label would use into the session cache, so the convert click can find it
+ * without awaiting — see the activation note in {@link outlineText}. Call it when a label is
+ * selected; it prompts for nothing and is safe to fire and forget.
+ */
+export function warmFontFor(uid: string | null): void {
+  if (!uid) return;
+  const info = editor.textInfo(uid);
+  if (info) void warmFont(info);
 }
 
 /**
