@@ -8,9 +8,24 @@ on:
   push:
     branches: ["main"]
     tags: ["v*"]
-  # Dockerfile-touching PRs build (without pushing) so a broken image fails its own PR — the
-  # other CI jobs run on the runner, not in the image, and can't catch that class of break.
+  # Image-touching PRs build (without pushing) so a broken image fails its own PR — the other CI
+  # jobs run on the runner, not in the image, and can't catch that class of break.
+  #
+  # The paths are what the runner *can't* already vouch for. Rust and Svelte sources are compiled
+  # by the `backend` and `test` jobs, so a PR that only changes those cannot break the image in a
+  # way CI would miss; a Dockerfile edit, a new dependency (which may want a C toolchain the
+  # cross-build lacks) or a change to this workflow can. Unfiltered, every PR paid ~11 minutes of
+  # emulated arm64 build for nothing. Only `test` is a required check, so a PR that skips this
+  # one still merges.
   pull_request:
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/dockerimage.yaml"
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+      - "frontend/package.json"
+      - "frontend/yarn.lock"
   workflow_dispatch:
 
 env:
