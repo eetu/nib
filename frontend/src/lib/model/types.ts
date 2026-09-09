@@ -147,6 +147,20 @@ export type SvgDocument = {
 /** A `<text>` label's type-setting, as the core reads it off the document (`Editor.textInfo`) —
  *  what the app needs to find matching font bytes before outlining it. `family` is the CSS list as
  *  authored (`Inter, Helvetica, sans-serif`), since only the host knows which faces exist. */
+export type TextRun = {
+  text: string;
+  /** Where this run starts, when it says so; absent = continue from the previous run. */
+  x?: number;
+  y?: number;
+  fontSize: number;
+  letterSpacing: number;
+  anchor: string;
+  /** This run's own font properties — a `<tspan>` may differ from its label. */
+  family: string;
+  weight: string;
+  style: string;
+};
+
 export type TextInfo = {
   uid: string;
   /** The human-facing label (its SVG `id`), empty when it has none. */
@@ -160,6 +174,9 @@ export type TextInfo = {
   y: number;
   letterSpacing: number;
   anchor: string;
+  /** The label's words as positioned, styled runs: one for a plain `<text>`, one per `<tspan>`
+   *  otherwise. The fields above describe the label as a whole and mirror the first run. */
+  runs: TextRun[];
 };
 
 /** Addresses one anchor node inside the document — the unit of selection and

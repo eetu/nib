@@ -1008,7 +1008,7 @@ impl NibMcp {
 
         // Shape first (a read), then apply — so the lock isn't held across the session write, and a
         // font that can't be found is reported before anything in the document changes.
-        let (ops, labels) = {
+        let (ops, labels, overridden) = {
             let s = sess.lock().unwrap();
             let all = s.editor.text_infos();
             if all.is_empty() {
@@ -1020,6 +1020,9 @@ impl NibMcp {
             };
             let mut ops = Vec::new();
             let mut labels = Vec::new();
+            // Families a `<tspan>` asked for that the label's own font will override — one font
+            // shapes a label, so those runs change typeface and the caller should hear it.
+            let mut overridden: Vec<String> = Vec::new();
             for info in targets {
                 let (font, index) = crate::fonts::face_for(info).ok_or_else(|| {
                     bad(format!(
@@ -1033,8 +1036,13 @@ impl NibMcp {
                     .ok_or_else(|| bad(format!("\"{}\" produced no outlines", info.text)))?;
                 ops.push(json!({ "type": "textToPath", "uid": info.uid, "d": d }));
                 labels.push(info.text.clone());
+                for family in info.foreign_families() {
+                    if !overridden.iter().any(|f| f.eq_ignore_ascii_case(&family)) {
+                        overridden.push(family);
+                    }
+                }
             }
-            (ops, labels)
+            (ops, labels, overridden)
         };
 
         let n = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
@@ -1042,8 +1050,18 @@ impl NibMcp {
             return Err(bad("outline_text did not apply (no active document?)"));
         }
         let s = sess.lock().unwrap();
+        // One font shapes a whole label, so a tspan that asked for another one changed typeface.
+        // Say which, rather than leaving the model to notice from a render.
+        let note = if overridden.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " · runs asking for {} were shaped in the label's own font",
+                overridden.join(", ")
+            )
+        };
         Ok(format!(
-            "outlined {n} label(s) [{}] · now editable paths · #indices renumbered, call get_document · {} paths",
+            "outlined {n} label(s) [{}] · now editable paths{note} · #indices renumbered, call get_document · {} paths",
             labels.join(", "),
             count_paths(&s)
         ))

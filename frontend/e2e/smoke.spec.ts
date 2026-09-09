@@ -2213,15 +2213,100 @@ function systemFontPath(): string | null {
 // can't be node-edited or boolean'd, and it renders wrong wherever the font is missing. Converting
 // it to outlines is the escape hatch: shaped glyphs (rustybuzz, in the core) become an ordinary
 // editable path.
-test("converts a text label into an editable outlined path", async ({ page }) => {
+test(
+  "converts a text label into an editable outlined path",
+  { tag: "@cross" },
+  async ({ page }) => {
+    const fontPath = systemFontPath();
+    test.skip(!fontPath, "no system font on this machine to outline with");
+
+    const errors: string[] = [];
+    page.on("pageerror", (e) => errors.push(String(e)));
+
+    // Force the file-picker path: where the Local Font Access API exists it would answer first, and
+    // this test is about the fallback every other browser takes anyway.
+    await page.addInitScript(() => {
+      delete (window as unknown as { queryLocalFonts?: unknown }).queryLocalFonts;
+    });
+
+    await page.goto("/");
+    await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+      timeout: 30_000,
+    });
+
+    await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+    await page
+      .locator("textarea")
+      .fill(
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="10" y="60" font-size="40" fill="#111111">Hi</text></svg>`,
+      );
+    await page.keyboard.press("Meta+Enter");
+    await page.keyboard.press("v");
+    await expect(page.locator("svg.canvas g.artwork text")).toHaveCount(1);
+    await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(0);
+
+    // Select the label on canvas — on its glyphs, since the client rect is roomier than the ink.
+    const label = page.locator("svg.canvas text[data-uid]");
+    const box = await label.evaluate((el) => el.getBoundingClientRect().toJSON());
+    const ink = await page.evaluate((r) => {
+      for (let fy = 0.2; fy < 0.9; fy += 0.1)
+        for (let fx = 0.05; fx < 0.9; fx += 0.05) {
+          const x = r.x + r.width * fx;
+          const y = r.y + r.height * fy;
+          if (document.elementFromPoint(x, y)?.closest("text[data-uid]")) return { x, y };
+        }
+      return null;
+    }, box);
+    if (!ink) throw new Error("no point on the glyphs");
+    await page.mouse.click(ink.x, ink.y);
+
+    const [chooser] = await Promise.all([
+      page.waitForEvent("filechooser"),
+      page.getByRole("button", { name: "convert to outlines" }).click(),
+    ]);
+    await chooser.setFiles(fontPath as string);
+
+    // The label is geometry now: a path in the artwork, no <text> left.
+    await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(1);
+    await expect(page.locator("svg.canvas g.artwork text")).toHaveCount(0);
+    const d = await page.locator("svg.canvas g.artwork path").getAttribute("d");
+    expect(d?.length ?? 0).toBeGreaterThan(50);
+
+    // …and an ordinary editable shape: double-click drills into node editing. (The glyphs sit inside
+    // the label's old client rect — a `<text>` box includes side bearing — so re-probe for ink.)
+    const pathBox = await page
+      .locator("svg.canvas g.artwork path")
+      .evaluate((el) => el.getBoundingClientRect().toJSON());
+    const glyph = await page.evaluate((r) => {
+      for (let fy = 0.1; fy < 0.95; fy += 0.05)
+        for (let fx = 0.02; fx < 0.95; fx += 0.02) {
+          const x = r.x + r.width * fx;
+          const y = r.y + r.height * fy;
+          if (document.elementFromPoint(x, y)?.closest("path[data-uid]")) return { x, y };
+        }
+      return null;
+    }, pathBox);
+    if (!glyph) throw new Error("no point on the outlined glyphs");
+    await page.mouse.dblclick(glyph.x, glyph.y);
+    await expect(page.locator("svg.canvas g.overlay .anchor").first()).toBeAttached();
+
+    // Undo brings the words back — destructive, but not a one-way door.
+    await page.keyboard.press("Meta+z");
+    await expect(page.locator("svg.canvas g.artwork text")).toHaveCount(1);
+
+    expect(errors, `page errors:\n${errors.join("\n")}`).toEqual([]);
+  },
+);
+
+// Outlining a label whose family the machine doesn't have still works — some face answers — but
+// the letterforms then aren't the ones the document described. That has to be said out loud, or
+// the next person reading the drawing concludes nib mangled their text.
+test("says which font a label was outlined with when it isn't the one it asked for", async ({
+  page,
+}) => {
   const fontPath = systemFontPath();
   test.skip(!fontPath, "no system font on this machine to outline with");
 
-  const errors: string[] = [];
-  page.on("pageerror", (e) => errors.push(String(e)));
-
-  // Force the file-picker path: where the Local Font Access API exists it would answer first, and
-  // this test is about the fallback every other browser takes anyway.
   await page.addInitScript(() => {
     delete (window as unknown as { queryLocalFonts?: unknown }).queryLocalFonts;
   });
@@ -2235,14 +2320,11 @@ test("converts a text label into an editable outlined path", async ({ page }) =>
   await page
     .locator("textarea")
     .fill(
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="10" y="60" font-size="40" fill="#111111">Hi</text></svg>`,
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="10" y="60" font-size="40" font-family="Nonexistent Brand Face" fill="#111111">Hi</text></svg>`,
     );
   await page.keyboard.press("Meta+Enter");
   await page.keyboard.press("v");
-  await expect(page.locator("svg.canvas g.artwork text")).toHaveCount(1);
-  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(0);
 
-  // Select the label on canvas — on its glyphs, since the client rect is roomier than the ink.
   const label = page.locator("svg.canvas text[data-uid]");
   const box = await label.evaluate((el) => el.getBoundingClientRect().toJSON());
   const ink = await page.evaluate((r) => {
@@ -2263,35 +2345,76 @@ test("converts a text label into an editable outlined path", async ({ page }) =>
   ]);
   await chooser.setFiles(fontPath as string);
 
-  // The label is geometry now: a path in the artwork, no <text> left.
+  // It converted…
   await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(1);
-  await expect(page.locator("svg.canvas g.artwork text")).toHaveCount(0);
-  const d = await page.locator("svg.canvas g.artwork path").getAttribute("d");
-  expect(d?.length ?? 0).toBeGreaterThan(50);
+  // …and said so, naming the face it actually used. A notice, not an error.
+  const notice = page.locator(".errbar.notice");
+  await expect(notice).toContainText("outlined with");
+  await expect(notice).toContainText("Nonexistent Brand Face");
+  await expect(page.locator(".errbar[role='alert']")).toHaveCount(0);
 
-  // …and an ordinary editable shape: double-click drills into node editing. (The glyphs sit inside
-  // the label's old client rect — a `<text>` box includes side bearing — so re-probe for ink.)
-  const pathBox = await page
-    .locator("svg.canvas g.artwork path")
-    .evaluate((el) => el.getBoundingClientRect().toJSON());
-  const glyph = await page.evaluate((r) => {
+  // It's dismissible, and stays dismissed.
+  await notice.getByRole("button", { name: "dismiss notice" }).click();
+  await expect(notice).toHaveCount(0);
+});
+
+// Multi-line text is how design tools export it — one `<tspan>` per line — so this is the shape
+// real files bring in. It has to convert, and convert as the lines it is rather than as one
+// collapsed run.
+test("outlines a multi-line tspan label as separate lines", async ({ page }) => {
+  const fontPath = systemFontPath();
+  test.skip(!fontPath, "no system font on this machine to outline with");
+
+  await page.addInitScript(() => {
+    delete (window as unknown as { queryLocalFonts?: unknown }).queryLocalFonts;
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><text x="20" y="60" font-size="28" fill="#111111"><tspan x="20" y="60">first</tspan><tspan x="20" y="120">second</tspan></text></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const label = page.locator("svg.canvas text[data-uid]");
+  await expect(label).toBeAttached();
+  const before = await label.evaluate((el) => el.getBoundingClientRect().toJSON());
+
+  const ink = await page.evaluate((r) => {
     for (let fy = 0.1; fy < 0.95; fy += 0.05)
-      for (let fx = 0.02; fx < 0.95; fx += 0.02) {
+      for (let fx = 0.02; fx < 0.95; fx += 0.05) {
         const x = r.x + r.width * fx;
         const y = r.y + r.height * fy;
-        if (document.elementFromPoint(x, y)?.closest("path[data-uid]")) return { x, y };
+        if (document.elementFromPoint(x, y)?.closest("text[data-uid]")) return { x, y };
       }
     return null;
-  }, pathBox);
-  if (!glyph) throw new Error("no point on the outlined glyphs");
-  await page.mouse.dblclick(glyph.x, glyph.y);
-  await expect(page.locator("svg.canvas g.overlay .anchor").first()).toBeAttached();
+  }, before);
+  if (!ink) throw new Error("no point on the glyphs");
+  await page.mouse.click(ink.x, ink.y);
 
-  // Undo brings the words back — destructive, but not a one-way door.
-  await page.keyboard.press("Meta+z");
-  await expect(page.locator("svg.canvas g.artwork text")).toHaveCount(1);
+  const [chooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    page.getByRole("button", { name: "convert to outlines" }).click(),
+  ]);
+  await chooser.setFiles(fontPath as string);
 
-  expect(errors, `page errors:\n${errors.join("\n")}`).toEqual([]);
+  const path = page.locator("svg.canvas g.artwork path");
+  await expect(path).toHaveCount(1);
+  await expect(page.locator("svg.canvas g.artwork text")).toHaveCount(0);
+
+  // Both lines are in there: the outlines span the 60 user units between the two baselines, which
+  // one collapsed run never would.
+  const after = await path.evaluate((el) => el.getBoundingClientRect().toJSON());
+  expect(after.height).toBeGreaterThan(before.height * 0.6);
+  const d = (await path.getAttribute("d")) ?? "";
+  expect(d.length).toBeGreaterThan(100);
 });
 
 // A filter's surface is sized from the object in *device* space, so a drop shadow on a shape zoomed

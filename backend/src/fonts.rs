@@ -201,6 +201,7 @@ mod tests {
             y: 0.0,
             letter_spacing: 0.0,
             anchor: "start".into(),
+            runs: Vec::new(), // face_for only reads the family/weight/style above
         }
     }
 

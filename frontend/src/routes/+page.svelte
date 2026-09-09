@@ -207,11 +207,13 @@
   <!-- The font picker for "convert to outlines" — how every browser without the Local Font Access
        API supplies a face, and the fallback when a family isn't installed. It lives in the DOM
        (visually hidden, not `display:none`, so the click still opens the dialog) rather than being
-       created per use, so one element serves every call site. -->
+       created per use, so one element serves every call site. The accept list names MIME types
+       as well as extensions, because Safari matches on type and greys out every file when it
+       cannot map one. -->
   <input
     class="offscreen"
     type="file"
-    accept=".ttf,.otf,.ttc"
+    accept="font/ttf,font/otf,font/collection,font/woff2,.ttf,.otf,.ttc,.woff2"
     data-font-picker
     aria-hidden="true"
     tabindex="-1"
@@ -223,6 +225,18 @@
     <div class="errbar" role="alert">
       <span>{workspace.error}</span>
       <button class="errclose" aria-label="dismiss error" onclick={() => workspace.dismissError()}
+        >×</button
+      >
+    </div>
+  {/if}
+
+  <!-- A notice: something worth knowing that isn't a failure (a label outlined with a substitute
+       font, say). Same bar, calmer colours, and `status` rather than `alert` — it doesn't interrupt
+       a screen reader mid-task. -->
+  {#if workspace.notice}
+    <div class="errbar notice" role="status">
+      <span>{workspace.notice}</span>
+      <button class="errclose" aria-label="dismiss notice" onclick={() => workspace.dismissNotice()}
         >×</button
       >
     </div>
@@ -397,6 +411,12 @@
     height: 1px;
     opacity: 0;
     pointer-events: none;
+  }
+
+  .errbar.notice {
+    background: var(--halo-accent-soft);
+    color: var(--halo-text-main);
+    border-bottom: 1px solid var(--halo-border);
   }
 
   .errbar {

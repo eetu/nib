@@ -26,7 +26,7 @@
   import { editor } from "$lib/stores/document.svelte";
   import { settings } from "$lib/stores/settings.svelte";
   import { tools } from "$lib/stores/tool.svelte";
-  import { outlineText } from "$lib/text/outline";
+  import { outlineText, warmFontFor } from "$lib/text/outline";
   import { scaleSubpaths, shearSubpaths } from "$lib/tools/transform";
 
   import ColorInput from "./ColorInput.svelte";
@@ -48,6 +48,11 @@
 
   // A selected non-shape element (text/image/use) — its render node, edited generically by attr.
   const elementSel = $derived(editor.selectedElement);
+  // Selecting a label pulls its stored font into memory, so the convert click can read it without
+  // awaiting — Safari drops a file dialog opened after an await (see lib/text/outline.ts).
+  $effect(() => {
+    if (elementSel?.kind === "element" && elementSel.tag === "text") warmFontFor(elementSel.uid);
+  });
   const elTag = $derived(elementSel?.kind === "element" ? elementSel.tag : "");
   const elAttr = (k: string) => (elementSel?.kind === "element" ? (elementSel.attrs[k] ?? "") : "");
   const elText = $derived(

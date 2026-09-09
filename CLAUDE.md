@@ -175,17 +175,45 @@ Per-area detail in `frontend/CLAUDE.md`.
   step, and **explicit** — a text is never auto-outlined into a boolean (`node_operands` skips
   non-shape children, so a label in a boolean group is simply ignored until converted).
   **Shaping lives in the core** (`core/src/text.rs`, rustybuzz + ttf-parser → HarfBuzz-grade
-  ligatures/kerning/RTL/complex scripts; ~590KB of the shipped `.wasm`), but **font bytes are a
-  host resource, not document state**: the browser reads them from the **Local Font Access API**
-  (Chromium-only, permission-gated) or a **picked `.ttf`/`.otf`/`.ttc` file, cached per
+  ligatures/kerning/RTL/complex scripts), but **font bytes are a host resource, not document
+  state**: the browser reads them from the **Local Font Access API** (Chromium-only,
+  permission-gated) or a **picked `.ttf`/`.otf`/`.ttc`/`.woff2` file, cached per
   family+weight+style in IndexedDB (`lib/text/fonts.ts`, `lib/persistence/idb.ts`); the backend
   resolves them with **fontdb** (`backend/src/fonts.rs`, which also gives `render_document` real
   text; the container image bundles a curated Liberation + DejaVu set — see Deployment).
-  A `.woff2` is compressed, so it isn't a face nib can read. The op carries the
+  **`.woff2` is decoded in-core** (`wuff`, brotli-only features → Brotli plus reversing WOFF2's
+  glyph-table transform), because a font *download* is a `.woff2` — it's what someone actually has
+  on disk when they go looking for a face. Every font-taking entry point decodes it transparently;
+  `Editor.decodeWoff2` exists so the browser can *cache the decoded face* instead of decompressing
+  the same download on every conversion. Malformed bytes yield no faces rather than a panic, which
+  is how the picker rejects a non-font. **Shaping + WOFF2 are the `.wasm`'s bulk** — 895KB → 1.7MB
+  optimized (656KB gzipped), ~590KB of that rustybuzz and ~210KB the decoder; a first visit pays
+  it once, then the browser caches it. Accepted deliberately: correct shaping and the format fonts
+  actually ship in are worth more than the bytes. *If first load ever does become the problem, the
+  answer is a **smaller first-load bundle**, not less capability* — the engine splits along an
+  obvious seam (geometry + ops boot the editor; shaping and the WOFF2 decoder are only needed the
+  first time someone outlines a label), so those move to a second module fetched on demand. That
+  costs another wasm-pack target in the justfile, the Dockerfile and CI, which is why it isn't
+  worth doing before the size is felt. **A collection needs choosing:** an
+  installed face is identified by its PostScript name (`faceIndexFor`), but a picked `.ttc` says
+  nothing about which face the label wanted, so `bestFace` scores them on the asked-for slant and
+  weight — taking face 0 outlines a bold heading in regular, which reads as a shaping bug rather
+  than a wrong face. **A substitution is announced** (`workspace.notice`, the calm twin of the
+  error bar): the outlines are right either way, but they're no longer the letterforms the document
+  named, and silence there reads as nib having mangled the text. The op carries the
   **computed `d`** — the author has the font, a peer replaying the op doesn't need it, which is
-  what keeps sync and MCP correct. Only a **flat** `<text>` converts (a tspan label positions
-  its own runs); `Editor::text_info`/`text_infos` resolve what's outlinable + which font it asks
-  for. Surfaces: Inspector "convert to outlines", ⌘K (one / all), MCP `outline_text`.
+  what keeps sync and MCP correct. **A tspan label converts as the lines it is:** `TextInfo.runs`
+  is one positioned, styled run per `<tspan>` (nested ones flatten — what matters downstream is the
+  sequence of positioned strings, not the nesting), and `outline_runs_d` shapes them in order,
+  each starting where it says to and otherwise continuing from the previous run's pen, so
+  `<text>a<tspan>b</tspan></text>` reads "ab" while a two-tspan label keeps its two lines. That's
+  what makes design-tool exports (Figma/Illustrator write multi-line text as tspans) outlinable at
+  all. **One font shapes a whole label**, so a tspan asking for another family changes typeface —
+  `TextInfo::foreign_families` reports which, and both the notice and the MCP ack say so rather
+  than letting it pass silently. `Editor::text_info`/`text_infos` resolve what's outlinable + which
+  font it asks for. Surfaces: Inspector "convert to outlines", ⌘K (one / all), MCP `outline_text`.
+  *(Clicking a label to select it climbs past the `<tspan>`'s own `data-uid` — every rendered node
+  has one, and the label is the object; the run inside it isn't.)*
 - **Object vs node mode (one tool, like Figma), switched by double-click.** The
   select tool defaults to **object mode**: clicking a path selects it
   (`objectSelected` = a path selected with *no* node *and* not node-editing) and

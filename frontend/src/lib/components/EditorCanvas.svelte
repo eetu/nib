@@ -279,15 +279,23 @@
   const safeDiv = (n: number, d: number) => (Math.abs(d) < 1e-6 ? 1 : n / d);
   const matrixStr = (m: DOMMatrix) => `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})`;
 
+  // Element types that are objects in their own right — the ones a click can select.
+  const SELECTABLE_TAGS = new Set(["text", "image", "use"]);
+
   // The uid of a selectable opaque element (text/image/use) under the pointer, via the DOM node's
   // data-uid — used only when the model hit-test misses (shapes take priority).
+  //
+  // It climbs rather than taking the nearest `data-uid`: every rendered node carries one, so a
+  // click on a `<tspan>` inside a label lands on the tspan's uid, which is not an object anyone
+  // selects. The label is the object; the run inside it is part of that label.
   function elementHit(e: PointerEvent): { uid: string; el: Element } | null {
-    const el = (e.target as Element | null)?.closest("[data-uid]") ?? null;
-    if (!el) return null;
-    const uid = (el as HTMLElement).dataset.uid;
-    const tag = el.tagName.toLowerCase();
-    if (uid && !pathByUid.has(uid) && (tag === "text" || tag === "image" || tag === "use"))
-      return { uid, el };
+    let el = (e.target as Element | null)?.closest("[data-uid]") ?? null;
+    while (el) {
+      const uid = (el as HTMLElement).dataset.uid;
+      const tag = el.tagName.toLowerCase();
+      if (uid && !pathByUid.has(uid) && SELECTABLE_TAGS.has(tag)) return { uid, el };
+      el = el.parentElement?.closest("[data-uid]") ?? null;
+    }
     return null;
   }
 

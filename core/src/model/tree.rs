@@ -951,6 +951,28 @@ impl TextProps {
     }
 }
 
+/// One positioned, styled stretch of a label's words. A flat `<text>` is a single run; a label
+/// built from `<tspan>`s is one run per tspan, which is how multi-line text arrives from every
+/// design tool that exports SVG.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextRun {
+    pub text: String,
+    /// Where this run starts, when it says so. `None` = continue from the previous run's pen.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+    #[serde(rename = "fontSize")]
+    pub font_size: f64,
+    #[serde(rename = "letterSpacing")]
+    pub letter_spacing: f64,
+    pub anchor: String,
+    /// The font properties in force for *this* run — a tspan may differ from its label.
+    pub family: String,
+    pub weight: String,
+    pub style: String,
+}
+
 /// Everything the host needs to pick a font for a label, plus everything the outliner needs to
 /// shape it. The host resolves `family`/`weight`/`style` to actual font bytes (installed fonts in
 /// the browser, fontdb on the backend); the rest is pure layout.
@@ -972,19 +994,41 @@ pub struct TextInfo {
     #[serde(rename = "letterSpacing")]
     pub letter_spacing: f64,
     pub anchor: String,
+    /// The label's words as positioned, styled runs — one for a flat `<text>`, one per `<tspan>`
+    /// otherwise. This is what gets shaped; the fields above describe the label as a whole (which
+    /// font to fetch, what it says) and mirror the first run.
+    pub runs: Vec<TextRun>,
 }
 
 impl TextInfo {
-    /// The layout half of this info — what [`crate::text::outline_d`] shapes.
-    pub fn layout(&self) -> crate::text::TextLayout {
-        crate::text::TextLayout {
-            text: self.text.clone(),
-            x: self.x,
-            y: self.y,
-            font_size: self.font_size,
-            letter_spacing: self.letter_spacing,
-            anchor: crate::text::Anchor::parse(&self.anchor),
+    /// The layout half of this info — what [`crate::text::outline_runs_d`] shapes.
+    pub fn layout(&self) -> Vec<crate::text::RunLayout> {
+        self.runs
+            .iter()
+            .map(|r| crate::text::RunLayout {
+                text: r.text.clone(),
+                x: r.x,
+                y: r.y,
+                font_size: r.font_size,
+                letter_spacing: r.letter_spacing,
+                anchor: crate::text::Anchor::parse(&r.anchor),
+            })
+            .collect()
+    }
+
+    /// Families this label's runs ask for that aren't the label's own — the tspans a single-font
+    /// conversion will shape in the wrong typeface, so a caller can say so.
+    pub fn foreign_families(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for run in &self.runs {
+            if run.text.trim().is_empty() || run.family.eq_ignore_ascii_case(&self.family) {
+                continue;
+            }
+            if !out.iter().any(|f| f.eq_ignore_ascii_case(&run.family)) {
+                out.push(run.family.clone());
+            }
         }
+        out
     }
 }
 
@@ -1035,7 +1079,7 @@ fn leading_number(value: &str, fallback: f64) -> f64 {
 }
 
 /// Read `node` as an outlinable label, given the font properties it inherits. `None` for anything
-/// that isn't a flat `<text>`.
+/// that isn't a `<text>` with words in it.
 fn text_info_of(node: &Node, props: &TextProps) -> Option<TextInfo> {
     let Node::Element {
         uid,
@@ -1050,40 +1094,91 @@ fn text_info_of(node: &Node, props: &TextProps) -> Option<TextInfo> {
     if tag != "text" {
         return None;
     }
-    // Any element child (a `<tspan>`) positions and styles its own run; one shaped string would
-    // drop that, so those labels stay Inspector-only.
-    if children.iter().any(|c| matches!(c, Node::Element { .. })) {
-        return None;
+    let label_props = props;
+    let mut runs = Vec::new();
+    collect_runs(children, label_props, attrs, &mut runs);
+    if runs.iter().all(|r| r.text.trim().is_empty()) {
+        return None; // nothing to outline
     }
-    let text: String = children
-        .iter()
-        .filter_map(|c| match c {
-            Node::Text(t) => Some(t.as_str()),
-            _ => None,
-        })
-        .collect();
-    let style = parse_style_attr(attrs);
-    let coord = |key: &str, delta: &str| {
-        style_or_attr(attrs, &style, key)
-            .map(|v| leading_number(v, 0.0))
-            .unwrap_or(0.0)
-            + style_or_attr(attrs, &style, delta)
-                .map(|v| leading_number(v, 0.0))
-                .unwrap_or(0.0)
-    };
     Some(TextInfo {
         uid: uid.clone(),
         name: attr(attrs, "id").unwrap_or_default().to_string(),
-        text,
-        family: props.family.clone(),
-        weight: props.weight.clone(),
-        style: props.style.clone(),
-        font_size: props.size,
-        x: coord("x", "dx"),
-        y: coord("y", "dy"),
-        letter_spacing: props.letter_spacing,
-        anchor: props.anchor.clone(),
+        // The whole label as one string — what a human or an LLM calls it, whatever it's built from.
+        text: runs.iter().map(|r| r.text.as_str()).collect(),
+        family: label_props.family.clone(),
+        weight: label_props.weight.clone(),
+        style: label_props.style.clone(),
+        font_size: label_props.size,
+        x: runs.first().and_then(|r| r.x).unwrap_or(0.0),
+        y: runs.first().and_then(|r| r.y).unwrap_or(0.0),
+        letter_spacing: label_props.letter_spacing,
+        anchor: label_props.anchor.clone(),
+        runs,
     })
+}
+
+/// The `x`/`y` an element positions its text at, if it states one. `None` means "carry on from
+/// where the last run ended" — which is what a `<tspan>` with no position does, and the difference
+/// between `<text>Hello <tspan>world</tspan></text>` reading as one line or two words stacked.
+fn own_position(attrs: &[(String, String)]) -> (Option<f64>, Option<f64>) {
+    let style = parse_style_attr(attrs);
+    let coord = |key: &str, delta: &str| {
+        let base = style_or_attr(attrs, &style, key).map(|v| leading_number(v, 0.0));
+        let shift = style_or_attr(attrs, &style, delta)
+            .map(|v| leading_number(v, 0.0))
+            .unwrap_or(0.0);
+        base.map(|b| b + shift)
+    };
+    (coord("x", "dx"), coord("y", "dy"))
+}
+
+/// Flatten a label's children into runs, in document order: each stretch of text with the font
+/// properties in force there and whatever position its element states.
+///
+/// A `<tspan>` is a run of its own because it can move and restyle itself; nested ones flatten the
+/// same way, since what matters downstream is the sequence of positioned, styled strings — not how
+/// deeply the markup nested them.
+fn collect_runs(
+    children: &[Node],
+    props: &TextProps,
+    container_attrs: &[(String, String)],
+    out: &mut Vec<TextRun>,
+) {
+    let (cx, cy) = own_position(container_attrs);
+    // The container's own position belongs to whatever text starts inside it.
+    let mut pending = (cx, cy);
+    for child in children {
+        match child {
+            Node::Text(text) => {
+                out.push(TextRun {
+                    text: text.clone(),
+                    x: pending.0.take(),
+                    y: pending.1.take(),
+                    font_size: props.size,
+                    letter_spacing: props.letter_spacing,
+                    anchor: props.anchor.clone(),
+                    family: props.family.clone(),
+                    weight: props.weight.clone(),
+                    style: props.style.clone(),
+                });
+            }
+            Node::Element {
+                tag,
+                attrs,
+                children: inner,
+                hidden: false,
+                ..
+            } if tag == "tspan" => {
+                collect_runs(inner, &props.inherit(attrs), attrs, out);
+                // A positioned tspan consumed the pending start; an unpositioned one advanced the
+                // pen, so either way the next sibling text continues from there.
+                pending = (None, None);
+            }
+            // Anything else a `<text>` can hold (a hidden tspan, `<a>`, a comment) contributes no
+            // glyphs of its own.
+            _ => {}
+        }
+    }
 }
 
 /// Depth-first hunt for `uid`, carrying the inherited font properties down as it goes.

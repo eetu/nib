@@ -178,7 +178,7 @@ impl Editor {
 
     /// What the `<text>` node `uid` says and which font it asks for — the host resolves that
     /// family/weight/style to real font bytes (installed fonts in the browser, fontdb natively).
-    /// `None` unless `uid` is a flat `<text>` (see [`Tree::text_info`]).
+    /// `None` unless `uid` is a `<text>` with words in it (see [`Tree::text_info`]).
     pub fn text_info(&self, uid: &str) -> Option<TextInfo> {
         self.doc.as_ref()?.tree.as_ref()?.text_info(uid)
     }
@@ -198,7 +198,7 @@ impl Editor {
     /// `face_index` picks a face out of a `.ttc` collection (0 for a plain `.ttf`/`.otf`).
     pub fn text_outline_d(&self, uid: &str, font: &[u8], face_index: u32) -> Option<String> {
         let info = self.text_info(uid)?;
-        text::outline_d(font, face_index, &info.layout(), 3)
+        text::outline_runs_d(font, face_index, &info.layout(), 3)
     }
 
     pub fn doc(&self) -> Option<&SvgDocument> {
@@ -420,7 +420,8 @@ impl Editor {
 
     /// What the `<text>` node `uid` says and which font it asks for (`{text, family, weight, style,
     /// fontSize, x, y, letterSpacing, anchor}`), so the app can find matching font bytes. `null`
-    /// when `uid` isn't a flat `<text>` — a label built from `<tspan>`s can't be outlined as one run.
+    /// plus its `runs` — one per `<tspan>`, so a multi-line label converts as the lines it is.
+    /// `null` when `uid` isn't a `<text>`, or holds no words.
     #[wasm_bindgen(js_name = textInfo)]
     pub fn text_info_js(&self, uid: &str) -> Result<JsValue, JsValue> {
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
@@ -439,11 +440,32 @@ impl Editor {
 
     /// Glyph outlines for the `<text>` node `uid`, shaped with the given font bytes, as a path `d`
     /// — hand this to a `textToPath` op to do the conversion. `undefined` when the label can't be
-    /// outlined (not a flat `<text>`, no ink, or bytes that aren't a raw `.ttf`/`.otf`/`.ttc` face
+    /// outlined (not a `<text>`, no ink, or bytes that aren't a raw `.ttf`/`.otf`/`.ttc` face
     /// — a compressed `.woff2` is not).
     #[wasm_bindgen(js_name = outlineText)]
     pub fn outline_text_js(&self, uid: &str, font: &[u8], face_index: u32) -> Option<String> {
         self.text_outline_d(uid, font, face_index)
+    }
+
+    /// The sfnt bytes inside a `.woff2`, or `undefined` if these bytes aren't one (already a raw
+    /// face, or not a font). Every font-taking method decodes WOFF2 transparently, so this is only
+    /// worth calling to *store* the decoded face — a host that caches fonts saves decompressing the
+    /// same download on every conversion.
+    #[wasm_bindgen(js_name = decodeWoff2)]
+    pub fn decode_woff2_js(font: &[u8]) -> Option<Vec<u8>> {
+        text::woff2_to_sfnt(font)
+    }
+
+    /// Every face inside these font bytes (`{index, family, style, weight, italic}` each) — how a
+    /// caller holding only a picked file chooses between the faces of a `.ttc` collection. An empty
+    /// array means these aren't bytes nib can shape with (a compressed `.woff2`, say), which is
+    /// worth knowing before offering to outline anything with them.
+    #[wasm_bindgen(js_name = facesIn)]
+    pub fn faces_in_js(font: &[u8]) -> Result<JsValue, JsValue> {
+        let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+        text::faces_in(font)
+            .serialize(&serializer)
+            .map_err(Into::into)
     }
 
     /// Which face inside these font bytes carries `postscriptName` — a system font is often a

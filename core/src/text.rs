@@ -17,6 +17,7 @@
 use kurbo::BezPath;
 use rustybuzz::ttf_parser::{GlyphId, OutlineBuilder};
 use rustybuzz::{Face, UnicodeBuffer};
+use serde::{Deserialize, Serialize};
 
 use crate::model::path::{parse_path_d, path_to_d_prec};
 
@@ -50,6 +51,33 @@ pub struct TextLayout {
     pub font_size: f64,
     pub letter_spacing: f64,
     pub anchor: Anchor,
+}
+
+/// One run of a multi-part label (a `<tspan>`, or the text around them). Same as a
+/// [`TextLayout`] except the position is optional: a run that states none continues from wherever
+/// the previous run's pen ended up, which is what makes `<text>a<tspan>b</tspan></text>` read as
+/// "ab" rather than stacking both at the same origin.
+#[derive(Debug, Clone)]
+pub struct RunLayout {
+    pub text: String,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub font_size: f64,
+    pub letter_spacing: f64,
+    pub anchor: Anchor,
+}
+
+impl From<&TextLayout> for RunLayout {
+    fn from(l: &TextLayout) -> Self {
+        RunLayout {
+            text: l.text.clone(),
+            x: Some(l.x),
+            y: Some(l.y),
+            font_size: l.font_size,
+            letter_spacing: l.letter_spacing,
+            anchor: l.anchor,
+        }
+    }
 }
 
 /// Accumulates one glyph's outline into a document-space `BezPath`. Font outlines are Y-up in
@@ -102,12 +130,42 @@ impl OutlineBuilder for Outliner {
     }
 }
 
+/// Is this a WOFF2 file? Its four-byte signature, per the spec.
+fn is_woff2(font: &[u8]) -> bool {
+    font.starts_with(b"wOF2")
+}
+
+/// The raw font a shaper can read, out of whatever the host handed over: a `.woff2` is a Brotli-
+/// compressed sfnt with its glyph table transformed, so it decompresses to real font bytes here;
+/// anything else is already one and passes through untouched.
+///
+/// This matters because `.woff2` is what a font *download* is — Google Fonts and friends serve
+/// nothing else — so it's exactly the file someone has on disk when they go looking for a face.
+/// Returns `None` when the bytes are neither a readable face nor a WOFF2 that decodes.
+fn as_sfnt(font: &[u8]) -> Option<std::borrow::Cow<'_, [u8]>> {
+    if !is_woff2(font) {
+        return Some(std::borrow::Cow::Borrowed(font));
+    }
+    wuff::decompress_woff2(font)
+        .ok()
+        .map(std::borrow::Cow::Owned)
+}
+
+/// Decompress a `.woff2` to the sfnt bytes inside it, or `None` if these bytes aren't one (already
+/// a raw face, or not a font at all). Hosts use this to store the decoded face rather than
+/// decompressing it again on every conversion.
+pub fn woff2_to_sfnt(font: &[u8]) -> Option<Vec<u8>> {
+    is_woff2(font).then(|| wuff::decompress_woff2(font).ok())?
+}
+
 /// Which face inside `font` is the one named `postscript_name` — the answer matters because a
 /// system font is often a *collection* (`Helvetica.ttc` holds regular, bold, italic, …) and the
 /// browser's Local Font Access API hands over the whole collection plus the PostScript name of the
 /// face the author asked for. Falls back to 0 (a plain `.ttf`/`.otf`, or a name that isn't in
 /// there), which is also what a caller with no name should pass.
 pub fn face_index_for(font: &[u8], postscript_name: &str) -> u32 {
+    let Some(font) = as_sfnt(font) else { return 0 };
+    let font = font.as_ref();
     let count = rustybuzz::ttf_parser::fonts_in_collection(font).unwrap_or(1);
     (0..count)
         .find(|&i| {
@@ -119,6 +177,58 @@ pub fn face_index_for(font: &[u8], postscript_name: &str) -> u32 {
             })
         })
         .unwrap_or(0)
+}
+
+/// One face inside a font file — what a host needs to choose between them when nothing else names
+/// the one it wants (a picked `.ttc` arrives as bytes and a filename, no more).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FaceInfo {
+    /// Pass as `outline_d`'s `face_index`.
+    pub index: u32,
+    /// Family name (`Liberation Sans`), empty if the face declares none.
+    pub family: String,
+    /// Style within the family (`Bold Italic`).
+    pub style: String,
+    /// OS/2 weight class, 400 = regular, 700 = bold.
+    pub weight: u16,
+    pub italic: bool,
+}
+
+/// Read the name-table entry `name_id` off a face.
+fn face_name(face: &rustybuzz::ttf_parser::Face, name_id: u16) -> Option<String> {
+    face.names()
+        .into_iter()
+        .find(|n| n.name_id == name_id)
+        .and_then(|n| n.to_string())
+}
+
+/// Every face in these bytes. Empty when they aren't a font nib can read — which is also the
+/// cheapest way for a caller to tell a `.woff2` (compressed) from a raw `.ttf`/`.otf`/`.ttc`
+/// *before* it tries to shape anything with it.
+pub fn faces_in(font: &[u8]) -> Vec<FaceInfo> {
+    let Some(font) = as_sfnt(font) else {
+        return Vec::new();
+    };
+    let font = font.as_ref();
+    let count = rustybuzz::ttf_parser::fonts_in_collection(font).unwrap_or(1);
+    (0..count)
+        .filter_map(|index| {
+            let face = rustybuzz::ttf_parser::Face::parse(font, index).ok()?;
+            Some(FaceInfo {
+                index,
+                // Name ids 1/2 are the family and its style; 16/17 are the typographic pair, which
+                // is the one that tells "Light" apart from "Regular" in a large family.
+                family: face_name(&face, 16)
+                    .or_else(|| face_name(&face, 1))
+                    .unwrap_or_default(),
+                style: face_name(&face, 17)
+                    .or_else(|| face_name(&face, 2))
+                    .unwrap_or_default(),
+                weight: face.weight().to_number(),
+                italic: face.is_italic() || face.is_oblique(),
+            })
+        })
+        .collect()
 }
 
 /// Shape `layout`'s text with the given font and return the glyph outlines as a path `d` — the
@@ -133,59 +243,89 @@ pub fn outline_d(
     layout: &TextLayout,
     precision: usize,
 ) -> Option<String> {
-    let face = Face::from_slice(font, face_index)?;
+    outline_runs_d(font, face_index, &[layout.into()], precision)
+}
+
+/// Shape a label's `runs` — a flat `<text>` is one, a tspan label is several — into a single path
+/// `d`. Runs lay out left to right in document order, each starting where it says to and otherwise
+/// continuing from the previous run's pen, so a multi-line label keeps its lines and an inline
+/// tspan keeps its place in the sentence.
+///
+/// One font shapes every run. A tspan asking for a different family is shaped in this one anyway
+/// (see `TextInfo::foreign_families`, which lets the caller say so) — the alternative is refusing
+/// to convert the label at all, which is worse for the common case where the tspan only moved.
+pub fn outline_runs_d(
+    font: &[u8],
+    face_index: u32,
+    runs: &[RunLayout],
+    precision: usize,
+) -> Option<String> {
+    let font = as_sfnt(font)?;
+    let face = Face::from_slice(font.as_ref(), face_index)?;
     let upem = f64::from(face.units_per_em());
-    if upem <= 0.0 || layout.font_size <= 0.0 {
+    if upem <= 0.0 {
         return None;
     }
-    let scale = layout.font_size / upem;
-
-    let mut buffer = UnicodeBuffer::new();
-    buffer.push_str(&layout.text);
-    // Script/direction/language read off the text itself — what makes an RTL run lay out RTL.
-    buffer.guess_segment_properties();
-    let glyphs = rustybuzz::shape(&face, &[], buffer);
-
-    let positions = glyphs.glyph_positions();
-    let infos = glyphs.glyph_infos();
-    if infos.is_empty() {
-        return None;
-    }
-
-    // The run's total advance decides where `text-anchor: middle/end` starts drawing. Letter
-    // spacing lands *between* glyphs, so it counts one fewer time than there are glyphs.
-    let advance: f64 = positions
-        .iter()
-        .map(|p| f64::from(p.x_advance) * scale)
-        .sum::<f64>()
-        + layout.letter_spacing * (infos.len().saturating_sub(1)) as f64;
-    let start_x = match layout.anchor {
-        Anchor::Start => layout.x,
-        Anchor::Middle => layout.x - advance / 2.0,
-        Anchor::End => layout.x - advance,
-    };
 
     let mut out = Outliner {
         path: BezPath::new(),
         pen_x: 0.0,
         pen_y: 0.0,
-        scale,
+        scale: 1.0,
         open: false,
     };
-    let mut cursor_x = start_x;
-    let mut cursor_y = layout.y;
-    for (info, pos) in infos.iter().zip(positions.iter()) {
-        out.pen_x = cursor_x + f64::from(pos.x_offset) * scale;
-        out.pen_y = cursor_y - f64::from(pos.y_offset) * scale;
-        out.open = false;
-        // A blank glyph (space) outlines to nothing — it still advances the pen.
-        face.outline_glyph(GlyphId(info.glyph_id as u16), &mut out);
-        if out.open {
-            out.path.close_path();
-            out.open = false;
+    // The pen carries across runs; a run with its own x/y moves it first.
+    let mut cursor_x = 0.0;
+    let mut cursor_y = 0.0;
+
+    for run in runs {
+        if run.font_size <= 0.0 {
+            continue;
         }
-        cursor_x += f64::from(pos.x_advance) * scale + layout.letter_spacing;
-        cursor_y -= f64::from(pos.y_advance) * scale;
+        let scale = run.font_size / upem;
+        out.scale = scale;
+
+        let mut buffer = UnicodeBuffer::new();
+        buffer.push_str(&run.text);
+        // Script/direction/language read off the text itself — what makes an RTL run lay out RTL.
+        buffer.guess_segment_properties();
+        let glyphs = rustybuzz::shape(&face, &[], buffer);
+        let positions = glyphs.glyph_positions();
+        let infos = glyphs.glyph_infos();
+        if infos.is_empty() {
+            continue;
+        }
+
+        // This run's total advance decides where `text-anchor: middle/end` starts it. Letter
+        // spacing lands *between* glyphs, so it counts one fewer time than there are glyphs. Each
+        // positioned run is its own anchored chunk, which is exactly how SVG anchors a tspan that
+        // states an x.
+        let advance: f64 = positions
+            .iter()
+            .map(|p| f64::from(p.x_advance) * scale)
+            .sum::<f64>()
+            + run.letter_spacing * (infos.len().saturating_sub(1)) as f64;
+        let origin_x = run.x.unwrap_or(cursor_x);
+        cursor_y = run.y.unwrap_or(cursor_y);
+        cursor_x = match run.anchor {
+            Anchor::Start => origin_x,
+            Anchor::Middle => origin_x - advance / 2.0,
+            Anchor::End => origin_x - advance,
+        };
+
+        for (info, pos) in infos.iter().zip(positions.iter()) {
+            out.pen_x = cursor_x + f64::from(pos.x_offset) * scale;
+            out.pen_y = cursor_y - f64::from(pos.y_offset) * scale;
+            out.open = false;
+            // A blank glyph (space) outlines to nothing — it still advances the pen.
+            face.outline_glyph(GlyphId(info.glyph_id as u16), &mut out);
+            if out.open {
+                out.path.close_path();
+                out.open = false;
+            }
+            cursor_x += f64::from(pos.x_advance) * scale + run.letter_spacing;
+            cursor_y -= f64::from(pos.y_advance) * scale;
+        }
     }
 
     let d = out.path.to_svg();
@@ -289,5 +429,191 @@ mod tests {
         assert!(outline_d(&font, 0, &layout("   ", Anchor::Start), 3).is_none());
         assert!(outline_d(&font, 0, &layout("", Anchor::Start), 3).is_none());
         assert!(outline_d(b"not a font", 0, &layout("Hi", Anchor::Start), 3).is_none());
+    }
+
+    #[test]
+    fn faces_in_lists_what_a_file_holds() {
+        let Some(font) = test_font() else { return };
+        let faces = faces_in(&font);
+        assert!(!faces.is_empty(), "a real font has at least one face");
+        // Indices are exactly the ones `outline_d` accepts. The *name* is whatever the face
+        // declares: plenty of fonts on a random machine have no readable name table (a CI runner's
+        // first system face is one), and reporting that as empty is the documented behaviour — so
+        // this asserts the parts a caller relies on, and `a_real_woff2_decodes_and_outlines` covers
+        // naming against a file we control.
+        for (i, face) in faces.iter().enumerate() {
+            assert_eq!(face.index as usize, i, "index matches position: {face:?}");
+            assert!(
+                (100..=1000).contains(&face.weight),
+                "plausible OS/2 weight: {face:?}"
+            );
+            assert!(
+                outline_d(&font, face.index, &layout("Hi", Anchor::Start), 3).is_some(),
+                "every listed face shapes: {face:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn faces_in_rejects_what_cannot_be_shaped() {
+        // The cheap pre-check a host makes before offering to outline: no faces, no shaping. A
+        // compressed `.woff2` lands here too — it starts `wOF2` and holds no readable tables.
+        assert!(faces_in(b"not a font").is_empty());
+        assert!(faces_in(b"wOF2\x00\x01\x00\x00").is_empty());
+    }
+
+    /// Multi-line text is how every design tool exports it: one `<tspan>` per line, each stating
+    /// its own x/y. Those lines have to survive the conversion as lines.
+    #[test]
+    fn a_tspan_label_outlines_as_positioned_runs() {
+        use crate::model::document::parse_svg;
+        let Some(font) = test_font() else { return };
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><text x="10" y="40" font-size="20"><tspan x="10" y="40">first</tspan><tspan x="10" y="80">second</tspan></text></svg>"##;
+        let doc = parse_svg(svg).unwrap();
+        let tree = doc.tree.as_ref().unwrap();
+        let info = tree.text_infos().first().cloned().expect("a label");
+
+        assert_eq!(info.text, "firstsecond", "the label reads as one string");
+        assert_eq!(info.runs.len(), 2, "one run per tspan: {:?}", info.runs);
+        assert_eq!(info.runs[1].y, Some(80.0), "the second line keeps its y");
+
+        let d = outline_runs_d(&font, 0, &info.layout(), 3).expect("outlined");
+        let bounds = crate::model::geometry::subpaths_bounds(&parse_path_d(&d)).expect("bounds");
+        // Two lines 40 units apart at size 20 — the ink spans both, not one line's worth.
+        assert!(
+            bounds.max_y - bounds.min_y > 40.0,
+            "ink covers both lines: {bounds:?}"
+        );
+        assert!(
+            bounds.min_y > 10.0 && bounds.max_y < 85.0,
+            "…and only those: {bounds:?}"
+        );
+    }
+
+    /// An unpositioned tspan continues the sentence rather than restarting it — the difference
+    /// between "Hello world" and both words stacked on the same origin.
+    #[test]
+    fn an_unpositioned_tspan_continues_from_the_pen() {
+        use crate::model::document::parse_svg;
+        let Some(font) = test_font() else { return };
+        let one_line = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><text x="10" y="40" font-size="20">Hello <tspan font-weight="bold">world</tspan></text></svg>"##;
+        let stacked = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><text x="10" y="40" font-size="20">Hello <tspan x="10" y="40">world</tspan></text></svg>"##;
+
+        let width = |svg: &str| {
+            let doc = parse_svg(svg).unwrap();
+            let info = doc
+                .tree
+                .as_ref()
+                .unwrap()
+                .text_infos()
+                .first()
+                .cloned()
+                .unwrap();
+            let d = outline_runs_d(&font, 0, &info.layout(), 3).unwrap();
+            let b = crate::model::geometry::subpaths_bounds(&parse_path_d(&d)).unwrap();
+            b.max_x - b.min_x
+        };
+        assert!(
+            width(one_line) > width(stacked) * 1.5,
+            "continuing runs on: {} vs restarting at the same x: {}",
+            width(one_line),
+            width(stacked)
+        );
+    }
+
+    /// A tspan may ask for a family of its own. One font shapes the whole label, so the caller is
+    /// told which families it is about to override rather than finding out from the result.
+    #[test]
+    fn foreign_families_are_reported_not_silently_shaped() {
+        use crate::model::document::parse_svg;
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><text font-family="Inter">plain <tspan font-family="Courier New">code</tspan></text></svg>"##;
+        let doc = parse_svg(svg).unwrap();
+        let info = doc
+            .tree
+            .as_ref()
+            .unwrap()
+            .text_infos()
+            .first()
+            .cloned()
+            .unwrap();
+        assert_eq!(info.family, "Inter", "the label's own family");
+        assert_eq!(info.foreign_families(), vec!["Courier New".to_string()]);
+
+        // A label whose runs all agree has nothing to report.
+        let same = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><text font-family="Inter">plain <tspan x="0">more</tspan></text></svg>"##;
+        let doc = parse_svg(same).unwrap();
+        let info = doc
+            .tree
+            .as_ref()
+            .unwrap()
+            .text_infos()
+            .first()
+            .cloned()
+            .unwrap();
+        assert!(info.foreign_families().is_empty());
+    }
+
+    /// A raw face is already what a shaper reads, so it passes straight through — the woff2 path
+    /// must not cost the common case a copy or a parse.
+    #[test]
+    fn raw_faces_pass_through_untouched() {
+        let Some(font) = test_font() else { return };
+        assert!(woff2_to_sfnt(&font).is_none(), "a .ttf isn't a WOFF2");
+        assert!(!faces_in(&font).is_empty(), "…and still reads as faces");
+    }
+
+    /// Bytes that claim to be WOFF2 and aren't decode to nothing rather than panicking — they
+    /// arrive from a file picker, so "malformed" is a normal input, not a bug.
+    #[test]
+    fn a_broken_woff2_fails_instead_of_panicking() {
+        for bogus in [
+            b"wOF2".as_slice(),
+            b"wOF2\x00\x01\x00\x00",
+            b"wOF2 and then some plausible-looking garbage that is not a font at all",
+        ] {
+            assert!(woff2_to_sfnt(bogus).is_none(), "no sfnt out of {bogus:?}");
+            assert!(faces_in(bogus).is_empty(), "and no faces either");
+            assert!(
+                outline_runs_d(
+                    bogus,
+                    0,
+                    &[RunLayout {
+                        text: "Hi".into(),
+                        x: Some(0.0),
+                        y: Some(0.0),
+                        font_size: 16.0,
+                        letter_spacing: 0.0,
+                        anchor: Anchor::Start,
+                    }],
+                    3
+                )
+                .is_none(),
+                "and nothing to shape with"
+            );
+        }
+    }
+
+    /// The real thing, when the host has one to hand: a `.woff2` decodes to a face that reads,
+    /// names itself, and outlines the same glyphs its uncompressed twin does.
+    ///
+    /// `NIB_TEST_WOFF2` points at a file — there's no `.woff2` in the repo (a font is someone
+    /// else's licence to include) and a test may not reach the network, so this stays opt-in.
+    #[test]
+    fn a_real_woff2_decodes_and_outlines() {
+        let Ok(path) = std::env::var("NIB_TEST_WOFF2") else {
+            return;
+        };
+        let compressed = std::fs::read(path).expect("read the woff2");
+        let sfnt = woff2_to_sfnt(&compressed).expect("decoded");
+        assert!(sfnt.starts_with(b"\x00\x01\x00\x00") || sfnt.starts_with(b"OTTO"));
+
+        // The decode is transparent: every entry point takes the compressed bytes directly.
+        let faces = faces_in(&compressed);
+        assert_eq!(faces.len(), 1, "a webfont is a single face: {faces:?}");
+        assert!(!faces[0].family.is_empty(), "names itself: {faces:?}");
+
+        let d = outline_d(&compressed, 0, &layout("Hi", Anchor::Start), 3).expect("outlined");
+        let from_sfnt = outline_d(&sfnt, 0, &layout("Hi", Anchor::Start), 3).expect("outlined");
+        assert_eq!(d, from_sfnt, "same glyphs either way");
     }
 }
