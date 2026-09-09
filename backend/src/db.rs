@@ -89,9 +89,29 @@ pub async fn resolve_user(
 
 /// Ensure the synthetic `developer` user exists and carries `token` (idempotent — dev bootstrap).
 /// Only called under `NIB_DEV_AUTH`.
+///
+/// It *takes* the token rather than assuming it's free: `token` is unique, and a database that
+/// predates OIDC has a row holding the very token this seeds (see migration 0004). Whoever else has
+/// it gets a fresh one — under dev auth the token is how the developer authenticates, so the seed
+/// has to win, and the alternative is what used to happen: a unique-constraint error that panics
+/// the process before it can serve anything.
 pub async fn ensure_dev_user(pool: &SqlitePool, token: &str) -> Result<User, sqlx::Error> {
     let user = resolve_user(pool, DEV_SUB, "dev@localhost", "developer").await?;
-    set_token(pool, user.id, token).await?;
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "update users set token = 'nib_' || lower(hex(randomblob(32))), \
+         token_rotated_at = datetime('now') where token = ? and id <> ?",
+    )
+    .bind(token)
+    .bind(user.id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("update users set token = ?, token_rotated_at = datetime('now') where id = ?")
+        .bind(token)
+        .bind(user.id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(User {
         token: token.to_string(),
         ..user

@@ -858,4 +858,95 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
     }
+
+    /// A database from before OIDC carries a `developer` row whose bearer is the published
+    /// `nib-dev-token`, seeded on every boot by that build. Migration 0004 retires it; this checks
+    /// both halves of the outcome — the known credential stops working, and the row keeps its id
+    /// (and therefore its projects).
+    #[tokio::test]
+    async fn the_shared_dev_token_is_retired_from_a_pre_oidc_row() {
+        let (pool, path) = test_pool("olddev").await;
+        // Stand in for the pre-OIDC seed: a row with no `sub`, holding the shared token. (The
+        // migrations have already run, so this is written the way that build left it.)
+        sqlx::query("insert into users (name, token) values ('developer', ?)")
+            .bind(db::DEV_TOKEN_DEFAULT)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // …and re-run the migration that retires it, since it landed before this row existed.
+        sqlx::query(
+            "update users set token = 'nib_' || lower(hex(randomblob(32))) \
+             where token = ? and (sub is null or sub <> 'dev')",
+        )
+        .bind(db::DEV_TOKEN_DEFAULT)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(
+            db::user_by_token(&pool, db::DEV_TOKEN_DEFAULT)
+                .await
+                .unwrap()
+                .is_none(),
+            "the published token no longer resolves to anyone"
+        );
+
+        // Seeding the dev user now succeeds where it used to hit the unique index and panic, and it
+        // claims the token for the real `sub = 'dev'` identity.
+        let dev = db::ensure_dev_user(&pool, db::DEV_TOKEN_DEFAULT)
+            .await
+            .unwrap();
+        let by_token = db::user_by_token(&pool, db::DEV_TOKEN_DEFAULT)
+            .await
+            .unwrap()
+            .expect("the dev token resolves again");
+        assert_eq!(by_token.id, dev.id);
+        // Twice, because a dev restarts the backend all day.
+        db::ensure_dev_user(&pool, db::DEV_TOKEN_DEFAULT)
+            .await
+            .unwrap();
+
+        // The old row is still there — its projects were never anyone else's to take.
+        let rows: i64 = sqlx::query_scalar("select count(*) from users")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 2, "the pre-OIDC row and the dev identity coexist");
+
+        pool.close().await;
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The seed also has to survive the state that caused the panic in the first place: something
+    /// *else* holding the token it is about to claim.
+    #[tokio::test]
+    async fn seeding_takes_the_dev_token_from_whoever_holds_it() {
+        let (pool, path) = test_pool("takedev").await;
+        let other = db::resolve_user(&pool, "someone-else", "them@example.com", "them")
+            .await
+            .unwrap();
+        db::set_token(&pool, other.id, db::DEV_TOKEN_DEFAULT)
+            .await
+            .unwrap();
+
+        let dev = db::ensure_dev_user(&pool, db::DEV_TOKEN_DEFAULT)
+            .await
+            .unwrap();
+        let holder = db::user_by_token(&pool, db::DEV_TOKEN_DEFAULT)
+            .await
+            .unwrap()
+            .expect("someone holds it");
+        assert_eq!(holder.id, dev.id, "the dev identity ends up with it");
+        // The other user keeps working — with a token of their own, not a shared one.
+        let them = db::user_by_sub(&pool, "someone-else")
+            .await
+            .unwrap()
+            .expect("still there");
+        assert_eq!(them.id, other.id);
+        assert_ne!(them.token, db::DEV_TOKEN_DEFAULT);
+        assert!(them.token.starts_with("nib_"));
+
+        pool.close().await;
+        let _ = std::fs::remove_file(&path);
+    }
 }
