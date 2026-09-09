@@ -81,7 +81,7 @@ export async function outlineText(uid: string, allowPrompt = true): Promise<bool
     if (font) await rememberFont(info, font);
   }
   if (!font) {
-    workspace.error = `no font found for “${info.family}” — pick a .ttf/.otf file to outline with`;
+    workspace.error = `no font found for “${info.family}” — pick a font file to outline with`;
     return false;
   }
 

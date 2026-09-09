@@ -211,7 +211,7 @@
   <input
     class="offscreen"
     type="file"
-    accept=".ttf,.otf,.ttc"
+    accept=".ttf,.otf,.ttc,.woff2"
     data-font-picker
     aria-hidden="true"
     tabindex="-1"

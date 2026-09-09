@@ -447,6 +447,15 @@ impl Editor {
         self.text_outline_d(uid, font, face_index)
     }
 
+    /// The sfnt bytes inside a `.woff2`, or `undefined` if these bytes aren't one (already a raw
+    /// face, or not a font). Every font-taking method decodes WOFF2 transparently, so this is only
+    /// worth calling to *store* the decoded face — a host that caches fonts saves decompressing the
+    /// same download on every conversion.
+    #[wasm_bindgen(js_name = decodeWoff2)]
+    pub fn decode_woff2_js(font: &[u8]) -> Option<Vec<u8>> {
+        text::woff2_to_sfnt(font)
+    }
+
     /// Every face inside these font bytes (`{index, family, style, weight, italic}` each) — how a
     /// caller holding only a picked file chooses between the faces of a `.ttc` collection. An empty
     /// array means these aren't bytes nib can shape with (a compressed `.woff2`, say), which is

@@ -130,12 +130,42 @@ impl OutlineBuilder for Outliner {
     }
 }
 
+/// Is this a WOFF2 file? Its four-byte signature, per the spec.
+fn is_woff2(font: &[u8]) -> bool {
+    font.starts_with(b"wOF2")
+}
+
+/// The raw font a shaper can read, out of whatever the host handed over: a `.woff2` is a Brotli-
+/// compressed sfnt with its glyph table transformed, so it decompresses to real font bytes here;
+/// anything else is already one and passes through untouched.
+///
+/// This matters because `.woff2` is what a font *download* is — Google Fonts and friends serve
+/// nothing else — so it's exactly the file someone has on disk when they go looking for a face.
+/// Returns `None` when the bytes are neither a readable face nor a WOFF2 that decodes.
+fn as_sfnt(font: &[u8]) -> Option<std::borrow::Cow<'_, [u8]>> {
+    if !is_woff2(font) {
+        return Some(std::borrow::Cow::Borrowed(font));
+    }
+    wuff::decompress_woff2(font)
+        .ok()
+        .map(std::borrow::Cow::Owned)
+}
+
+/// Decompress a `.woff2` to the sfnt bytes inside it, or `None` if these bytes aren't one (already
+/// a raw face, or not a font at all). Hosts use this to store the decoded face rather than
+/// decompressing it again on every conversion.
+pub fn woff2_to_sfnt(font: &[u8]) -> Option<Vec<u8>> {
+    is_woff2(font).then(|| wuff::decompress_woff2(font).ok())?
+}
+
 /// Which face inside `font` is the one named `postscript_name` — the answer matters because a
 /// system font is often a *collection* (`Helvetica.ttc` holds regular, bold, italic, …) and the
 /// browser's Local Font Access API hands over the whole collection plus the PostScript name of the
 /// face the author asked for. Falls back to 0 (a plain `.ttf`/`.otf`, or a name that isn't in
 /// there), which is also what a caller with no name should pass.
 pub fn face_index_for(font: &[u8], postscript_name: &str) -> u32 {
+    let Some(font) = as_sfnt(font) else { return 0 };
+    let font = font.as_ref();
     let count = rustybuzz::ttf_parser::fonts_in_collection(font).unwrap_or(1);
     (0..count)
         .find(|&i| {
@@ -176,6 +206,10 @@ fn face_name(face: &rustybuzz::ttf_parser::Face, name_id: u16) -> Option<String>
 /// cheapest way for a caller to tell a `.woff2` (compressed) from a raw `.ttf`/`.otf`/`.ttc`
 /// *before* it tries to shape anything with it.
 pub fn faces_in(font: &[u8]) -> Vec<FaceInfo> {
+    let Some(font) = as_sfnt(font) else {
+        return Vec::new();
+    };
+    let font = font.as_ref();
     let count = rustybuzz::ttf_parser::fonts_in_collection(font).unwrap_or(1);
     (0..count)
         .filter_map(|index| {
@@ -226,7 +260,8 @@ pub fn outline_runs_d(
     runs: &[RunLayout],
     precision: usize,
 ) -> Option<String> {
-    let face = Face::from_slice(font, face_index)?;
+    let font = as_sfnt(font)?;
+    let face = Face::from_slice(font.as_ref(), face_index)?;
     let upem = f64::from(face.units_per_em());
     if upem <= 0.0 {
         return None;
@@ -513,5 +548,69 @@ mod tests {
             .cloned()
             .unwrap();
         assert!(info.foreign_families().is_empty());
+    }
+
+    /// A raw face is already what a shaper reads, so it passes straight through — the woff2 path
+    /// must not cost the common case a copy or a parse.
+    #[test]
+    fn raw_faces_pass_through_untouched() {
+        let Some(font) = test_font() else { return };
+        assert!(woff2_to_sfnt(&font).is_none(), "a .ttf isn't a WOFF2");
+        assert!(!faces_in(&font).is_empty(), "…and still reads as faces");
+    }
+
+    /// Bytes that claim to be WOFF2 and aren't decode to nothing rather than panicking — they
+    /// arrive from a file picker, so "malformed" is a normal input, not a bug.
+    #[test]
+    fn a_broken_woff2_fails_instead_of_panicking() {
+        for bogus in [
+            b"wOF2".as_slice(),
+            b"wOF2\x00\x01\x00\x00",
+            b"wOF2 and then some plausible-looking garbage that is not a font at all",
+        ] {
+            assert!(woff2_to_sfnt(bogus).is_none(), "no sfnt out of {bogus:?}");
+            assert!(faces_in(bogus).is_empty(), "and no faces either");
+            assert!(
+                outline_runs_d(
+                    bogus,
+                    0,
+                    &[RunLayout {
+                        text: "Hi".into(),
+                        x: Some(0.0),
+                        y: Some(0.0),
+                        font_size: 16.0,
+                        letter_spacing: 0.0,
+                        anchor: Anchor::Start,
+                    }],
+                    3
+                )
+                .is_none(),
+                "and nothing to shape with"
+            );
+        }
+    }
+
+    /// The real thing, when the host has one to hand: a `.woff2` decodes to a face that reads,
+    /// names itself, and outlines the same glyphs its uncompressed twin does.
+    ///
+    /// `NIB_TEST_WOFF2` points at a file — there's no `.woff2` in the repo (a font is someone
+    /// else's licence to include) and a test may not reach the network, so this stays opt-in.
+    #[test]
+    fn a_real_woff2_decodes_and_outlines() {
+        let Ok(path) = std::env::var("NIB_TEST_WOFF2") else {
+            return;
+        };
+        let compressed = std::fs::read(path).expect("read the woff2");
+        let sfnt = woff2_to_sfnt(&compressed).expect("decoded");
+        assert!(sfnt.starts_with(b"\x00\x01\x00\x00") || sfnt.starts_with(b"OTTO"));
+
+        // The decode is transparent: every entry point takes the compressed bytes directly.
+        let faces = faces_in(&compressed);
+        assert_eq!(faces.len(), 1, "a webfont is a single face: {faces:?}");
+        assert!(!faces[0].family.is_empty(), "names itself: {faces:?}");
+
+        let d = outline_d(&compressed, 0, &layout("Hi", Anchor::Start), 3).expect("outlined");
+        let from_sfnt = outline_d(&sfnt, 0, &layout("Hi", Anchor::Start), 3).expect("outlined");
+        assert_eq!(d, from_sfnt, "same glyphs either way");
     }
 }

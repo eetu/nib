@@ -175,14 +175,20 @@ Per-area detail in `frontend/CLAUDE.md`.
   step, and **explicit** — a text is never auto-outlined into a boolean (`node_operands` skips
   non-shape children, so a label in a boolean group is simply ignored until converted).
   **Shaping lives in the core** (`core/src/text.rs`, rustybuzz + ttf-parser → HarfBuzz-grade
-  ligatures/kerning/RTL/complex scripts; ~590KB of the shipped `.wasm`), but **font bytes are a
-  host resource, not document state**: the browser reads them from the **Local Font Access API**
-  (Chromium-only, permission-gated) or a **picked `.ttf`/`.otf`/`.ttc` file, cached per
+  ligatures/kerning/RTL/complex scripts), but **font bytes are a host resource, not document
+  state**: the browser reads them from the **Local Font Access API** (Chromium-only,
+  permission-gated) or a **picked `.ttf`/`.otf`/`.ttc`/`.woff2` file, cached per
   family+weight+style in IndexedDB (`lib/text/fonts.ts`, `lib/persistence/idb.ts`); the backend
   resolves them with **fontdb** (`backend/src/fonts.rs`, which also gives `render_document` real
   text; the container image bundles a curated Liberation + DejaVu set — see Deployment).
-  A `.woff2` is compressed, so it isn't a face nib can read — `Editor.facesIn` reports zero faces
-  for one, which is how the picker rejects it before shaping. **A collection needs choosing:** an
+  **`.woff2` is decoded in-core** (`wuff`, brotli-only features → Brotli plus reversing WOFF2's
+  glyph-table transform), because a font *download* is a `.woff2` — it's what someone actually has
+  on disk when they go looking for a face. Every font-taking entry point decodes it transparently;
+  `Editor.decodeWoff2` exists so the browser can *cache the decoded face* instead of decompressing
+  the same download on every conversion. Malformed bytes yield no faces rather than a panic, which
+  is how the picker rejects a non-font. **Shaping + WOFF2 are the `.wasm`'s bulk** — 895KB → 1.7MB
+  optimized (656KB gzipped), ~590KB of that rustybuzz and ~210KB the decoder; the Pages demo pays
+  it on first load. **A collection needs choosing:** an
   installed face is identified by its PostScript name (`faceIndexFor`), but a picked `.ttc` says
   nothing about which face the label wanted, so `bestFace` scores them on the asked-for slant and
   weight — taking face 0 outlines a bold heading in regular, which reads as a shaping bug rather

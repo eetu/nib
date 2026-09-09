@@ -9,8 +9,9 @@
 //      the same trade the folder mode already makes,
 //   3. a font file the user picks, which is the path every other browser takes.
 //
-// Only raw `.ttf`/`.otf`/`.ttc` faces work: a `.woff2` is compressed, and decompressing it would
-// cost another dependency in the wasm for a format that only exists to save bytes over the wire.
+// `.ttf`, `.otf`, `.ttc` and `.woff2` all work. The last one is what a font *download* is — so it
+// is exactly what someone has on disk when they go looking for a face — and the core decompresses
+// it (Brotli plus reversing WOFF2's glyph-table transform).
 
 import { Editor } from "$lib/core";
 import type { TextInfo } from "$lib/model/types";
@@ -179,12 +180,16 @@ export function pickFontFile(info: TextInfo): Promise<PickedFont> {
         resolve(null);
         return;
       }
-      const bytes = new Uint8Array(await file.arrayBuffer());
+      const picked = new Uint8Array(await file.arrayBuffer());
+      // A `.woff2` is a compressed face. The core decodes it wherever fonts arrive, but decoding
+      // here means the cache holds a face that's ready to shape rather than one that decompresses
+      // again on every conversion.
+      const bytes = Editor.decodeWoff2(picked) ?? picked;
       const faces = (Editor.facesIn(bytes) as FaceInfo[] | undefined) ?? [];
       const best = bestFace(faces, info);
       if (!best) {
         resolve({
-          error: `“${file.name}” isn't a font nib can read — a .woff2 is compressed, so pick a .ttf, .otf or .ttc face`,
+          error: `“${file.name}” isn't a font nib can read — pick a .ttf, .otf, .ttc or .woff2 face`,
         });
         return;
       }

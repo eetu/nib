@@ -28,6 +28,7 @@ uuid = { version = "1.11.0", features = ["v4", "js"] }
 # rustybuzz, so the two can't version-skew) walks the glyph outlines. Ships in the .wasm — the
 # browser has no other way to reach glyph geometry.
 rustybuzz = "0.20.1"
+wuff = { version = "0.2.9", default-features = false, features = ["brotli"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.76"
