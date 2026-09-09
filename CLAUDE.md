@@ -233,6 +233,19 @@ Per-area detail in `frontend/CLAUDE.md`.
   as `ctrl+wheel`, and two fingers on a touchscreen are tracked directly in
   EditorCanvas — plus `⌘/ctrl+wheel` zoom; a plain wheel / two-finger scroll,
   space-drag, or middle-drag pans. A second pointer cancels any in-flight edit.
+- **A moving view trades fidelity for frames** (`interacting` in `EditorCanvas`): while the
+  gesture machine is panning/dragging — or a wheel/pinch is moving the viewport, which the machine
+  never sees, so those report themselves through a debounced flag — the scene carries
+  `.interacting`, which drops `filter` across the artwork and hints `will-change: transform`. The
+  accurate frame paints the moment the gesture ends. This is not a micro-optimization: **WebKit
+  sizes a filter's surface from the object in *device* space**, so a drop shadow on a shape at 400x
+  zoom becomes a several-hundred-megapixel blur that it re-rasterizes every frame — measured at
+  **3.6fps panning, against 60fps in Chromium on the same document**, since Chromium clips the
+  filter to the viewport. Dropping filters alone recovers 40fps; the `will-change` hint takes it to
+  60. (The hint by itself changes nothing — 3.9fps — and shrinking the filter region only doubles
+  it. Gradients are the same shape of problem, an order of magnitude smaller, and need nothing once
+  the filter is gone.) e2e pins the mechanism rather than a frame rate, which is too
+  machine-dependent to assert.
 - **Live-edit then commit.** Mutations change the model continuously during a
   drag; the tool calls `editor.commit()` once at gesture end = one undo step. A
   plain click (no move) doesn't commit — selecting never dirties history.

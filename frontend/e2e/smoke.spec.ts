@@ -2293,3 +2293,47 @@ test("converts a text label into an editable outlined path", async ({ page }) =>
 
   expect(errors, `page errors:\n${errors.join("\n")}`).toEqual([]);
 });
+
+// A filter's surface is sized from the object in *device* space, so a drop shadow on a shape zoomed
+// far in becomes a several-hundred-megapixel blur. WebKit re-rasterizes that every frame and
+// panning collapses to a few fps (measured: 3.6 vs 60 on the same document in Chromium). Filters
+// therefore go quiet for the duration of a gesture and come back with the next still frame.
+//
+// Frame rates are too machine-dependent to assert, so this pins the mechanism instead.
+test(
+  "filters go quiet while the view moves, and come back when it stops",
+  { tag: "@cross" },
+  async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+      timeout: 30_000,
+    });
+
+    await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+    await page
+      .locator("textarea")
+      .fill(
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><filter id="sh"><feDropShadow dx="1" dy="1" stdDeviation="1.5"/></filter></defs><rect x="20" y="20" width="40" height="40" fill="#3b82f6" filter="url(#sh)"/></svg>`,
+      );
+    await page.keyboard.press("Meta+Enter");
+
+    const scene = page.locator("svg.canvas g.scene");
+    const shape = page.locator("svg.canvas g.artwork [filter]");
+    await expect(shape).toBeAttached();
+
+    // At rest the document paints as authored.
+    await expect(scene).not.toHaveClass(/interacting/);
+    expect(await shape.evaluate((el) => getComputedStyle(el).filter)).toContain("#sh");
+
+    // Panning by wheel is a gesture even though it never reaches the gesture machine.
+    const box = (await page.locator("svg.canvas").boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, 60);
+    await expect(scene).toHaveClass(/interacting/);
+    expect(await shape.evaluate((el) => getComputedStyle(el).filter)).toBe("none");
+
+    // …and the accurate frame returns once the wheel stops.
+    await expect(scene).not.toHaveClass(/interacting/, { timeout: 2000 });
+    expect(await shape.evaluate((el) => getComputedStyle(el).filter)).toContain("#sh");
+  },
+);
