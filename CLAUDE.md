@@ -187,8 +187,14 @@ Per-area detail in `frontend/CLAUDE.md`.
   `Editor.decodeWoff2` exists so the browser can *cache the decoded face* instead of decompressing
   the same download on every conversion. Malformed bytes yield no faces rather than a panic, which
   is how the picker rejects a non-font. **Shaping + WOFF2 are the `.wasm`'s bulk** — 895KB → 1.7MB
-  optimized (656KB gzipped), ~590KB of that rustybuzz and ~210KB the decoder; the Pages demo pays
-  it on first load. **A collection needs choosing:** an
+  optimized (656KB gzipped), ~590KB of that rustybuzz and ~210KB the decoder; a first visit pays
+  it once, then the browser caches it. Accepted deliberately: correct shaping and the format fonts
+  actually ship in are worth more than the bytes. *If first load ever does become the problem, the
+  answer is a **smaller first-load bundle**, not less capability* — the engine splits along an
+  obvious seam (geometry + ops boot the editor; shaping and the WOFF2 decoder are only needed the
+  first time someone outlines a label), so those move to a second module fetched on demand. That
+  costs another wasm-pack target in the justfile, the Dockerfile and CI, which is why it isn't
+  worth doing before the size is felt. **A collection needs choosing:** an
   installed face is identified by its PostScript name (`faceIndexFor`), but a picked `.ttc` says
   nothing about which face the label wanted, so `bestFace` scores them on the asked-for slant and
   weight — taking face 0 outlines a bold heading in regular, which reads as a shaping bug rather
