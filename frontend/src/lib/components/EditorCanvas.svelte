@@ -547,6 +547,7 @@
   function onPointerMove(e: PointerEvent) {
     if (pointers.some((q) => q.id === e.pointerId)) setPointer(e.pointerId, screenOf(e));
     if (pinch && pointers.length >= 2) {
+      markWheeling(); // a pinch moves the viewport too, and never fires a wheel event
       const next = pinchState();
       if (pinch.dist > 0) viewport.zoomAt(pinch.mid, next.dist / pinch.dist);
       viewport.panBy(next.mid.x - pinch.mid.x, next.mid.y - pinch.mid.y);
@@ -632,9 +633,32 @@
   const WHEEL_ZOOM_SENS = 0.01;
   const PINCH_GAIN = 1.8;
 
+  // Wheel zoom/pan never reaches the gesture machine (it's pure viewport), so it reports itself:
+  // a wheel event marks the canvas as interacting until the stream stops. See `interacting`.
+  const WHEEL_IDLE_MS = 180;
+  let wheeling = $state(false);
+  let wheelIdle: ReturnType<typeof setTimeout> | undefined;
+  function markWheeling(): void {
+    wheeling = true;
+    clearTimeout(wheelIdle);
+    wheelIdle = setTimeout(() => (wheeling = false), WHEEL_IDLE_MS);
+  }
+
+  /**
+   * A gesture is moving the view or a shape right now — so the canvas may trade fidelity for
+   * frames. It buys a lot: WebKit sizes a filter's surface from the object in *device* space, so a
+   * drop shadow on a shape zoomed to 400x becomes a several-hundred-megapixel blur that it
+   * re-rasterizes every frame, and panning collapses to ~4fps (measured; Chromium clips the same
+   * filter to the viewport and stays at 60). Dropping filters for the duration of the gesture
+   * brings that back to 40fps, and the `will-change` hint the rest of the way to 60. The accurate
+   * frame paints as soon as the gesture ends.
+   */
+  const interacting = $derived(canvas.panning || canvas.dragging || wheeling);
+
   function onWheel(e: WheelEvent) {
     if (!editor.doc) return;
     e.preventDefault();
+    markWheeling();
     // Chromium/Firefox deliver a trackpad pinch as ctrl+wheel; ⌘/ctrl+wheel is
     // the mouse zoom. A plain wheel / two-finger scroll pans.
     if (e.ctrlKey || e.metaKey) {
@@ -662,6 +686,7 @@
     },
     ongesturechange: (e: Event) => {
       e.preventDefault();
+      markWheeling();
       const g = e as GestureLike;
       if (gestureLast > 0 && g.scale > 0)
         viewport.zoomAt(screenOf(g), (g.scale / gestureLast) ** PINCH_GAIN);
@@ -768,6 +793,7 @@
     {/snippet}
     <g
       class="scene"
+      class:interacting
       transform={`translate(${viewport.tx} ${viewport.ty}) scale(${viewport.scale})`}
     >
       <!-- the whole document — imported, drawn, and baked booleans — rendered declaratively from
@@ -845,6 +871,18 @@
     width: 100%;
     height: 100%;
     touch-action: none;
+  }
+
+  /* Fidelity yields to frames while a gesture runs — see `interacting`. A filter is the one
+     document feature whose cost grows with the square of the zoom in WebKit, so it goes quiet for
+     the duration; `will-change` then lets the compositor keep up. Both end with the gesture, and
+     the next frame is the accurate one. */
+  .scene.interacting {
+    will-change: transform;
+  }
+
+  .scene.interacting :global(*) {
+    filter: none;
   }
 
   /* Drawn paths use stroke: currentColor; render them in theme text colour. */
