@@ -2293,3 +2293,63 @@ test("converts a text label into an editable outlined path", async ({ page }) =>
 
   expect(errors, `page errors:\n${errors.join("\n")}`).toEqual([]);
 });
+
+// Outlining a label whose family the machine doesn't have still works — some face answers — but
+// the letterforms then aren't the ones the document described. That has to be said out loud, or
+// the next person reading the drawing concludes nib mangled their text.
+test("says which font a label was outlined with when it isn't the one it asked for", async ({
+  page,
+}) => {
+  const fontPath = systemFontPath();
+  test.skip(!fontPath, "no system font on this machine to outline with");
+
+  await page.addInitScript(() => {
+    delete (window as unknown as { queryLocalFonts?: unknown }).queryLocalFonts;
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="10" y="60" font-size="40" font-family="Nonexistent Brand Face" fill="#111111">Hi</text></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const label = page.locator("svg.canvas text[data-uid]");
+  const box = await label.evaluate((el) => el.getBoundingClientRect().toJSON());
+  const ink = await page.evaluate((r) => {
+    for (let fy = 0.2; fy < 0.9; fy += 0.1)
+      for (let fx = 0.05; fx < 0.9; fx += 0.05) {
+        const x = r.x + r.width * fx;
+        const y = r.y + r.height * fy;
+        if (document.elementFromPoint(x, y)?.closest("text[data-uid]")) return { x, y };
+      }
+    return null;
+  }, box);
+  if (!ink) throw new Error("no point on the glyphs");
+  await page.mouse.click(ink.x, ink.y);
+
+  const [chooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    page.getByRole("button", { name: "convert to outlines" }).click(),
+  ]);
+  await chooser.setFiles(fontPath as string);
+
+  // It converted…
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(1);
+  // …and said so, naming the face it actually used. A notice, not an error.
+  const notice = page.locator(".errbar.notice");
+  await expect(notice).toContainText("outlined with");
+  await expect(notice).toContainText("Nonexistent Brand Face");
+  await expect(page.locator(".errbar[role='alert']")).toHaveCount(0);
+
+  // It's dismissible, and stays dismissed.
+  await notice.getByRole("button", { name: "dismiss notice" }).click();
+  await expect(notice).toHaveCount(0);
+});

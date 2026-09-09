@@ -228,6 +228,18 @@
     </div>
   {/if}
 
+  <!-- A notice: something worth knowing that isn't a failure (a label outlined with a substitute
+       font, say). Same bar, calmer colours, and `status` rather than `alert` — it doesn't interrupt
+       a screen reader mid-task. -->
+  {#if workspace.notice}
+    <div class="errbar notice" role="status">
+      <span>{workspace.notice}</span>
+      <button class="errclose" aria-label="dismiss notice" onclick={() => workspace.dismissNotice()}
+        >×</button
+      >
+    </div>
+  {/if}
+
   <div class="body">
     <!-- Connected-mode projects list (dynamically imported so the standalone build ships none of
          the backend code). -->
@@ -397,6 +409,12 @@
     height: 1px;
     opacity: 0;
     pointer-events: none;
+  }
+
+  .errbar.notice {
+    background: var(--halo-accent-soft);
+    color: var(--halo-text-main);
+    border-bottom: 1px solid var(--halo-border);
   }
 
   .errbar {

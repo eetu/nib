@@ -17,6 +17,7 @@
 use kurbo::BezPath;
 use rustybuzz::ttf_parser::{GlyphId, OutlineBuilder};
 use rustybuzz::{Face, UnicodeBuffer};
+use serde::{Deserialize, Serialize};
 
 use crate::model::path::{parse_path_d, path_to_d_prec};
 
@@ -119,6 +120,54 @@ pub fn face_index_for(font: &[u8], postscript_name: &str) -> u32 {
             })
         })
         .unwrap_or(0)
+}
+
+/// One face inside a font file — what a host needs to choose between them when nothing else names
+/// the one it wants (a picked `.ttc` arrives as bytes and a filename, no more).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FaceInfo {
+    /// Pass as `outline_d`'s `face_index`.
+    pub index: u32,
+    /// Family name (`Liberation Sans`), empty if the face declares none.
+    pub family: String,
+    /// Style within the family (`Bold Italic`).
+    pub style: String,
+    /// OS/2 weight class, 400 = regular, 700 = bold.
+    pub weight: u16,
+    pub italic: bool,
+}
+
+/// Read the name-table entry `name_id` off a face.
+fn face_name(face: &rustybuzz::ttf_parser::Face, name_id: u16) -> Option<String> {
+    face.names()
+        .into_iter()
+        .find(|n| n.name_id == name_id)
+        .and_then(|n| n.to_string())
+}
+
+/// Every face in these bytes. Empty when they aren't a font nib can read — which is also the
+/// cheapest way for a caller to tell a `.woff2` (compressed) from a raw `.ttf`/`.otf`/`.ttc`
+/// *before* it tries to shape anything with it.
+pub fn faces_in(font: &[u8]) -> Vec<FaceInfo> {
+    let count = rustybuzz::ttf_parser::fonts_in_collection(font).unwrap_or(1);
+    (0..count)
+        .filter_map(|index| {
+            let face = rustybuzz::ttf_parser::Face::parse(font, index).ok()?;
+            Some(FaceInfo {
+                index,
+                // Name ids 1/2 are the family and its style; 16/17 are the typographic pair, which
+                // is the one that tells "Light" apart from "Regular" in a large family.
+                family: face_name(&face, 16)
+                    .or_else(|| face_name(&face, 1))
+                    .unwrap_or_default(),
+                style: face_name(&face, 17)
+                    .or_else(|| face_name(&face, 2))
+                    .unwrap_or_default(),
+                weight: face.weight().to_number(),
+                italic: face.is_italic() || face.is_oblique(),
+            })
+        })
+        .collect()
 }
 
 /// Shape `layout`'s text with the given font and return the glyph outlines as a path `d` — the
@@ -289,5 +338,33 @@ mod tests {
         assert!(outline_d(&font, 0, &layout("   ", Anchor::Start), 3).is_none());
         assert!(outline_d(&font, 0, &layout("", Anchor::Start), 3).is_none());
         assert!(outline_d(b"not a font", 0, &layout("Hi", Anchor::Start), 3).is_none());
+    }
+
+    #[test]
+    fn faces_in_lists_what_a_file_holds() {
+        let Some(font) = test_font() else { return };
+        let faces = faces_in(&font);
+        assert!(!faces.is_empty(), "a real font has at least one face");
+        // Indices are exactly the ones `outline_d` accepts, and each face names itself.
+        for (i, face) in faces.iter().enumerate() {
+            assert_eq!(face.index as usize, i, "index matches position: {face:?}");
+            assert!(!face.family.is_empty(), "family named: {face:?}");
+            assert!(
+                (100..=1000).contains(&face.weight),
+                "plausible OS/2 weight: {face:?}"
+            );
+            assert!(
+                outline_d(&font, face.index, &layout("Hi", Anchor::Start), 3).is_some(),
+                "every listed face shapes: {face:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn faces_in_rejects_what_cannot_be_shaped() {
+        // The cheap pre-check a host makes before offering to outline: no faces, no shaping. A
+        // compressed `.woff2` lands here too — it starts `wOF2` and holds no readable tables.
+        assert!(faces_in(b"not a font").is_empty());
+        assert!(faces_in(b"wOF2\x00\x01\x00\x00").is_empty());
     }
 }

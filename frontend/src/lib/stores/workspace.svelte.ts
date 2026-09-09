@@ -38,6 +38,9 @@ class Workspace {
   savesInPlace = $state(false);
   busy = $state(false);
   error = $state<string | null>(null);
+  /** Something worth saying that isn't a failure — e.g. which font a label was outlined with when
+   *  it wasn't the one the document asked for. Same bar as `error`, different voice. */
+  notice = $state<string | null>(null);
 
   #activeHandle: FileSystemFileHandle | null = null;
 
@@ -68,6 +71,11 @@ class Workspace {
   /** Clear the current error banner (dismiss). */
   dismissError(): void {
     this.error = null;
+  }
+
+  /** Clear the current notice (dismiss). */
+  dismissNotice(): void {
+    this.notice = null;
   }
 
   /** Pick a folder and list its SVGs (Chromium only). */

@@ -1,15 +1,41 @@
 // "Convert to outlines", end to end: find the font a label asks for, shape it in the core, and
 // apply the one op that turns the `<text>` into a path. Lives here rather than in the document
-// store because it's a *flow* — it can prompt, and it reports failures on the app's error banner —
-// while the store stays a thin facade over the engine.
+// store because it's a *flow* — it can prompt, and it reports on the app's banners — while the
+// store stays a thin facade over the engine.
 //
 // Destructive by design: the words stop being words. That's the point (a path can be node-edited,
 // boolean'd, offset; a label can't), and undo puts them back.
 
+import type { TextInfo } from "$lib/model/types";
 import { editor } from "$lib/stores/document.svelte";
 import { workspace } from "$lib/stores/workspace.svelte";
 
 import { findFont, type LoadedFont, pickFontFile, rememberFont } from "./fonts";
+
+/** The family the document actually asked for first, quotes and generics included. */
+function askedFamily(info: TextInfo): string {
+  return (
+    info.family
+      .split(",")[0]
+      ?.trim()
+      .replace(/^["']|["']$/g, "") ?? ""
+  );
+}
+
+/**
+ * Say so when the face that did the shaping isn't the family the label named. The outlines are
+ * correct geometry either way, but they are no longer the letterforms the document described, and
+ * silence there reads as "nib mangled my text" the next time someone looks.
+ */
+function noticeSubstitution(info: TextInfo, font: LoadedFont): void {
+  const asked = askedFamily(info);
+  const generic = /^(sans-serif|serif|monospace|cursive|fantasy|system-ui|ui-[a-z-]+)$/i.test(
+    asked,
+  );
+  const same = !!font.family && font.family.toLowerCase() === asked.toLowerCase();
+  if (!asked || generic || same) return;
+  workspace.notice = `outlined with ${font.label} — “${asked}” isn't available here, so the letterforms differ from the label`;
+}
 
 /**
  * Outline the `<text>` node `uid`. Returns whether it converted; failures land on the error banner
@@ -32,7 +58,12 @@ export async function outlineText(uid: string, allowPrompt = true): Promise<bool
   let font: LoadedFont | null = await findFont(info);
   if (!font && allowPrompt) {
     workspace.error = null;
-    font = await pickFontFile();
+    const picked = await pickFontFile(info);
+    if (picked && "error" in picked) {
+      workspace.error = picked.error;
+      return false;
+    }
+    font = picked?.font ?? null;
     if (font) await rememberFont(info, font);
   }
   if (!font) {
@@ -41,9 +72,10 @@ export async function outlineText(uid: string, allowPrompt = true): Promise<bool
   }
 
   if (!editor.outlineText(uid, font.bytes, font.faceIndex)) {
-    workspace.error = `“${font.label}” didn't shape that label — a .woff2 is compressed, so pick a .ttf/.otf face`;
+    workspace.error = `“${font.label}” didn't shape that label — try a different face`;
     return false;
   }
+  noticeSubstitution(info, font);
   return true;
 }
 

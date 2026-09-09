@@ -446,6 +446,18 @@ impl Editor {
         self.text_outline_d(uid, font, face_index)
     }
 
+    /// Every face inside these font bytes (`{index, family, style, weight, italic}` each) — how a
+    /// caller holding only a picked file chooses between the faces of a `.ttc` collection. An empty
+    /// array means these aren't bytes nib can shape with (a compressed `.woff2`, say), which is
+    /// worth knowing before offering to outline anything with them.
+    #[wasm_bindgen(js_name = facesIn)]
+    pub fn faces_in_js(font: &[u8]) -> Result<JsValue, JsValue> {
+        let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+        text::faces_in(font)
+            .serialize(&serializer)
+            .map_err(Into::into)
+    }
+
     /// Which face inside these font bytes carries `postscriptName` — a system font is often a
     /// collection (`Helvetica.ttc`), and the browser hands over the whole file plus the name of the
     /// face it matched. Pass the result as `outlineText`'s `faceIndex`; 0 for a plain `.ttf`/`.otf`.

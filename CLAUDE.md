@@ -181,7 +181,14 @@ Per-area detail in `frontend/CLAUDE.md`.
   family+weight+style in IndexedDB (`lib/text/fonts.ts`, `lib/persistence/idb.ts`); the backend
   resolves them with **fontdb** (`backend/src/fonts.rs`, which also gives `render_document` real
   text; the container image bundles a curated Liberation + DejaVu set — see Deployment).
-  A `.woff2` is compressed, so it isn't a face nib can read. The op carries the
+  A `.woff2` is compressed, so it isn't a face nib can read — `Editor.facesIn` reports zero faces
+  for one, which is how the picker rejects it before shaping. **A collection needs choosing:** an
+  installed face is identified by its PostScript name (`faceIndexFor`), but a picked `.ttc` says
+  nothing about which face the label wanted, so `bestFace` scores them on the asked-for slant and
+  weight — taking face 0 outlines a bold heading in regular, which reads as a shaping bug rather
+  than a wrong face. **A substitution is announced** (`workspace.notice`, the calm twin of the
+  error bar): the outlines are right either way, but they're no longer the letterforms the document
+  named, and silence there reads as nib having mangled the text. The op carries the
   **computed `d`** — the author has the font, a peer replaying the op doesn't need it, which is
   what keeps sync and MCP correct. Only a **flat** `<text>` converts (a tspan label positions
   its own runs); `Editor::text_info`/`text_infos` resolve what's outlinable + which font it asks
