@@ -18,6 +18,7 @@ function label(weight: string, style = "normal"): TextInfo {
     y: 0,
     letterSpacing: 0,
     anchor: "start",
+    runs: [], // bestFace reads only the weight and style above
   };
 }
 

@@ -22,19 +22,37 @@ function askedFamily(info: TextInfo): string {
   );
 }
 
+const GENERIC = /^(sans-serif|serif|monospace|cursive|fantasy|system-ui|ui-[a-z-]+)$/i;
+
+/** Families the label's own runs asked for that aren't the label's — a tspan with its own font. */
+function foreignFamilies(info: TextInfo): string[] {
+  const seen = new Set<string>();
+  for (const run of info.runs ?? []) {
+    const family = run.family.split(",")[0]?.trim() ?? "";
+    if (!run.text.trim() || !family) continue;
+    if (family.toLowerCase() === askedFamily(info).toLowerCase()) continue;
+    seen.add(family);
+  }
+  return [...seen];
+}
+
 /**
- * Say so when the face that did the shaping isn't the family the label named. The outlines are
- * correct geometry either way, but they are no longer the letterforms the document described, and
- * silence there reads as "nib mangled my text" the next time someone looks.
+ * Say so when the shaping didn't use the letterforms the document described — either because the
+ * asked-for family isn't here, or because a `<tspan>` wanted a different one and a single font
+ * shaped the whole label. The outlines are correct geometry either way; silence about it reads as
+ * "nib mangled my text" the next time someone looks.
  */
 function noticeSubstitution(info: TextInfo, font: LoadedFont): void {
   const asked = askedFamily(info);
-  const generic = /^(sans-serif|serif|monospace|cursive|fantasy|system-ui|ui-[a-z-]+)$/i.test(
-    asked,
-  );
-  const same = !!font.family && font.family.toLowerCase() === asked.toLowerCase();
-  if (!asked || generic || same) return;
-  workspace.notice = `outlined with ${font.label} — “${asked}” isn't available here, so the letterforms differ from the label`;
+  const substituted =
+    !!asked && !GENERIC.test(asked) && font.family.toLowerCase() !== asked.toLowerCase();
+  const foreign = foreignFamilies(info).filter((f) => !GENERIC.test(f));
+  if (substituted && foreign.length)
+    workspace.notice = `outlined with ${font.label} — “${asked}” isn't available here, and the runs asking for ${foreign.join(", ")} were shaped in it too`;
+  else if (substituted)
+    workspace.notice = `outlined with ${font.label} — “${asked}” isn't available here, so the letterforms differ from the label`;
+  else if (foreign.length)
+    workspace.notice = `outlined entirely in ${font.label} — one font shapes a label, so the runs asking for ${foreign.join(", ")} changed typeface`;
 }
 
 /**
@@ -46,12 +64,8 @@ function noticeSubstitution(info: TextInfo, font: LoadedFont): void {
  */
 export async function outlineText(uid: string, allowPrompt = true): Promise<boolean> {
   const info = editor.textInfo(uid);
-  if (!info) {
-    workspace.error = "that label is built from tspans — outline it one run at a time";
-    return false;
-  }
-  if (!info.text.trim()) {
-    workspace.error = "nothing to outline — the label is empty";
+  if (!info || !info.text.trim()) {
+    workspace.error = "nothing to outline — that isn't a label with words in it";
     return false;
   }
 

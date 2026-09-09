@@ -53,6 +53,33 @@ pub struct TextLayout {
     pub anchor: Anchor,
 }
 
+/// One run of a multi-part label (a `<tspan>`, or the text around them). Same as a
+/// [`TextLayout`] except the position is optional: a run that states none continues from wherever
+/// the previous run's pen ended up, which is what makes `<text>a<tspan>b</tspan></text>` read as
+/// "ab" rather than stacking both at the same origin.
+#[derive(Debug, Clone)]
+pub struct RunLayout {
+    pub text: String,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub font_size: f64,
+    pub letter_spacing: f64,
+    pub anchor: Anchor,
+}
+
+impl From<&TextLayout> for RunLayout {
+    fn from(l: &TextLayout) -> Self {
+        RunLayout {
+            text: l.text.clone(),
+            x: Some(l.x),
+            y: Some(l.y),
+            font_size: l.font_size,
+            letter_spacing: l.letter_spacing,
+            anchor: l.anchor,
+        }
+    }
+}
+
 /// Accumulates one glyph's outline into a document-space `BezPath`. Font outlines are Y-up in
 /// font units; SVG is Y-down in user units, so every point is scaled and flipped about the
 /// baseline as it arrives.
@@ -182,59 +209,88 @@ pub fn outline_d(
     layout: &TextLayout,
     precision: usize,
 ) -> Option<String> {
+    outline_runs_d(font, face_index, &[layout.into()], precision)
+}
+
+/// Shape a label's `runs` — a flat `<text>` is one, a tspan label is several — into a single path
+/// `d`. Runs lay out left to right in document order, each starting where it says to and otherwise
+/// continuing from the previous run's pen, so a multi-line label keeps its lines and an inline
+/// tspan keeps its place in the sentence.
+///
+/// One font shapes every run. A tspan asking for a different family is shaped in this one anyway
+/// (see `TextInfo::foreign_families`, which lets the caller say so) — the alternative is refusing
+/// to convert the label at all, which is worse for the common case where the tspan only moved.
+pub fn outline_runs_d(
+    font: &[u8],
+    face_index: u32,
+    runs: &[RunLayout],
+    precision: usize,
+) -> Option<String> {
     let face = Face::from_slice(font, face_index)?;
     let upem = f64::from(face.units_per_em());
-    if upem <= 0.0 || layout.font_size <= 0.0 {
+    if upem <= 0.0 {
         return None;
     }
-    let scale = layout.font_size / upem;
-
-    let mut buffer = UnicodeBuffer::new();
-    buffer.push_str(&layout.text);
-    // Script/direction/language read off the text itself — what makes an RTL run lay out RTL.
-    buffer.guess_segment_properties();
-    let glyphs = rustybuzz::shape(&face, &[], buffer);
-
-    let positions = glyphs.glyph_positions();
-    let infos = glyphs.glyph_infos();
-    if infos.is_empty() {
-        return None;
-    }
-
-    // The run's total advance decides where `text-anchor: middle/end` starts drawing. Letter
-    // spacing lands *between* glyphs, so it counts one fewer time than there are glyphs.
-    let advance: f64 = positions
-        .iter()
-        .map(|p| f64::from(p.x_advance) * scale)
-        .sum::<f64>()
-        + layout.letter_spacing * (infos.len().saturating_sub(1)) as f64;
-    let start_x = match layout.anchor {
-        Anchor::Start => layout.x,
-        Anchor::Middle => layout.x - advance / 2.0,
-        Anchor::End => layout.x - advance,
-    };
 
     let mut out = Outliner {
         path: BezPath::new(),
         pen_x: 0.0,
         pen_y: 0.0,
-        scale,
+        scale: 1.0,
         open: false,
     };
-    let mut cursor_x = start_x;
-    let mut cursor_y = layout.y;
-    for (info, pos) in infos.iter().zip(positions.iter()) {
-        out.pen_x = cursor_x + f64::from(pos.x_offset) * scale;
-        out.pen_y = cursor_y - f64::from(pos.y_offset) * scale;
-        out.open = false;
-        // A blank glyph (space) outlines to nothing — it still advances the pen.
-        face.outline_glyph(GlyphId(info.glyph_id as u16), &mut out);
-        if out.open {
-            out.path.close_path();
-            out.open = false;
+    // The pen carries across runs; a run with its own x/y moves it first.
+    let mut cursor_x = 0.0;
+    let mut cursor_y = 0.0;
+
+    for run in runs {
+        if run.font_size <= 0.0 {
+            continue;
         }
-        cursor_x += f64::from(pos.x_advance) * scale + layout.letter_spacing;
-        cursor_y -= f64::from(pos.y_advance) * scale;
+        let scale = run.font_size / upem;
+        out.scale = scale;
+
+        let mut buffer = UnicodeBuffer::new();
+        buffer.push_str(&run.text);
+        // Script/direction/language read off the text itself — what makes an RTL run lay out RTL.
+        buffer.guess_segment_properties();
+        let glyphs = rustybuzz::shape(&face, &[], buffer);
+        let positions = glyphs.glyph_positions();
+        let infos = glyphs.glyph_infos();
+        if infos.is_empty() {
+            continue;
+        }
+
+        // This run's total advance decides where `text-anchor: middle/end` starts it. Letter
+        // spacing lands *between* glyphs, so it counts one fewer time than there are glyphs. Each
+        // positioned run is its own anchored chunk, which is exactly how SVG anchors a tspan that
+        // states an x.
+        let advance: f64 = positions
+            .iter()
+            .map(|p| f64::from(p.x_advance) * scale)
+            .sum::<f64>()
+            + run.letter_spacing * (infos.len().saturating_sub(1)) as f64;
+        let origin_x = run.x.unwrap_or(cursor_x);
+        cursor_y = run.y.unwrap_or(cursor_y);
+        cursor_x = match run.anchor {
+            Anchor::Start => origin_x,
+            Anchor::Middle => origin_x - advance / 2.0,
+            Anchor::End => origin_x - advance,
+        };
+
+        for (info, pos) in infos.iter().zip(positions.iter()) {
+            out.pen_x = cursor_x + f64::from(pos.x_offset) * scale;
+            out.pen_y = cursor_y - f64::from(pos.y_offset) * scale;
+            out.open = false;
+            // A blank glyph (space) outlines to nothing — it still advances the pen.
+            face.outline_glyph(GlyphId(info.glyph_id as u16), &mut out);
+            if out.open {
+                out.path.close_path();
+                out.open = false;
+            }
+            cursor_x += f64::from(pos.x_advance) * scale + run.letter_spacing;
+            cursor_y -= f64::from(pos.y_advance) * scale;
+        }
     }
 
     let d = out.path.to_svg();
@@ -366,5 +422,96 @@ mod tests {
         // compressed `.woff2` lands here too — it starts `wOF2` and holds no readable tables.
         assert!(faces_in(b"not a font").is_empty());
         assert!(faces_in(b"wOF2\x00\x01\x00\x00").is_empty());
+    }
+
+    /// Multi-line text is how every design tool exports it: one `<tspan>` per line, each stating
+    /// its own x/y. Those lines have to survive the conversion as lines.
+    #[test]
+    fn a_tspan_label_outlines_as_positioned_runs() {
+        use crate::model::document::parse_svg;
+        let Some(font) = test_font() else { return };
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><text x="10" y="40" font-size="20"><tspan x="10" y="40">first</tspan><tspan x="10" y="80">second</tspan></text></svg>"##;
+        let doc = parse_svg(svg).unwrap();
+        let tree = doc.tree.as_ref().unwrap();
+        let info = tree.text_infos().first().cloned().expect("a label");
+
+        assert_eq!(info.text, "firstsecond", "the label reads as one string");
+        assert_eq!(info.runs.len(), 2, "one run per tspan: {:?}", info.runs);
+        assert_eq!(info.runs[1].y, Some(80.0), "the second line keeps its y");
+
+        let d = outline_runs_d(&font, 0, &info.layout(), 3).expect("outlined");
+        let bounds = crate::model::geometry::subpaths_bounds(&parse_path_d(&d)).expect("bounds");
+        // Two lines 40 units apart at size 20 — the ink spans both, not one line's worth.
+        assert!(
+            bounds.max_y - bounds.min_y > 40.0,
+            "ink covers both lines: {bounds:?}"
+        );
+        assert!(
+            bounds.min_y > 10.0 && bounds.max_y < 85.0,
+            "…and only those: {bounds:?}"
+        );
+    }
+
+    /// An unpositioned tspan continues the sentence rather than restarting it — the difference
+    /// between "Hello world" and both words stacked on the same origin.
+    #[test]
+    fn an_unpositioned_tspan_continues_from_the_pen() {
+        use crate::model::document::parse_svg;
+        let Some(font) = test_font() else { return };
+        let one_line = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><text x="10" y="40" font-size="20">Hello <tspan font-weight="bold">world</tspan></text></svg>"##;
+        let stacked = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><text x="10" y="40" font-size="20">Hello <tspan x="10" y="40">world</tspan></text></svg>"##;
+
+        let width = |svg: &str| {
+            let doc = parse_svg(svg).unwrap();
+            let info = doc
+                .tree
+                .as_ref()
+                .unwrap()
+                .text_infos()
+                .first()
+                .cloned()
+                .unwrap();
+            let d = outline_runs_d(&font, 0, &info.layout(), 3).unwrap();
+            let b = crate::model::geometry::subpaths_bounds(&parse_path_d(&d)).unwrap();
+            b.max_x - b.min_x
+        };
+        assert!(
+            width(one_line) > width(stacked) * 1.5,
+            "continuing runs on: {} vs restarting at the same x: {}",
+            width(one_line),
+            width(stacked)
+        );
+    }
+
+    /// A tspan may ask for a family of its own. One font shapes the whole label, so the caller is
+    /// told which families it is about to override rather than finding out from the result.
+    #[test]
+    fn foreign_families_are_reported_not_silently_shaped() {
+        use crate::model::document::parse_svg;
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><text font-family="Inter">plain <tspan font-family="Courier New">code</tspan></text></svg>"##;
+        let doc = parse_svg(svg).unwrap();
+        let info = doc
+            .tree
+            .as_ref()
+            .unwrap()
+            .text_infos()
+            .first()
+            .cloned()
+            .unwrap();
+        assert_eq!(info.family, "Inter", "the label's own family");
+        assert_eq!(info.foreign_families(), vec!["Courier New".to_string()]);
+
+        // A label whose runs all agree has nothing to report.
+        let same = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><text font-family="Inter">plain <tspan x="0">more</tspan></text></svg>"##;
+        let doc = parse_svg(same).unwrap();
+        let info = doc
+            .tree
+            .as_ref()
+            .unwrap()
+            .text_infos()
+            .first()
+            .cloned()
+            .unwrap();
+        assert!(info.foreign_families().is_empty());
     }
 }

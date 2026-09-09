@@ -190,9 +190,18 @@ Per-area detail in `frontend/CLAUDE.md`.
   error bar): the outlines are right either way, but they're no longer the letterforms the document
   named, and silence there reads as nib having mangled the text. The op carries the
   **computed `d`** — the author has the font, a peer replaying the op doesn't need it, which is
-  what keeps sync and MCP correct. Only a **flat** `<text>` converts (a tspan label positions
-  its own runs); `Editor::text_info`/`text_infos` resolve what's outlinable + which font it asks
-  for. Surfaces: Inspector "convert to outlines", ⌘K (one / all), MCP `outline_text`.
+  what keeps sync and MCP correct. **A tspan label converts as the lines it is:** `TextInfo.runs`
+  is one positioned, styled run per `<tspan>` (nested ones flatten — what matters downstream is the
+  sequence of positioned strings, not the nesting), and `outline_runs_d` shapes them in order,
+  each starting where it says to and otherwise continuing from the previous run's pen, so
+  `<text>a<tspan>b</tspan></text>` reads "ab" while a two-tspan label keeps its two lines. That's
+  what makes design-tool exports (Figma/Illustrator write multi-line text as tspans) outlinable at
+  all. **One font shapes a whole label**, so a tspan asking for another family changes typeface —
+  `TextInfo::foreign_families` reports which, and both the notice and the MCP ack say so rather
+  than letting it pass silently. `Editor::text_info`/`text_infos` resolve what's outlinable + which
+  font it asks for. Surfaces: Inspector "convert to outlines", ⌘K (one / all), MCP `outline_text`.
+  *(Clicking a label to select it climbs past the `<tspan>`'s own `data-uid` — every rendered node
+  has one, and the label is the object; the run inside it isn't.)*
 - **Object vs node mode (one tool, like Figma), switched by double-click.** The
   select tool defaults to **object mode**: clicking a path selects it
   (`objectSelected` = a path selected with *no* node *and* not node-editing) and

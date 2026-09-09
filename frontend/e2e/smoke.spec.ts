@@ -2353,3 +2353,62 @@ test("says which font a label was outlined with when it isn't the one it asked f
   await notice.getByRole("button", { name: "dismiss notice" }).click();
   await expect(notice).toHaveCount(0);
 });
+
+// Multi-line text is how design tools export it — one `<tspan>` per line — so this is the shape
+// real files bring in. It has to convert, and convert as the lines it is rather than as one
+// collapsed run.
+test("outlines a multi-line tspan label as separate lines", async ({ page }) => {
+  const fontPath = systemFontPath();
+  test.skip(!fontPath, "no system font on this machine to outline with");
+
+  await page.addInitScript(() => {
+    delete (window as unknown as { queryLocalFonts?: unknown }).queryLocalFonts;
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><text x="20" y="60" font-size="28" fill="#111111"><tspan x="20" y="60">first</tspan><tspan x="20" y="120">second</tspan></text></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const label = page.locator("svg.canvas text[data-uid]");
+  await expect(label).toBeAttached();
+  const before = await label.evaluate((el) => el.getBoundingClientRect().toJSON());
+
+  const ink = await page.evaluate((r) => {
+    for (let fy = 0.1; fy < 0.95; fy += 0.05)
+      for (let fx = 0.02; fx < 0.95; fx += 0.05) {
+        const x = r.x + r.width * fx;
+        const y = r.y + r.height * fy;
+        if (document.elementFromPoint(x, y)?.closest("text[data-uid]")) return { x, y };
+      }
+    return null;
+  }, before);
+  if (!ink) throw new Error("no point on the glyphs");
+  await page.mouse.click(ink.x, ink.y);
+
+  const [chooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    page.getByRole("button", { name: "convert to outlines" }).click(),
+  ]);
+  await chooser.setFiles(fontPath as string);
+
+  const path = page.locator("svg.canvas g.artwork path");
+  await expect(path).toHaveCount(1);
+  await expect(page.locator("svg.canvas g.artwork text")).toHaveCount(0);
+
+  // Both lines are in there: the outlines span the 60 user units between the two baselines, which
+  // one collapsed run never would.
+  const after = await path.evaluate((el) => el.getBoundingClientRect().toJSON());
+  expect(after.height).toBeGreaterThan(before.height * 0.6);
+  const d = (await path.getAttribute("d")) ?? "";
+  expect(d.length).toBeGreaterThan(100);
+});
