@@ -436,10 +436,13 @@ mod tests {
         let Some(font) = test_font() else { return };
         let faces = faces_in(&font);
         assert!(!faces.is_empty(), "a real font has at least one face");
-        // Indices are exactly the ones `outline_d` accepts, and each face names itself.
+        // Indices are exactly the ones `outline_d` accepts. The *name* is whatever the face
+        // declares: plenty of fonts on a random machine have no readable name table (a CI runner's
+        // first system face is one), and reporting that as empty is the documented behaviour — so
+        // this asserts the parts a caller relies on, and `a_real_woff2_decodes_and_outlines` covers
+        // naming against a file we control.
         for (i, face) in faces.iter().enumerate() {
             assert_eq!(face.index as usize, i, "index matches position: {face:?}");
-            assert!(!face.family.is_empty(), "family named: {face:?}");
             assert!(
                 (100..=1000).contains(&face.weight),
                 "plausible OS/2 weight: {face:?}"
