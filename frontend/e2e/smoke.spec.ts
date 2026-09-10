@@ -2587,3 +2587,72 @@ test("the selection box turns during a rotation instead of resizing", async ({ p
   expect(settled.turn).toBeNull();
   expect(settled.h).toBeGreaterThan(rest.h);
 });
+
+// A label rotates by a different route than a shape — it has no anchor geometry, so the canvas
+// composes an SVG matrix on the node and measures the box from the rendered DOM. That measurement
+// is the axis-aligned bounds of an already-rotated element, so the box needed the same treatment:
+// turn the one the drag started with.
+test("a label's box turns during rotation too", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="15" y="55" font-size="18" fill="#111">Rotate me</text></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // Select the label by clicking its ink (its client rect is roomier than its glyphs).
+  const label = page.locator("svg.canvas text[data-uid]");
+  const rect = await label.evaluate((el) => el.getBoundingClientRect().toJSON());
+  const ink = await page.evaluate((r) => {
+    for (let fy = 0.2; fy < 0.9; fy += 0.1)
+      for (let fx = 0.05; fx < 0.9; fx += 0.05) {
+        const x = r.x + r.width * fx;
+        const y = r.y + r.height * fy;
+        if (document.elementFromPoint(x, y)?.closest("text[data-uid]")) return { x, y };
+      }
+    return null;
+  }, rect);
+  if (!ink) throw new Error("no point on the label's glyphs");
+  await page.mouse.click(ink.x, ink.y);
+
+  const sel = page.locator("svg.canvas g.overlay rect.sel-box");
+  const size = async () => ({
+    w: Number(await sel.getAttribute("width")),
+    h: Number(await sel.getAttribute("height")),
+    turn: await sel.evaluate((el) => (el.parentElement as SVGGElement).getAttribute("transform")),
+  });
+
+  const rest = await size();
+  expect(rest.turn).toBeNull();
+  expect(rest.w).toBeGreaterThan(rest.h); // a line of text is wide
+
+  const knob = await page
+    .locator("svg.canvas g.overlay circle.rotate-knob")
+    .evaluate((el) => {
+      const b = (el as SVGGraphicsElement).getBoundingClientRect();
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    });
+  const centre = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  await page.mouse.move(knob.x, knob.y);
+  await page.mouse.down();
+  await page.mouse.move(centre.x + 160, centre.y + 70, { steps: 6 });
+
+  const spinning = await size();
+  expect(spinning.w).toBeCloseTo(rest.w, 1);
+  expect(spinning.h).toBeCloseTo(rest.h, 1);
+  expect(spinning.turn).toMatch(/^rotate\(/);
+
+  await page.mouse.up();
+
+  // The label really rotated (a matrix on the node), and the box is measured around it again.
+  expect(await label.getAttribute("transform")).toMatch(/^matrix\(/);
+  const settled = await size();
+  expect(settled.turn).toBeNull();
+  expect(settled.h).toBeGreaterThan(rest.h);
+});

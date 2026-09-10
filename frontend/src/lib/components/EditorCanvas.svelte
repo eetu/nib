@@ -174,6 +174,7 @@
     if (!elXf) return;
     if (elXf.moved) editor.revert();
     elXf = null;
+    interaction.rotation = null;
   }
 
   // Multi-touch pinch: track active pointers (screen coords, keyed by id); with
@@ -261,6 +262,12 @@
         m0: DOMMatrix;
         center: Point;
         startAngle: number;
+        /** The box as measured when the drag began, and the point it turns about — both in
+         *  document space, so the overlay can draw it turning (see `interaction.rotation`). A
+         *  rotating element's *measured* box is the axis-aligned bounds of the rotated thing, so
+         *  drawing that would grow and shrink the box while the handles stayed put. */
+        docBounds: Bounds;
+        docPivot: Point;
       });
   let elXf: ElXf | null = null;
 
@@ -452,6 +459,8 @@
         m0,
         center,
         startAngle: Math.atan2(start.y - center.y, start.x - center.x),
+        docBounds: elBounds,
+        docPivot: boxCenter(elBounds),
         moved: false,
       };
     } else {
@@ -507,6 +516,12 @@
       const c = elXf.center;
       let deg = ((Math.atan2(cur.y - c.y, cur.x - c.x) - elXf.startAngle) * 180) / Math.PI;
       if (shift) deg = Math.round(deg / 15) * 15;
+      // The box turns with the label rather than being re-measured around it.
+      interaction.rotation = {
+        bounds: elXf.docBounds,
+        pivot: elXf.docPivot,
+        angle: (deg * Math.PI) / 180,
+      };
       next = new DOMMatrix()
         .translate(c.x, c.y)
         .rotate(deg)
@@ -607,6 +622,7 @@
     if (elXf) {
       if (elXf.moved) editor.commit(); // record the live move/resize/rotate as one undo step
       elXf = null;
+      interaction.rotation = null;
       return;
     }
     canvas.send({ type: "UP", docPoint: viewport.toDoc(screenOf(e)) });

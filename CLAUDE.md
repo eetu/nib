@@ -153,6 +153,11 @@ Per-area detail in `frontend/CLAUDE.md`.
   the geometry that now exists: nib **bakes** rotation into the path rather than storing an angle,
   so an upright box around a turned shape is the truth about the model. A box that stayed turned
   would need a per-shape transform in the document — a real model change, not a drawing one.
+  Non-shape elements (text/image/use) take the same treatment on the same store, through their own
+  gesture: their box is *measured* from the rendered DOM, so mid-rotation it would otherwise be the
+  axis-aligned bounds of an already-turned label. (Those elements do keep an angle — the composed
+  `transform` matrix on the node — so a persistently turned box is possible there; it needs the
+  handle hit-testing moved into rotated space too, or the handles stop matching what you see.)
 - **Selection = node + path (+ element).** `selection` is the active node;
   `selectedPath` is an explicit path selection (PATHS row / path-body click).
   `selectedPathIndex` is the effective selected path: the selected node's path if
