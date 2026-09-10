@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { focusTrap } from "$lib/actions/focusTrap";
   import { workspace } from "$lib/stores/workspace.svelte";
+
+  import Modal from "./Modal.svelte";
 
   let { open, onClose }: { open: boolean; onClose: () => void } = $props();
 
@@ -27,53 +28,25 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") onClose();
+    // ⌘/Ctrl+Enter, not Enter: this dialog's field is a textarea, where Enter is a newline.
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) load();
   }
 </script>
 
-{#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="scrim" onclick={(e) => e.target === e.currentTarget && onClose()}>
-    <div
-      class="dialog halo-card"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Paste SVG"
-      tabindex="-1"
-      use:focusTrap
-      onkeydown={onKeydown}
-    >
-      <h2>paste svg</h2>
-      <textarea bind:this={field} bind:value={text} spellcheck="false" placeholder={PLACEHOLDER}
-      ></textarea>
-      {#if workspace.error}<p class="error">{workspace.error}</p>{/if}
-      <div class="actions">
-        <button class="ghost" onclick={onClose}>cancel</button>
-        <button class="primary" onclick={load} disabled={!text.trim()}>load</button>
-      </div>
+<Modal {open} {onClose} title="Paste SVG" labelledBy="paste-title">
+  <div onkeydown={onKeydown} role="none">
+    <h2 id="paste-title">paste svg</h2>
+    <textarea bind:this={field} bind:value={text} spellcheck="false" placeholder={PLACEHOLDER}
+    ></textarea>
+    {#if workspace.error}<p class="error">{workspace.error}</p>{/if}
+    <div class="actions">
+      <button class="ghost" onclick={onClose}>cancel</button>
+      <button class="primary" onclick={load} disabled={!text.trim()}>load</button>
     </div>
   </div>
-{/if}
+</Modal>
 
 <style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 20;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.4);
-  }
-
-  .dialog {
-    width: min(560px, 92vw);
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
   h2 {
     margin: 0;
     font-family: var(--halo-font-heading);
