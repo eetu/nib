@@ -121,6 +121,29 @@ Per-area detail in `frontend/CLAUDE.md`.
   active. UI: a "live (non-destructive)" toggle on the multi-select boolean buttons +
   palette + a group-header badge/context-menu. Distinct from the **destructive**
   `BooleanOp` (bakes + deletes inputs immediately).
+- **Interaction follows the family discipline** (`homebrew:halo-interaction`), and where nib
+  deviates it says so here. **One context menu** (`lib/menu.svelte.ts` + `ContextMenu.svelte`,
+  mounted at the app root so no panel can clip it): every surface that has verbs calls
+  `openMenu(event, subject, items)` and none renders its own. The browser's menu is suppressed
+  **app-wide** except in text fields — checked against the real target at the window, since an
+  ancestor handler is how a number input silently loses paste. Canvas objects, nodes, LAYERS rows,
+  groups and project rows all answer; a verb that doesn't apply is **greyed with the reason**
+  rather than filtered out. There is deliberately **no scrim**: closing on a window-level
+  pointerdown lets the click through, so right-clicking a second shape *moves* the menu to it.
+  **One `Modal`** owns veil, focus, Escape, geometry and Enter-to-confirm (with the guard that a
+  focused button keeps Enter); every dialog is built on it, with `align="top"` the single knob (a
+  launcher sits near the top, a question in the middle). **`askConfirm`** replaces the browser's
+  `confirm()` and is reserved for what undo can't take back. **Selection vocabulary is one cue per
+  meaning:** solid accent border = selected, dashed = borrowed (a live-boolean operand), marching
+  ants = marquee, and the pen's dashed rubber band is a live aid that exists only under the hand.
+  *Deviation:* the canvas selection box takes the accent border **without** the family's soft fill
+  — tinting artwork you're trying to judge is worse than useless.
+- **A reload is undoable** (`workspace.savedSvg`): undo lives in memory, so without a baseline a
+  reload is the one gesture that makes every unsaved change permanent. The document as it last
+  stood on disk is persisted beside the working draft, and **Revert** (⌘K, asks first) goes back
+  to it. Loading *any* source bumps `treeVersion`, because re-parsing mints fresh uids even for
+  identical markup — without it, reverting to the same bytes leaves the canvas drawing a cached
+  tree whose uids match nothing, i.e. blank.
 - **Two coordinate systems in the canvas.** Artwork is drawn in a scaled `<g>`
   (document units); the editing overlay is drawn in screen space so handles stay
   a constant pixel size at any zoom. `viewport.toScreen/toDoc` bridge them.

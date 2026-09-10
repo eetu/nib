@@ -1,6 +1,7 @@
 <script lang="ts">
   import { BACKEND } from "$lib/backend/flag";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
+  import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import ContextMenu from "$lib/components/ContextMenu.svelte";
   import EditorCanvas from "$lib/components/EditorCanvas.svelte";
   import FileList from "$lib/components/FileList.svelte";
@@ -319,6 +320,9 @@
 
 <!-- The app one context menu: mounted at the root so no panel can clip it. -->
 <ContextMenu />
+
+<!-- The app's one "are you sure?", for the few things undo can't undo. -->
+<ConfirmDialog />
 
 <input
   class="hidden-file"

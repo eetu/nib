@@ -2607,3 +2607,88 @@ test("right-click answers with nib's menu everywhere but text fields", async ({ 
   });
   expect(suppressed).toBe(true);
 });
+
+// A node is a thing with verbs of its own — right-clicking one shouldn't answer about the shape
+// it belongs to, any more than right-clicking a word should answer about the paragraph.
+test("a node's own verbs live on its right-click", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M20 20 H80 V80 H20 Z" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // Double-click into node editing, where anchors exist to be right-clicked. A filled shape and
+  // its centre: this test is about the menu, not about hitting a hairline stroke.
+  const shape = (await page.locator("svg.canvas g.artwork path").boundingBox())!;
+  await page.mouse.dblclick(shape.x + shape.width / 2, shape.y + shape.height / 2);
+  const anchor = page.locator("svg.canvas g.overlay .anchor").first();
+  await expect(anchor).toBeAttached();
+
+  const at = await anchor.evaluate((el) => {
+    const b = (el as SVGGraphicsElement).getBoundingClientRect();
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  });
+  await page.mouse.click(at.x, at.y, { button: "right" });
+
+  const menu = page.locator("[role='menu']");
+  await expect(menu).toContainText("node");
+  // The state it is already in is shown, greyed — not hidden, and not offered as a no-op.
+  await expect(menu.getByRole("menuitem", { name: "corner" })).toBeDisabled();
+
+  const before = await page.locator("svg.canvas g.artwork path").getAttribute("d");
+  await menu.getByRole("menuitem", { name: "smooth" }).click();
+  await expect(menu).toHaveCount(0);
+  // Smoothing synthesises tangent handles, so the geometry really changed.
+  expect(await page.locator("svg.canvas g.artwork path").getAttribute("d")).not.toBe(before);
+});
+
+// Undo lives in memory, so without a baseline a reload is the one gesture that makes every
+// unsaved change permanent. Revert is the way back — and the one action here that asks first,
+// because it's the one undo can't take back.
+test("revert goes back to the saved file, after asking", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="30" y="30" width="20" height="20" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  const shape = page.locator("svg.canvas g.artwork path");
+  await expect(shape).toBeAttached();
+  const saved = await shape.getAttribute("d");
+
+  // Change it: select and nudge.
+  await page.keyboard.press("v");
+  const box = (await shape.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowRight");
+  expect(await shape.getAttribute("d")).not.toBe(saved);
+
+  // Revert asks before discarding, and cancelling keeps the edits.
+  await page.keyboard.press("Meta+k");
+  await page.locator(".palette .q").fill("revert");
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("revert to the saved file?");
+  await dialog.getByRole("button", { name: "cancel" }).click();
+  expect(await shape.getAttribute("d")).not.toBe(saved);
+
+  // Confirming puts the file back as it was.
+  await page.keyboard.press("Meta+k");
+  await page.locator(".palette .q").fill("revert");
+  await page.keyboard.press("Enter");
+  await page.getByRole("dialog").getByRole("button", { name: "revert" }).click();
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveAttribute("d", saved ?? "");
+});

@@ -44,7 +44,7 @@
       class="icon-btn"
       title="new drawing"
       aria-label="new"
-      onclick={() => workspace.newDocument()}
+      onclick={() => void workspace.newDocument()}
     >
       <File size={18} />
     </button>

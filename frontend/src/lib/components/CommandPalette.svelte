@@ -141,8 +141,13 @@
     { label: "toggle snap to grid", run: () => (tools.gridEnabled = !tools.gridEnabled) },
     { label: "toggle snap to points", run: () => (tools.snapEnabled = !tools.snapEnabled) },
     { label: "toggle smart guides", run: () => (tools.guidesEnabled = !tools.guidesEnabled) },
-    { label: "new drawing", run: () => workspace.newDocument() },
+    { label: "new drawing", run: () => void workspace.newDocument() },
     { label: "save", run: () => void workspace.save(), enabled: () => editor.hasDocument },
+    {
+      label: "revert to saved",
+      run: () => void workspace.revert(),
+      enabled: () => workspace.canRevert,
+    },
     { label: "save as…", run: () => void workspace.saveAs(), enabled: () => editor.hasDocument },
     {
       label: "copy svg",

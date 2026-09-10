@@ -531,6 +531,32 @@
     const hit = hitTest(screen);
     const element = elementHit(e as unknown as PointerEvent);
 
+    // An anchor (or one of its handles) is a thing with verbs of its own — the shape it belongs to
+    // is not what a right-click on a node is asking about.
+    if (hit.kind === "anchor" || hit.kind === "handle") {
+      const ref = hit.ref;
+      const node =
+        editor.doc.paths[ref.pathIndex]?.subpaths[ref.subpathIndex]?.nodes[ref.nodeIndex];
+      const name = editor.doc.paths[ref.pathIndex]?.id ?? "path";
+      editor.select(ref);
+      openMenu(e, `node ${ref.nodeIndex + 1} · ${name}`, [
+        {
+          label: "smooth",
+          hint: node?.type === "smooth" ? "on" : "handles stay collinear",
+          disabled: node?.type === "smooth",
+          run: () => editor.setNodeType(ref, "smooth"),
+        },
+        {
+          label: "corner",
+          hint: node?.type === "corner" ? "on" : "handles move apart",
+          disabled: node?.type === "corner",
+          run: () => editor.setNodeType(ref, "corner"),
+        },
+        { label: "delete node", danger: true, hint: "⌫", run: () => editor.deleteNode(ref) },
+      ]);
+      return;
+    }
+
     if (hit.kind === "fill" || hit.kind === "segment") {
       const index = hit.kind === "fill" ? hit.pathIndex : hit.pathIndex;
       if (!editor.selectedPaths.includes(index)) editor.selectPath(index);

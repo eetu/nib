@@ -335,6 +335,11 @@ class DocumentStore {
     this.#wasm.load(source); // throws on bad markup, before mutating
     this.fileName = name;
     this.dirty = false;
+    // A load replaces the tree, and re-parsing mints fresh uids even for identical markup. The
+    // canvas keys its cached render tree on the source string *or* this counter, so loading the
+    // same text twice — reverting to the file on disk, re-applying the SOURCE drawer — would
+    // otherwise leave it drawing a tree whose uids no longer match any path: a blank canvas.
+    this.treeVersion++;
     this.#sync();
     this.#persist();
   }
