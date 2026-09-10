@@ -27,6 +27,130 @@ export function handlePoints(bb: Bounds): { handle: TransformHandle; point: Poin
   ];
 }
 
+/**
+ * A selection box in **screen space, as points** — four corners and eight handles rather than an
+ * axis-aligned rect.
+ *
+ * A turned box can't be an `x/y/width/height` rect plus a rotation without the hit-test and the
+ * drawing each doing that arithmetic separately, which is how they drift apart. Points are the one
+ * representation both can share: the overlay traces the corners, the hit-test measures against the
+ * same handles, and neither knows or cares whether the box is upright, turned, or (under a
+ * non-uniformly-scaled ancestor) sheared into a parallelogram.
+ *
+ * `angle` is the box's own tilt in radians, and is *only* for orienting things that are drawn at a
+ * fixed pixel size — the handle squares and the resize cursors. Everything positional is already in
+ * the points.
+ */
+export type BoxFrame = {
+  /** nw, ne, se, sw — in that order, so the polygon traces the box. */
+  corners: [Point, Point, Point, Point];
+  handles: { handle: TransformHandle; point: Point }[];
+  /** Where the rotate knob's stem leaves the box (the top edge's midpoint). */
+  stem: Point;
+  knob: Point;
+  angle: number;
+};
+
+const mid = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+
+/** Build a frame from a box's four screen-space corners (nw, ne, se, sw). */
+export function boxFrame(nw: Point, ne: Point, se: Point, sw: Point): BoxFrame {
+  const n = mid(nw, ne);
+  const e = mid(ne, se);
+  const s = mid(se, sw);
+  const w = mid(sw, nw);
+  // The knob rides the top edge's outward normal, so it stays off the box's own top however the
+  // box is turned. Taken from the edge rather than from n - s, which says nothing for a box with
+  // no height (a horizontal line, a single-line label scaled flat).
+  const dx = ne.x - nw.x;
+  const dy = ne.y - nw.y;
+  const len = Math.hypot(dx, dy) || 1;
+  let ux = dy / len;
+  let uy = -dx / len;
+  // ...and points *away* from the box: a mirrored transform flips which side that is.
+  const c = mid(n, s);
+  if (ux * (c.x - n.x) + uy * (c.y - n.y) > 0) {
+    ux = -ux;
+    uy = -uy;
+  }
+  return {
+    corners: [nw, ne, se, sw],
+    handles: [
+      { handle: "nw", point: nw },
+      { handle: "n", point: n },
+      { handle: "ne", point: ne },
+      { handle: "e", point: e },
+      { handle: "se", point: se },
+      { handle: "s", point: s },
+      { handle: "sw", point: sw },
+      { handle: "w", point: w },
+    ],
+    stem: n,
+    knob: { x: n.x + ux * ROTATE_KNOB_PX, y: n.y + uy * ROTATE_KNOB_PX },
+    angle: Math.atan2(dy, dx),
+  };
+}
+
+/** The four corners (nw, ne, se, sw) of an axis-aligned box, optionally turned about a pivot. */
+export function boundsCorners(
+  bb: Bounds,
+  spin?: { pivot: Point; angle: number } | null,
+): [Point, Point, Point, Point] {
+  const raw: [Point, Point, Point, Point] = [
+    { x: bb.minX, y: bb.minY },
+    { x: bb.maxX, y: bb.minY },
+    { x: bb.maxX, y: bb.maxY },
+    { x: bb.minX, y: bb.maxY },
+  ];
+  if (!spin) return raw;
+  const cos = Math.cos(spin.angle);
+  const sin = Math.sin(spin.angle);
+  const at = (p: Point): Point => {
+    const dx = p.x - spin.pivot.x;
+    const dy = p.y - spin.pivot.y;
+    return { x: spin.pivot.x + dx * cos - dy * sin, y: spin.pivot.y + dx * sin + dy * cos };
+  };
+  return [at(raw[0]), at(raw[1]), at(raw[2]), at(raw[3])];
+}
+
+/** The handle (or rotate knob) of `frame` under a screen point, if any. */
+export function frameHit(
+  frame: BoxFrame,
+  screen: Point,
+): { t: "rotate" } | { t: "scale"; handle: TransformHandle } | null {
+  if (Math.hypot(screen.x - frame.knob.x, screen.y - frame.knob.y) <= HANDLE_HIT_PX)
+    return { t: "rotate" };
+  for (const { handle, point } of frame.handles)
+    if (Math.hypot(screen.x - point.x, screen.y - point.y) <= HANDLE_HIT_PX)
+      return { t: "scale", handle };
+  return null;
+}
+
+/**
+ * Is `p` inside the (convex) quad `corners`, within `pad` screen px of it?
+ *
+ * Signed cross products against each edge: all the same sign = inside. `pad` is applied per edge as
+ * a distance, so the tolerance is even around a turned box rather than only on its axes.
+ */
+export function insideQuad(corners: readonly Point[], p: Point, pad = 0): boolean {
+  let sign = 0;
+  for (let i = 0; i < corners.length; i++) {
+    const a = corners[i];
+    const b = corners[(i + 1) % corners.length];
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const len = Math.hypot(ex, ey);
+    if (len < 1e-9) continue; // degenerate edge — the neighbours still bound it
+    // Distance from the edge line, positive on one side. `pad` lets the point sit just outside.
+    const d = ((p.x - a.x) * ey - (p.y - a.y) * ex) / len;
+    if (Math.abs(d) <= pad) continue; // within the grab tolerance of this edge either way
+    const s = d > 0 ? 1 : -1;
+    if (sign === 0) sign = s;
+    else if (sign !== s) return false;
+  }
+  return true;
+}
+
 /** For a handle: the fixed anchor (opposite corner/edge), the moving point, and
  *  which axes it scales. Dragging `moving` toward/away from `anchor` scales. */
 export function handleAnchor(
@@ -63,11 +187,30 @@ export function scaleSubpaths(ref: Subpath[], anchor: Point, sx: number, sy: num
   }));
 }
 
-export function transformCursor(handle: TransformHandle): string {
-  if (handle === "nw" || handle === "se") return "nwse-resize";
-  if (handle === "ne" || handle === "sw") return "nesw-resize";
-  if (handle === "n" || handle === "s") return "ns-resize";
-  return "ew-resize";
+/** Which way each handle pulls, as a screen-space angle in degrees (y down). */
+const HANDLE_DEG: Record<TransformHandle, number> = {
+  e: 0,
+  se: 45,
+  s: 90,
+  sw: 135,
+  w: 180,
+  nw: 225,
+  n: 270,
+  ne: 315,
+};
+
+/**
+ * The resize cursor for a handle on a box tilted by `angle` radians.
+ *
+ * There are only four double-arrow cursors, so this picks the one nearest the direction the handle
+ * actually pulls — on a box turned 45° the "east" handle stretches down-right, and an `ew-resize`
+ * arrow there points somewhere the drag won't go.
+ */
+export function transformCursor(handle: TransformHandle, angle = 0): string {
+  const deg = HANDLE_DEG[handle] + (angle * 180) / Math.PI;
+  // A resize axis is bidirectional, so only the direction mod 180° matters.
+  const bucket = Math.round((((deg % 180) + 180) % 180) / 45) % 4;
+  return ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"][bucket];
 }
 
 /** How far (screen px) the rotate knob sits above the box's top-centre. */

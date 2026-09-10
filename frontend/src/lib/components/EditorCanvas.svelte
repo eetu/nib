@@ -9,13 +9,11 @@
   import { viewport } from "$lib/stores/viewport.svelte";
   import { getTool, type Hit, hitTest } from "$lib/tools";
   import {
-    type Bounds,
-    boxCenter,
-    HANDLE_HIT_PX,
+    type BoxFrame,
+    boxFrame,
+    frameHit,
     handleAnchor,
-    handlePoints,
-    padBounds,
-    ROTATE_KNOB_PX,
+    insideQuad,
     SELECT_PAD_PX,
     transformCursor,
     type TransformHandle,
@@ -174,7 +172,6 @@
     if (!elXf) return;
     if (elXf.moved) editor.revert();
     elXf = null;
-    interaction.rotation = null;
   }
 
   // Multi-touch pinch: track active pointers (screen coords, keyed by id); with
@@ -203,9 +200,27 @@
   // matrix on the node (a plain move with no existing transform edits x/y instead, keeping markup
   // + the inspector clean). The inspector still edits authored x/y/width/height/font-size.
 
-  // Screen-space bbox of the selected element (relative to the svg), re-measured on selection /
-  // tree / viewport changes → the Overlay draws its transform box, and gestures hit-test it.
-  let elBox = $state<{ x: number; y: number; w: number; h: number } | null>(null);
+  // The selected element's box, measured from the DOM — the model can't know font metrics, so
+  // this is the only place its size comes from.
+  //
+  // Measured as the element's **own** untransformed box (`getBBox`) plus the matrix that maps its
+  // user space to the screen (`getScreenCTM`, which includes the element's own `transform`), not as
+  // a `getBoundingClientRect`. Those differ exactly when it matters: the client rect is the
+  // axis-aligned box *around* a turned label, so a box drawn from it snaps upright the moment a
+  // rotation is committed, and it can't say which way the label's own edges run. The bbox and the
+  // matrix keep the box on the object — turned when the label is turned, and its handles on the
+  // label's own axes, which is what makes a resize after a rotation mean anything.
+  //
+  // `local` rides along because the gestures need it: scale and rotate are composed in this same
+  // space (see `startElXf`), where the box is axis-aligned and the arithmetic is the easy kind.
+  type ElBox = {
+    /** The padded box in the element's own user space. */
+    local: { x: number; y: number; w: number; h: number };
+    /** Own space → screen (svg-relative), as it stood when measured. */
+    toScreen: DOMMatrix;
+    frame: BoxFrame;
+  };
+  let elBox = $state<ElBox | null>(null);
   $effect(() => {
     const uid = editor.selectedElementUid;
     void editor.treeVersion; // re-measure on tree edits + any viewport change
@@ -215,41 +230,77 @@
     void pxW;
     void pxH;
     const el = uid && svgEl ? svgEl.querySelector(`[data-uid="${CSS.escape(uid)}"]`) : null;
-    if (!el) {
-      elBox = null;
-      return;
+    elBox = el ? measureElBox(el as SVGGraphicsElement) : null;
+  });
+
+  function measureElBox(el: SVGGraphicsElement): ElBox | null {
+    let raw: DOMRect;
+    try {
+      raw = el.getBBox(); // throws in Firefox for anything with no rendered geometry
+    } catch {
+      return null;
     }
-    const r = el.getBoundingClientRect();
-    const s = svgEl.getBoundingClientRect();
-    elBox = { x: r.left - s.left, y: r.top - s.top, w: r.width, h: r.height };
-  });
-
-  // The selected element's box in document coordinates (the viewport is axis-aligned, so the
-  // screen bbox maps to an axis-aligned doc bbox) — the basis for handle positions + transforms.
-  const elBounds = $derived.by((): Bounds | null => {
-    if (!elBox) return null;
-    const a = viewport.toDoc({ x: elBox.x, y: elBox.y });
-    const b = viewport.toDoc({ x: elBox.x + elBox.w, y: elBox.y + elBox.h });
-    return {
-      minX: Math.min(a.x, b.x),
-      minY: Math.min(a.y, b.y),
-      maxX: Math.max(a.x, b.x),
-      maxY: Math.max(a.y, b.y),
+    const ctm = el.getScreenCTM?.();
+    if (!ctm) return null;
+    const r = svgEl.getBoundingClientRect();
+    // Screen matrix, offset to svg-relative coordinates (the overlay's space), and detached: a
+    // live SVGMatrix view would drift under us mid-gesture.
+    const m = new DOMMatrix([ctm.a, ctm.b, ctm.c, ctm.d, ctm.e - r.left, ctm.f - r.top]);
+    // The pad is a screen distance, so it converts per axis — under a `scale(8, 2)` ancestor one
+    // user unit is worth eight screen px across and two down.
+    const padX = SELECT_PAD_PX / (Math.hypot(m.a, m.b) || 1);
+    const padY = SELECT_PAD_PX / (Math.hypot(m.c, m.d) || 1);
+    const local = {
+      x: raw.x - padX,
+      y: raw.y - padY,
+      w: raw.width + padX * 2,
+      h: raw.height + padY * 2,
     };
-  });
+    const at = (x: number, y: number): Point => {
+      const q = new DOMPoint(x, y).matrixTransform(m);
+      return { x: q.x, y: q.y };
+    };
+    return {
+      local,
+      toScreen: m,
+      frame: boxFrame(
+        at(local.x, local.y),
+        at(local.x + local.w, local.y),
+        at(local.x + local.w, local.y + local.h),
+        at(local.x, local.y + local.h),
+      ),
+    };
+  }
 
-  // An element gesture works in the element's PARENT coordinate space, not document space. Both
-  // the `transform` matrix we compose and the `x`/`y` we write are interpreted there, so a
-  // document-space delta is only correct for an element sitting directly in the artwork root —
-  // nested under a `<g transform="scale(8)">` it moved eight times too far. `toLocal` maps a
-  // screen point into that space; its matrix is captured once per gesture (the *parent's*
-  // transform can't change mid-drag, only the element's own).
-  type ElXfBase = { uid: string; toLocal: (p: Point) => Point; moved: boolean };
+  // An element gesture works in one of two spaces, and which one is not a detail:
+  //
+  // **Move** works in the element's PARENT space. Both a composed translate and the `x`/`y` we
+  // write are interpreted there, so a document-space delta is only correct for an element sitting
+  // directly in the artwork root — nested under a `<g transform="scale(8)">` it moved eight times
+  // too far. Dragging means "follow the cursor", which is a screen direction, so this is right.
+  //
+  // **Scale and rotate** work in the element's OWN space — the one its `getBBox` lives in, where
+  // the box is axis-aligned. Composed on that side (`m0 · L`, not `L · m0`) the handles pull along
+  // the *object's* axes, so dragging the east edge of a box turned 30° widens the label along its
+  // own baseline rather than shearing it out across the parent's x. Once the box is drawn turned,
+  // anything else visibly disagrees with the handle under the cursor.
+  //
+  // Both mappers are captured once per gesture: the parent's transform can't change mid-drag, and
+  // the element's own must not — every frame composes onto the gesture's start, never onto the
+  // previous frame's result.
+  type ElXfBase = { uid: string; moved: boolean };
   type ElXf =
-    | (ElXfBase & { mode: "moveXy"; x0: number; y0: number; start: Point })
-    | (ElXfBase & { mode: "move"; m0: DOMMatrix; start: Point })
+    | (ElXfBase & {
+        mode: "moveXy";
+        toParent: (p: Point) => Point;
+        x0: number;
+        y0: number;
+        start: Point;
+      })
+    | (ElXfBase & { mode: "move"; toParent: (p: Point) => Point; m0: DOMMatrix; start: Point })
     | (ElXfBase & {
         mode: "scale";
+        toOwn: (p: Point) => Point;
         m0: DOMMatrix;
         anchor: Point;
         startPt: Point;
@@ -259,23 +310,27 @@
       })
     | (ElXfBase & {
         mode: "rotate";
+        toOwn: (p: Point) => Point;
         m0: DOMMatrix;
         center: Point;
         startAngle: number;
-        /** The box as measured when the drag began, and the point it turns about — both in
-         *  document space, so the overlay can draw it turning (see `interaction.rotation`). A
-         *  rotating element's *measured* box is the axis-aligned bounds of the rotated thing, so
-         *  drawing that would grow and shrink the box while the handles stayed put. */
-        docBounds: Bounds;
-        docPivot: Point;
       });
   let elXf: ElXf | null = null;
 
   /** Map screen (svg-relative) points into `el`'s parent coordinate space. Falls back to document
    *  space when the element has no measurable parent CTM (detached / display:none). */
-  function localMapper(el: SVGGraphicsElement | null): (p: Point) => Point {
+  function parentMapper(el: SVGGraphicsElement | null): (p: Point) => Point {
     const parent = el?.parentNode as SVGGraphicsElement | null;
-    const ctm = parent?.getScreenCTM?.() ?? null;
+    return ctmMapper(parent?.getScreenCTM?.() ?? null);
+  }
+
+  /** Map screen (svg-relative) points into `el`'s own user space — where its `getBBox` lives, and
+   *  the space scale + rotate are composed in. */
+  function ownMapper(el: SVGGraphicsElement | null): (p: Point) => Point {
+    return ctmMapper(el?.getScreenCTM?.() ?? null);
+  }
+
+  function ctmMapper(ctm: DOMMatrix | null): (p: Point) => Point {
     if (!ctm) return (p) => viewport.toDoc(p);
     const inv = ctm.inverse();
     const r = svgEl.getBoundingClientRect();
@@ -315,32 +370,18 @@
   }
 
   // A transform handle (or rotate knob) of the selected element's box under `screen`, if any —
-  // mirrors the path transform hit-test over the element's (measured) box.
+  // measured against the very points the overlay drew, so a turned box grabs where it looks.
   function elHandleHit(
     screen: Point,
   ): { t: "rotate" } | { t: "scale"; handle: TransformHandle } | null {
-    if (!elBounds) return null;
-    const bb = padBounds(elBounds, viewport.toDocLength(SELECT_PAD_PX));
-    const top = viewport.toScreen({ x: (bb.minX + bb.maxX) / 2, y: bb.minY });
-    if (Math.hypot(screen.x - top.x, screen.y - (top.y - ROTATE_KNOB_PX)) <= HANDLE_HIT_PX)
-      return { t: "rotate" };
-    for (const { handle, point } of handlePoints(bb)) {
-      const s = viewport.toScreen(point);
-      if (Math.hypot(screen.x - s.x, screen.y - s.y) <= HANDLE_HIT_PX)
-        return { t: "scale", handle };
-    }
-    return null;
+    return elBox ? frameHit(elBox.frame, screen) : null;
   }
 
-  // Is a screen point inside the selected element's box (with a small grab tolerance)?
+  // Is a screen point inside the selected element's box (with a small grab tolerance)? A quad
+  // test, not a rect one — a turned box must be grabbable where it actually is, and its
+  // axis-aligned bounds would also claim the empty corners well outside it.
   function inElBox(p: Point): boolean {
-    if (!elBox) return false;
-    return (
-      p.x >= elBox.x - 3 &&
-      p.x <= elBox.x + elBox.w + 3 &&
-      p.y >= elBox.y - 3 &&
-      p.y <= elBox.y + elBox.h + 3
-    );
+    return !!elBox && insideQuad(elBox.frame.corners, p, 3);
   }
 
   // --- inline text editing -------------------------------------------------
@@ -427,51 +468,51 @@
     // previous frame's result instead of the gesture's start — the element runs away from the
     // cursor, accelerating (move/rotate visibly, scale subtly).
     const m0 = snapshotMatrix(el?.transform.baseVal.consolidate()?.matrix);
-    const toLocal = localMapper(el);
-    const start = toLocal(screen);
     if (kind.t === "move") {
+      const toParent = parentMapper(el);
+      const start = toParent(screen);
       // No existing transform → move via x/y (clean markup); else compose a translate.
       if (el && !el.getAttribute("transform"))
         elXf = {
           uid,
-          toLocal,
+          toParent,
           mode: "moveXy",
           x0: Number(el.getAttribute("x") ?? "0") || 0,
           y0: Number(el.getAttribute("y") ?? "0") || 0,
           start,
           moved: false,
         };
-      else elXf = { uid, toLocal, mode: "move", m0, start, moved: false };
+      else elXf = { uid, toParent, mode: "move", m0, start, moved: false };
       return;
     }
-    if (!elBounds) return;
-    // The handles are drawn on the document-space box, so take the grabbed points from there and
-    // map them across — that keeps the anchor exactly under the handle the user grabbed, whatever
-    // the ancestor transform is.
-    const bb = padBounds(elBounds, viewport.toDocLength(SELECT_PAD_PX));
-    const docToLocal = (p: Point) => toLocal(viewport.toScreen(p));
+    if (!elBox) return;
+    // Scale + rotate run in the element's own space, so the grabbed anchor comes straight off the
+    // local box the handles were drawn from — no mapping, and it stays exactly under the handle
+    // however the element or its ancestors are transformed.
+    const l = elBox.local;
+    const bb = { minX: l.x, minY: l.y, maxX: l.x + l.w, maxY: l.y + l.h };
+    const toOwn = ownMapper(el);
+    const start = toOwn(screen);
     if (kind.t === "rotate") {
-      const center = docToLocal(boxCenter(bb));
+      const center = { x: l.x + l.w / 2, y: l.y + l.h / 2 };
       elXf = {
         uid,
-        toLocal,
+        toOwn,
         mode: "rotate",
         m0,
         center,
         startAngle: Math.atan2(start.y - center.y, start.x - center.x),
-        docBounds: elBounds,
-        docPivot: boxCenter(elBounds),
         moved: false,
       };
     } else {
       const { anchor, moving, sx, sy } = handleAnchor(kind.handle, bb);
       elXf = {
         uid,
-        toLocal,
+        toOwn,
         mode: "scale",
         m0,
-        anchor: docToLocal(anchor),
-        startPt: docToLocal(moving),
+        anchor,
+        startPt: moving,
         axisX: sx,
         axisY: sy,
         corner: sx && sy,
@@ -483,7 +524,8 @@
   // Apply the live transform for the in-flight element gesture at the current pointer.
   function moveElXf(screen: Point, shift: boolean): void {
     if (!elXf) return;
-    const cur = elXf.toLocal(screen);
+    const cur =
+      elXf.mode === "scale" || elXf.mode === "rotate" ? elXf.toOwn(screen) : elXf.toParent(screen);
     elXf.moved = true;
     if (elXf.mode === "moveXy") {
       editor.previewNodeMove(
@@ -506,27 +548,16 @@
         sx = (sx < 0 ? -1 : 1) * s;
         sy = (sy < 0 ? -1 : 1) * s;
       }
+      // Composed on the element's own side (m0 · S), so the box scales along its own axes.
       const a = elXf.anchor;
-      next = new DOMMatrix()
-        .translate(a.x, a.y)
-        .scale(sx, sy)
-        .translate(-a.x, -a.y)
-        .multiply(elXf.m0);
+      next = elXf.m0.translate(a.x, a.y).scale(sx, sy).translate(-a.x, -a.y);
     } else {
       const c = elXf.center;
       let deg = ((Math.atan2(cur.y - c.y, cur.x - c.x) - elXf.startAngle) * 180) / Math.PI;
       if (shift) deg = Math.round(deg / 15) * 15;
-      // The box turns with the label rather than being re-measured around it.
-      interaction.rotation = {
-        bounds: elXf.docBounds,
-        pivot: elXf.docPivot,
-        angle: (deg * Math.PI) / 180,
-      };
-      next = new DOMMatrix()
-        .translate(c.x, c.y)
-        .rotate(deg)
-        .translate(-c.x, -c.y)
-        .multiply(elXf.m0);
+      // Likewise m0 · R: the box turns about its own centre, and the measured frame follows it
+      // because it's built from this very matrix — no separate "draw it turning" feedback needed.
+      next = elXf.m0.translate(c.x, c.y).rotate(deg).translate(-c.x, -c.y);
     }
     editor.previewNodeAttr(elXf.uid, "transform", matrixStr(next));
   }
@@ -599,7 +630,7 @@
     if (tools.active === "select" && editor.selectedElementUid) {
       const h = elHandleHit(screen);
       if (h) {
-        hoverCursor = h.t === "rotate" ? "grab" : transformCursor(h.handle);
+        hoverCursor = h.t === "rotate" ? "grab" : transformCursor(h.handle, elBox?.frame.angle);
         return;
       }
       if (inElBox(screen)) {
@@ -622,7 +653,6 @@
     if (elXf) {
       if (elXf.moved) editor.commit(); // record the live move/resize/rotate as one undo step
       elXf = null;
-      interaction.rotation = null;
       return;
     }
     canvas.send({ type: "UP", docPoint: viewport.toDoc(screenOf(e)) });
@@ -834,7 +864,7 @@
         {#each renderTree as n, i (i)}{@render renderNode(n)}{/each}
       </g>
     </g>
-    <Overlay elementBounds={elBounds} />
+    <Overlay elementFrame={elBox?.frame ?? null} />
   </svg>
 
   {#if textEdit}

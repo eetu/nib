@@ -153,11 +153,27 @@ Per-area detail in `frontend/CLAUDE.md`.
   the geometry that now exists: nib **bakes** rotation into the path rather than storing an angle,
   so an upright box around a turned shape is the truth about the model. A box that stayed turned
   would need a per-shape transform in the document — a real model change, not a drawing one.
-  Non-shape elements (text/image/use) take the same treatment on the same store, through their own
-  gesture: their box is *measured* from the rendered DOM, so mid-rotation it would otherwise be the
-  axis-aligned bounds of an already-turned label. (Those elements do keep an angle — the composed
-  `transform` matrix on the node — so a persistently turned box is possible there; it needs the
-  handle hit-testing moved into rotated space too, or the handles stop matching what you see.)
+  **A non-shape element's box stays turned, because its rotation really is stored** — the composed
+  `transform` matrix on the node. So instead of the store above, its box is measured as the
+  element's *own* untransformed `getBBox()` mapped through its `getScreenCTM()` (which includes
+  that matrix): turned while turning, still turned afterwards, Pixelmator-style. A
+  `getBoundingClientRect` can't do this — it's the axis-aligned box *around* a turned label, so a
+  box drawn from it snaps upright on release and can't say which way the label's own edges run.
+  That last part is the point: the handles land on the label's **own axes**, so **scale and rotate
+  compose on the element's side** (`m0 · L`, in the space `getBBox` lives in) rather than the
+  parent's — dragging the east handle of a box turned 30° widens the label along its own baseline
+  instead of shearing it out across the parent's x. Move stays in the *parent* space, since
+  "follow the cursor" is a screen direction. Both mappers are captured once per gesture.
+- **The selection box is a `BoxFrame` — points, not a rect** (`tools/transform.ts`): four screen-
+  space corners plus the eight handles, the knob, and the box's tilt. A turned box can't be an
+  `x/y/width/height` rect plus a rotation without the drawing and the hit-test each doing that
+  arithmetic separately, which is how they drift apart; points are the one representation both
+  share (`Overlay` traces a `<polygon>`, `frameHit`/`insideQuad` measure the same points). The
+  upright case is the degenerate one, so shapes and elements draw through the same snippet — and
+  when a path finally stores an angle, it supplies turned corners and nothing else changes. Only
+  the parts drawn at a fixed pixel size read `frame.angle`: the handle squares and the resize
+  cursors (`transformCursor(handle, angle)` — an `ew-resize` arrow on a 45°-turned box points
+  somewhere the drag won't go).
 - **Selection = node + path (+ element).** `selection` is the active node;
   `selectedPath` is an explicit path selection (PATHS row / path-body click).
   `selectedPathIndex` is the effective selected path: the selected node's path if
