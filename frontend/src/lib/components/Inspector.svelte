@@ -28,7 +28,8 @@
   import { tools } from "$lib/stores/tool.svelte";
   import { canReadInstalledFonts, installedFamilyNames } from "$lib/text/fonts";
   import { outlineText, warmFontFor } from "$lib/text/outline";
-  import { scaleSubpaths, shearSubpaths } from "$lib/tools/transform";
+  import { activePivot } from "$lib/tools/rotate";
+  import { boxCenter, scaleSubpaths, shearSubpaths } from "$lib/tools/transform";
 
   import ColorInput from "./ColorInput.svelte";
   import PaintInput from "./PaintInput.svelte";
@@ -240,10 +241,9 @@
     const deg = evalNum(input.value);
     input.value = "0";
     if (deg === null || deg === 0 || !path || pathIndex === null || !bounds) return;
-    const center = tools.pivot ?? {
-      x: (bounds.minX + bounds.maxX) / 2,
-      y: (bounds.minY + bounds.maxY) / 2,
-    };
+    // The same point the rotate tool would turn about — the box's centre as drawn, so a typed
+    // angle and a dragged one agree even when the box is turned.
+    const center = activePivot() ?? boxCenter(bounds);
     const k = Math.tan((deg * Math.PI) / 180);
     editor.setSubpaths(
       pathIndex,
@@ -255,17 +255,18 @@
   // Rotate the selected path a one-shot angle (deg, clockwise) — the input resets to 0 so each
   // entry applies once. Routes through the semantic `rotatePath` op.
   //
-  // About the rotate tool's pivot when one is placed, else the bbox centre: with the pivot marker
-  // on screen, typing an angle has to mean the same thing as dragging one.
+  // About the rotate tool's pivot when one is placed, else the centre of the box as drawn: with the
+  // pivot marker on screen, typing an angle has to mean the same thing as dragging one — and on a
+  // turned selection the drawn centre isn't the centre of its document-axis bounds.
   function rotateBy(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
     const deg = evalNum(input.value);
     input.value = "0";
     if (deg !== null && deg !== 0 && pathIndex !== null)
-      editor.rotatePath(pathIndex, deg, tools.pivot ?? undefined);
+      editor.rotatePath(pathIndex, deg, activePivot() ?? undefined);
   }
   function rotateQuick(deg: number) {
-    if (pathIndex !== null) editor.rotatePath(pathIndex, deg, tools.pivot ?? undefined);
+    if (pathIndex !== null) editor.rotatePath(pathIndex, deg, activePivot() ?? undefined);
   }
 
   let collapsed = $state<string[]>([]);

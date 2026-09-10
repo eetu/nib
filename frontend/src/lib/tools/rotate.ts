@@ -14,7 +14,7 @@ import { tools } from "$lib/stores/tool.svelte";
 import { viewport } from "$lib/stores/viewport.svelte";
 
 import { snapBypassed, snapshotTargets } from "./shape-util";
-import { boxCenter, rotateSubpaths } from "./transform";
+import { framedCenter, fromFrame, handlePoints, rotateSubpaths } from "./transform";
 import type { DragSession, Tool } from "./types";
 
 /** How close (in screen px) the pointer must be to grab the pivot rather than start a rotation. */
@@ -22,30 +22,23 @@ const PIVOT_GRAB_PX = 10;
 /** Past this much travel a press is a rotation, not a click that places the pivot. */
 const DRAG_SLOP_PX = 3;
 
-/** Where the selection turns: the placed pivot, else the selection's own centre. */
+/** Where the selection turns: the placed pivot, else the centre of the box **as drawn** — which
+ *  for a turned selection is not the centre of its document-axis bounds. */
 export function activePivot(): Point | null {
   if (tools.pivot) return tools.pivot;
-  const bb = editor.selectionBounds;
-  return bb ? boxCenter(bb) : null;
+  const box = editor.selectionFrame;
+  return box ? framedCenter(box.bounds, box.angle) : null;
 }
 
 /** The points a dragged pivot snaps to: the selection box's corners, edge midpoints and centre —
- *  the placements you actually reach for ("turn about that corner"). */
+ *  the placements you actually reach for ("turn about that corner"). Taken from the box as drawn,
+ *  so on a turned selection the pivot snaps to the corners you can see. */
 function pivotSnapPoints(): Point[] {
-  const bb = editor.selectionBounds;
-  if (!bb) return [];
-  const midX = (bb.minX + bb.maxX) / 2;
-  const midY = (bb.minY + bb.maxY) / 2;
+  const box = editor.selectionFrame;
+  if (!box) return [];
   return [
-    { x: bb.minX, y: bb.minY },
-    { x: midX, y: bb.minY },
-    { x: bb.maxX, y: bb.minY },
-    { x: bb.minX, y: midY },
-    { x: midX, y: midY },
-    { x: bb.maxX, y: midY },
-    { x: bb.minX, y: bb.maxY },
-    { x: midX, y: bb.maxY },
-    { x: bb.maxX, y: bb.maxY },
+    ...handlePoints(box.bounds).map((h) => fromFrame(h.point, box.angle)),
+    framedCenter(box.bounds, box.angle),
   ];
 }
 
