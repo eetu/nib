@@ -455,7 +455,13 @@ client-side pro pillars, all running on the core):
   6. **Rotate/skew about a freely-movable pivot — LANDED.** It is a tool of its own (`e`), which
      is what the conflict with the select tool's drag-to-move + double-click-to-node-edit always
      implied: click places the pivot, drag turns about it, and numeric rotate/skew follow the same
-     point. See the tools convention above. **Next: freeze the editor UI (1.0 RC).**
+     point. See the tools convention above.
+  7. **A selection box that stays turned — LANDED.** Pixelmator-style: the box holds the angle it
+     was rotated to instead of snapping to axis-aligned bounds, and its handles resize along the
+     shape's own edges. Shapes needed the tilt *stored* (`PathElement::box_angle`, a nib annotation
+     like `locked`); a text/image/use element already stored it as a node `transform`, so its box
+     is measured from `getBBox` × `getScreenCTM` instead. Both draw through one `BoxFrame` of
+     screen-space points. See the two conventions above. **Next: freeze the editor UI (1.0 RC).**
 - **Editor track = A → B → E → finalize; Phase C rides alongside.** Phase E is the
   *editor's capstone* — once it lands the editor is feature-complete and the remaining work
   is **finalization** (coverage/fidelity on a real-SVG corpus, robustness + large-doc perf,
