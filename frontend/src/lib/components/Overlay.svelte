@@ -6,6 +6,7 @@
   import { interaction } from "$lib/stores/interaction.svelte";
   import { tools } from "$lib/stores/tool.svelte";
   import { viewport } from "$lib/stores/viewport.svelte";
+  import { activePivot } from "$lib/tools/rotate";
   import {
     type Bounds,
     handlePoints,
@@ -54,6 +55,9 @@
   // selected or node-edited) show *all* its operands as faint outlines, so the editable source
   // shapes are visible behind the computed result (Pixelmator-style). Driven by the tree's
   // boolean groups (their operand uids), not the retired flat `layer` field.
+  // Where the rotate tool would turn: the placed pivot, else the selection's centre.
+  const pivot = $derived(tools.active === "rotate" ? (tools.pivot ?? activePivot()) : null);
+
   const activeOperandUids = $derived.by(() => {
     const editUid = editor.nodeEditIndex != null ? doc?.paths[editor.nodeEditIndex]?.uid : null;
     const selected = new Set(
@@ -135,6 +139,15 @@
     {#if elementBounds}
       <!-- transform box for a selected non-shape element (text/image/use), from its measured bbox -->
       {@render transformBox(elementBounds)}
+    {/if}
+    {#if tools.active === "rotate" && pivot}
+      <!-- The pivot the rotate tool turns about: a crosshair you can grab and drag, drawn last so
+           it stays legible over the selection outline. -->
+      {@const at = viewport.toScreen(pivot)}
+      <circle class="pivot-halo" cx={at.x} cy={at.y} r="9" />
+      <line class="pivot-cross" x1={at.x - 7} y1={at.y} x2={at.x + 7} y2={at.y} />
+      <line class="pivot-cross" x1={at.x} y1={at.y - 7} x2={at.x} y2={at.y + 7} />
+      <circle class="pivot-dot" cx={at.x} cy={at.y} r="2.5" />
     {/if}
     {#if editor.multiSelected}
       <!-- outline every selected path (accent centerline) so it's clear which are in the
@@ -285,6 +298,24 @@
     stroke-width: 1;
     opacity: 0.9;
     pointer-events: none;
+  }
+
+  /* The rotate tool's pivot: a target you can see against artwork of any colour — a pale halo
+     under an accent crosshair. */
+  .pivot-halo {
+    fill: var(--halo-bg-main);
+    opacity: 0.75;
+    stroke: var(--halo-accent);
+    stroke-width: 1;
+  }
+
+  .pivot-cross {
+    stroke: var(--halo-accent);
+    stroke-width: 1.5;
+  }
+
+  .pivot-dot {
+    fill: var(--halo-accent);
   }
 
   /* rotate knob above the box top-centre */

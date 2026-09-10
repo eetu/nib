@@ -212,7 +212,10 @@
     const deg = evalNum(input.value);
     input.value = "0";
     if (deg === null || deg === 0 || !path || pathIndex === null || !bounds) return;
-    const center = { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2 };
+    const center = tools.pivot ?? {
+      x: (bounds.minX + bounds.maxX) / 2,
+      y: (bounds.minY + bounds.maxY) / 2,
+    };
     const k = Math.tan((deg * Math.PI) / 180);
     editor.setSubpaths(
       pathIndex,
@@ -221,16 +224,20 @@
     editor.commit();
   }
 
-  // Rotate the selected path a one-shot angle (deg, clockwise) about its bbox centre — the input
-  // resets to 0 so each entry applies once. Routes through the semantic `rotatePath` op.
+  // Rotate the selected path a one-shot angle (deg, clockwise) — the input resets to 0 so each
+  // entry applies once. Routes through the semantic `rotatePath` op.
+  //
+  // About the rotate tool's pivot when one is placed, else the bbox centre: with the pivot marker
+  // on screen, typing an angle has to mean the same thing as dragging one.
   function rotateBy(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
     const deg = evalNum(input.value);
     input.value = "0";
-    if (deg !== null && deg !== 0 && pathIndex !== null) editor.rotatePath(pathIndex, deg);
+    if (deg !== null && deg !== 0 && pathIndex !== null)
+      editor.rotatePath(pathIndex, deg, tools.pivot ?? undefined);
   }
   function rotateQuick(deg: number) {
-    if (pathIndex !== null) editor.rotatePath(pathIndex, deg);
+    if (pathIndex !== null) editor.rotatePath(pathIndex, deg, tools.pivot ?? undefined);
   }
 
   let collapsed = $state<string[]>([]);

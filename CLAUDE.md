@@ -126,13 +126,26 @@ Per-area detail in `frontend/CLAUDE.md`.
   a constant pixel size at any zoom. `viewport.toScreen/toDoc` bridge them.
 - **Tools are a pluggable seam** (`frontend/src/lib/tools`): each is
   `{ id, cursor, begin() → DragSession?, hover?() }`. Add a tool = add a module +
-  registry entry; the rail groups them (`ToolRail`: select · create · nodes) so
+  registry entry; the rail groups them (`ToolRail`: select · create · transform · nodes) so
   it stays scannable as they grow. `hover()` drives live aids (pen rubber-band,
   circle centre-snap). Tools: select/move, pen (draw new paths — and *resume*
   an open subpath by clicking either endpoint; grabbing the head reverses the
   subpath so appends still run off the tail, via `editor.reverseSubpath`),
-  circle (drag out a closed 4-node bezier), add-node, delete-node. Shapes are built as
+  circle (drag out a closed 4-node bezier), rotate, add-node, delete-node. Shapes are built as
   editable paths (`model/shapes.ts`), not native `<circle>`/`<rect>`.
+- **Rotate about a movable pivot is its own tool** (`tools/rotate.ts`, `e`, advanced-only). The
+  select tool's box turns about the box centre, which covers most rotation; what it can't do is
+  swing a shape *around something else* — an arm about a shoulder, a spoke about a hub. A pivot
+  handle inside the select tool would sit exactly where drag-to-move and double-click-to-node-edit
+  already live, so it lives in a tool where nothing competes for the canvas. **A click places the
+  pivot, a drag turns the selection about it** (decided at release, past a few px of travel), and
+  dragging the pivot itself moves it, snapping to the selection box's corners/midpoints/centre.
+  `tools.pivot` (doc units, `null` = the selection's centre) is deliberately **not persisted** and
+  clears when the selection changes: a pivot belongs to the shape you're working on, and a stale
+  one rotates the next shape into orbit. Numeric **rotate and skew honour it too** — with the
+  marker on screen, typing an angle has to mean what dragging one means. The op vocabulary already
+  took a pivot (`RotatePath {cx, cy}`, one shared pivot for a multi-selection), so this is UI over
+  a core that was ready — and MCP gets the same rotation without knowing the tool exists.
 - **Selection = node + path (+ element).** `selection` is the active node;
   `selectedPath` is an explicit path selection (PATHS row / path-body click).
   `selectedPathIndex` is the effective selected path: the selected node's path if
@@ -397,9 +410,10 @@ client-side pro pillars, all running on the core):
      (`WelcomeDialog`, shown once when `settings.uiLevelChosen` is false — persisting the pick retires
      it, then it's Settings-only). e2e seed `nib:uiLevel` in a `beforeEach` so tests boot as returning
      users; a dedicated first-run test covers the chooser.
-  6. **Deferred (needs a dedicated rotate tool):** rotate/skew about a *freely-movable* pivot — a
-     centre pivot handle conflicts with the unified select tool's drag-to-move + double-click-to-node-
-     edit. Then **freeze the editor UI (1.0 RC).**
+  6. **Rotate/skew about a freely-movable pivot — LANDED.** It is a tool of its own (`e`), which
+     is what the conflict with the select tool's drag-to-move + double-click-to-node-edit always
+     implied: click places the pivot, drag turns about it, and numeric rotate/skew follow the same
+     point. See the tools convention above. **Next: freeze the editor UI (1.0 RC).**
 - **Editor track = A → B → E → finalize; Phase C rides alongside.** Phase E is the
   *editor's capstone* — once it lands the editor is feature-complete and the remaining work
   is **finalization** (coverage/fidelity on a real-SVG corpus, robustness + large-doc perf,

@@ -2460,3 +2460,69 @@ test(
     expect(await shape.evaluate((el) => getComputedStyle(el).filter)).toContain("#sh");
   },
 );
+
+// The rotate tool exists for the one turn the select tool's box can't do: swinging a shape around
+// a point that isn't its own centre. So the test is exactly that difference — a rotation about a
+// placed pivot *moves* the shape, where a centre rotation would leave it where it is.
+test("rotates about a pivot you place, not the shape's centre", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="40" y="40" width="20" height="20" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+
+  const shape = page.locator("svg.canvas g.artwork path");
+  await expect(shape).toBeAttached();
+
+  // Select it with the select tool, then switch to rotate.
+  await page.keyboard.press("v");
+  const canvas = (await page.locator("svg.canvas").boundingBox())!;
+  const centre = await shape.evaluate((el) => {
+    const b = (el as SVGGraphicsElement).getBoundingClientRect();
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  });
+  await page.mouse.click(centre.x, centre.y);
+  await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
+
+  await page.keyboard.press("e");
+  // The pivot shows at the selection's centre until it's moved.
+  const pivot = page.locator("svg.canvas g.overlay .pivot-dot");
+  await expect(pivot).toBeAttached();
+  const atCentre = await pivot.evaluate((el) => ({
+    x: Number(el.getAttribute("cx")),
+    y: Number(el.getAttribute("cy")),
+  }));
+  expect(Math.abs(atCentre.x + canvas.x - centre.x)).toBeLessThan(3);
+
+  // Click well away from the shape to place the pivot there.
+  const placed = { x: centre.x - 120, y: centre.y };
+  await page.mouse.click(placed.x, placed.y);
+  const moved = await pivot.evaluate((el) => Number(el.getAttribute("cx")));
+  expect(Math.abs(moved + canvas.x - placed.x)).toBeLessThan(3);
+
+  const before = await shape.evaluate((el) => (el as SVGGraphicsElement).getBoundingClientRect().x);
+
+  // Drag a half-turn about that pivot: grab a point right of the pivot and swing it to the left.
+  await page.mouse.move(centre.x, centre.y);
+  await page.mouse.down();
+  await page.mouse.move(placed.x, placed.y - 100, { steps: 8 });
+  await page.mouse.move(placed.x - 120, placed.y + 1, { steps: 8 });
+  await page.mouse.up();
+
+  // Half a turn about a pivot to the shape's left lands it on the pivot's far side — a centre
+  // rotation of a square would have left the box exactly where it was.
+  const after = await shape.evaluate((el) => (el as SVGGraphicsElement).getBoundingClientRect().x);
+  expect(after).toBeLessThan(before - 100);
+
+  // And it's one undo step, not one per frame.
+  await page.keyboard.press("Meta+z");
+  const undone = await shape.evaluate((el) => (el as SVGGraphicsElement).getBoundingClientRect().x);
+  expect(Math.abs(undone - before)).toBeLessThan(3);
+});

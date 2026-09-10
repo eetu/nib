@@ -1,3 +1,4 @@
+import type { Point } from "$lib/model/types";
 import { debounce, loadState, saveState } from "$lib/persistence";
 
 export type ToolId =
@@ -10,6 +11,7 @@ export type ToolId =
   | "star"
   | "text"
   | "eyedropper"
+  | "rotate"
   | "add-node"
   | "delete-node";
 
@@ -57,6 +59,16 @@ class ToolState {
 
   /** Corner radius (doc units) the rect tool draws with — 0 = sharp. Persisted like the style. */
   cornerRadius = $state(0);
+
+  /**
+   * Where the rotate tool turns the selection about, in document units. `null` = the selection's
+   * own centre, which is what every rotation did before there was a tool to move it.
+   *
+   * It lives here rather than in the tool module because the Overlay draws it, and it is
+   * deliberately *not* persisted: a pivot belongs to the shape you are working on right now, and
+   * one restored from last week next to a different selection would rotate things into orbit.
+   */
+  pivot = $state<Point | null>(null);
 
   constructor() {
     const p = loadState<Prefs>(PREFS_KEY);
