@@ -76,6 +76,14 @@
     }
   });
 
+  // A pivot is placed against one selection — keep it when that selection merely moves, drop it
+  // when the selection itself changes, so the next shape doesn't inherit a pivot from the last.
+  $effect(() => {
+    void editor.selectedPaths;
+    void editor.selectedElementUid;
+    tools.pivot = null;
+  });
+
   // Live geometry for editable shapes, keyed by their stable uid (edited or not).
   const pathByUid = $derived(
     new Map(

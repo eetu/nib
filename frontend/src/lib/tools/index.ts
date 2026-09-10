@@ -5,6 +5,7 @@ import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
 import PenTool from "@lucide/svelte/icons/pen-tool";
 import Pipette from "@lucide/svelte/icons/pipette";
 import Plus from "@lucide/svelte/icons/plus";
+import RotateCw from "@lucide/svelte/icons/rotate-cw";
 import Slash from "@lucide/svelte/icons/slash";
 import Square from "@lucide/svelte/icons/square";
 import Star from "@lucide/svelte/icons/star";
@@ -21,6 +22,7 @@ import { lineTool } from "./line";
 import { penTool } from "./pen";
 import { polygonTool } from "./polygon";
 import { rectTool } from "./rect";
+import { rotateTool } from "./rotate";
 import { selectTool } from "./select";
 import { starTool } from "./star";
 import { textTool } from "./text";
@@ -89,6 +91,21 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { id: "line", tool: lineTool, label: "line", shortcut: "l", icon: Slash },
       { id: "polygon", tool: polygonTool, label: "polygon", shortcut: "g", icon: Hexagon },
       { id: "star", tool: starTool, label: "star", shortcut: "s", icon: Star },
+    ],
+  },
+  {
+    // Transform tools that need a pro surface: the select tool's box already rotates about the
+    // centre, so this one exists for the pivot you place yourself.
+    name: "transform",
+    advanced: true,
+    tools: [
+      {
+        id: "rotate",
+        tool: rotateTool,
+        label: "rotate about a pivot (click to place, drag to turn)",
+        shortcut: "e",
+        icon: RotateCw,
+      },
     ],
   },
   {
