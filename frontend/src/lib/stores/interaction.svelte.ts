@@ -28,7 +28,23 @@ class Interaction {
   /** Rubber-band marquee rectangle (document coords) while selecting over empty canvas. */
   marquee = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
 
+  /**
+   * A rotation in flight: the selection box as it stood when the drag began, the point it turns
+   * about, and how far it has turned (radians, clockwise).
+   *
+   * The overlay draws *this* box, turned — because the alternative is what it did before: derive
+   * an axis-aligned box from geometry that is mid-rotation, which makes the box breathe wider and
+   * narrower while the handles sit still. A box that turns with the shape says what is happening;
+   * a box that changes size says something else is.
+   */
+  rotation = $state<{
+    bounds: { minX: number; minY: number; maxX: number; maxY: number };
+    pivot: Point;
+    angle: number;
+  } | null>(null);
+
   clearDrag(): void {
+    this.rotation = null;
     this.snapPoint = null;
     this.closing = false;
     this.resumePoint = null;

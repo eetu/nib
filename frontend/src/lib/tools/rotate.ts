@@ -10,6 +10,7 @@
 
 import type { Point, Subpath } from "$lib/model/types";
 import { editor } from "$lib/stores/document.svelte";
+import { interaction } from "$lib/stores/interaction.svelte";
 import { tools } from "$lib/stores/tool.svelte";
 import { viewport } from "$lib/stores/viewport.svelte";
 
@@ -91,6 +92,7 @@ function movePivotDrag(): DragSession {
  *  steps. A press that never travels far enough places the pivot instead — see `begin`. */
 function rotateDrag(start: Point, pivot: Point): DragSession {
   const targets = snapshotTargets();
+  const bounds = editor.selectionBounds;
   const startAngle = Math.atan2(start.y - pivot.y, start.x - pivot.x);
   let moved = false;
   return {
@@ -101,12 +103,17 @@ function rotateDrag(start: Point, pivot: Point): DragSession {
         delta = Math.round(delta / step) * step;
       }
       for (const t of targets) editor.setSubpaths(t.pi, rotateSubpaths(t.ref, pivot, delta));
+      // Hand the overlay the box to turn, so it swings about the pivot with the shape instead of
+      // re-deriving an axis-aligned box from geometry that is mid-rotation.
+      if (bounds) interaction.rotation = { bounds, pivot, angle: delta };
       moved = true;
     },
     up() {
+      interaction.rotation = null;
       if (moved) editor.commit();
     },
     cancel() {
+      interaction.rotation = null;
       if (moved) editor.revert();
     },
   };

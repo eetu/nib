@@ -146,6 +146,13 @@ Per-area detail in `frontend/CLAUDE.md`.
   marker on screen, typing an angle has to mean what dragging one means. The op vocabulary already
   took a pivot (`RotatePath {cx, cy}`, one shared pivot for a multi-selection), so this is UI over
   a core that was ready — and MCP gets the same rotation without knowing the tool exists.
+  **The box turns while you turn it** (`interaction.rotation`: the bounds the drag started with,
+  the pivot, the live angle — one SVG `rotate` carries the rect, the knob and all eight handles).
+  Re-deriving it per frame from mid-rotation geometry made it breathe wide-to-tall while the
+  handles sat still, which reads as a resize. On release it returns to the axis-aligned bounds of
+  the geometry that now exists: nib **bakes** rotation into the path rather than storing an angle,
+  so an upright box around a turned shape is the truth about the model. A box that stayed turned
+  would need a per-shape transform in the document — a real model change, not a drawing one.
 - **Selection = node + path (+ element).** `selection` is the active node;
   `selectedPath` is an explicit path selection (PATHS row / path-body click).
   `selectedPathIndex` is the effective selected path: the selected node's path if

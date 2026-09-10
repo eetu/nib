@@ -262,12 +262,17 @@ function rotateDrag(start: Point): DragSession {
         delta = Math.round(delta / step) * step;
       }
       for (const t of targets) editor.setSubpaths(t.pi, rotateSubpaths(t.ref, center, delta));
+      // The box turns with the shape (see `interaction.rotation`) — deriving it from rotating
+      // geometry made it breathe wider and narrower while the knob stayed put.
+      if (bb) interaction.rotation = { bounds: bb, pivot: center, angle: delta };
       moved = true;
     },
     up() {
+      interaction.rotation = null;
       if (moved) editor.commit();
     },
     cancel() {
+      interaction.rotation = null;
       if (moved) editor.revert();
     },
   };

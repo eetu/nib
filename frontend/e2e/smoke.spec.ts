@@ -2526,3 +2526,64 @@ test("rotates about a pivot you place, not the shape's centre", async ({ page })
   const undone = await shape.evaluate((el) => (el as SVGGraphicsElement).getBoundingClientRect().x);
   expect(Math.abs(undone - before)).toBeLessThan(3);
 });
+
+// While a rotation is in flight the box turns with the shape. It used to be re-derived every
+// frame as the axis-aligned bounds of mid-rotation geometry, so a 90° swing made it breathe from
+// wide to tall while the handles sat still — which reads as a resize, not a turn.
+test("the selection box turns during a rotation instead of resizing", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      // Deliberately wide and short: a square would hide the bug this pins.
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="30" y="35" width="40" height="20" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const shape = (await page.locator("svg.canvas g.artwork path").boundingBox())!;
+  const centre = { x: shape.x + shape.width / 2, y: shape.y + shape.height / 2 };
+  await page.mouse.click(centre.x, centre.y);
+
+  const box = page.locator("svg.canvas g.overlay rect.sel-box");
+  const size = async () => ({
+    w: Number(await box.getAttribute("width")),
+    h: Number(await box.getAttribute("height")),
+    turn: await box.evaluate((el) => (el.parentElement as SVGGElement).getAttribute("transform")),
+  });
+
+  const rest = await size();
+  expect(rest.turn).toBeNull();
+  expect(rest.w).toBeGreaterThan(rest.h); // wide, as authored
+
+  // Grab the knob and swing about a quarter turn, holding the drag open.
+  const knob = await page
+    .locator("svg.canvas g.overlay circle.rotate-knob")
+    .evaluate((el) => {
+      const b = (el as SVGGraphicsElement).getBoundingClientRect();
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    });
+  await page.mouse.move(knob.x, knob.y);
+  await page.mouse.down();
+  await page.mouse.move(centre.x + 140, centre.y + 60, { steps: 6 });
+
+  const spinning = await size();
+  // The box is the one the drag started with, turned — same size, real rotation.
+  expect(spinning.w).toBeCloseTo(rest.w, 1);
+  expect(spinning.h).toBeCloseTo(rest.h, 1);
+  expect(spinning.turn).toMatch(/^rotate\(/);
+  const degrees = Number(/rotate\(([-\d.]+)/.exec(spinning.turn ?? "")?.[1]);
+  expect(Math.abs(degrees)).toBeGreaterThan(20);
+
+  await page.mouse.up();
+
+  // Released, the box is back to describing the geometry that now exists: nib bakes rotation into
+  // the path rather than storing an angle, so an upright box around a turned shape is the truth.
+  const settled = await size();
+  expect(settled.turn).toBeNull();
+  expect(settled.h).toBeGreaterThan(rest.h);
+});

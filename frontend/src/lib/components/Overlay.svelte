@@ -118,19 +118,26 @@
       <path class="sel-outline" d={outlineD} />
     {/if}
     {#snippet transformBox(raw: Bounds)}
-      <!-- dashed box + rotate knob + 8 resize handles, around the padded bounds. Shared by
-           single-object selection and the multi-select group (both scale/rotate as one). -->
-      {@const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX))}
+      <!-- box + rotate knob + 8 resize handles, around the padded bounds. Shared by
+           single-object selection and the multi-select group (both scale/rotate as one).
+           While a rotation is in flight it draws the box the drag *started* with, turned about the
+           pivot: the axis-aligned bounds of mid-rotation geometry would breathe wider and
+           narrower with every frame while the handles stayed put, which reads as a resize. -->
+      {@const spin = interaction.rotation}
+      {@const bb = padBounds(spin ? spin.bounds : raw, viewport.toDocLength(SELECT_PAD_PX))}
       {@const tl = viewport.toScreen({ x: bb.minX, y: bb.minY })}
       {@const br = viewport.toScreen({ x: bb.maxX, y: bb.maxY })}
-      <rect class="sel-box" x={tl.x} y={tl.y} width={br.x - tl.x} height={br.y - tl.y} />
+      {@const at = spin ? viewport.toScreen(spin.pivot) : null}
       {@const top = viewport.toScreen({ x: (bb.minX + bb.maxX) / 2, y: bb.minY })}
-      <line class="rotate-stem" x1={top.x} y1={top.y} x2={top.x} y2={top.y - ROTATE_KNOB_PX} />
-      <circle class="rotate-knob" cx={top.x} cy={top.y - ROTATE_KNOB_PX} r="4.5" />
-      {#each handlePoints(bb) as h (h.handle)}
-        {@const hp = viewport.toScreen(h.point)}
-        <rect class="xf-handle" x={hp.x - 4} y={hp.y - 4} width="8" height="8" />
-      {/each}
+      <g transform={at ? `rotate(${((spin?.angle ?? 0) * 180) / Math.PI} ${at.x} ${at.y})` : null}>
+        <rect class="sel-box" x={tl.x} y={tl.y} width={br.x - tl.x} height={br.y - tl.y} />
+        <line class="rotate-stem" x1={top.x} y1={top.y} x2={top.x} y2={top.y - ROTATE_KNOB_PX} />
+        <circle class="rotate-knob" cx={top.x} cy={top.y - ROTATE_KNOB_PX} r="4.5" />
+        {#each handlePoints(bb) as h (h.handle)}
+          {@const hp = viewport.toScreen(h.point)}
+          <rect class="xf-handle" x={hp.x - 4} y={hp.y - 4} width="8" height="8" />
+        {/each}
+      </g>
     {/snippet}
     {#if boxPath && !boxPath.deleted}
       {@const raw = tightBounds(boxPath.subpaths)}
