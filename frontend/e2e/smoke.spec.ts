@@ -1391,9 +1391,9 @@ test("a <text> element is selectable and its content + attributes are editable",
     );
   await page.keyboard.press("Meta+Enter");
 
-  // The <text> is a leaf row in the panel (not a shape/group). Selecting it opens the element
-  // section (there are no shape rows — text isn't an editable path).
-  const row = page.locator(".layerlist .row-btn").filter({ hasText: "text" });
+  // The <text> is a leaf row in the panel (not a shape/group), named by its own words. Selecting
+  // it opens the element section (there are no shape rows — text isn't an editable path).
+  const row = page.locator(".layerlist .row-btn").filter({ hasText: "hello" });
   await expect(row).toHaveCount(1);
   await row.click();
   await expect(page.getByRole("heading", { name: "text", exact: true })).toBeVisible();
@@ -1442,7 +1442,7 @@ test("a selected <text> element can be dragged on the canvas to move it", async 
   await page.keyboard.press("v");
 
   // Select via the panel row (reliable), then the overlay draws a box around the text's DOM bbox.
-  await page.locator(".layerlist .row-btn").filter({ hasText: "text" }).click();
+  await page.locator(".layerlist .row-btn").filter({ hasText: "hello" }).click();
   const selBox = page.locator("svg.canvas g.overlay rect.sel-box");
   await expect(selBox).toBeVisible();
 
@@ -1480,7 +1480,7 @@ test("a selected <text> can be resized + rotated with the transform box", async 
     );
   await page.keyboard.press("Meta+Enter");
   await page.keyboard.press("v");
-  await page.locator(".layerlist .row-btn").filter({ hasText: "text" }).click();
+  await page.locator(".layerlist .row-btn").filter({ hasText: "hello" }).click();
 
   const t = page.locator("svg.canvas g.artwork text");
   const handles = page.locator("svg.canvas g.overlay rect.xf-handle");
@@ -2033,6 +2033,51 @@ test("double-click a node toggles it between corner and smooth", async ({ page }
 
 // A <text> has no anchors to node-edit, so double-click means "edit the words": an input opens
 // over the label, seeded + selected, committing on Enter as a single undo step.
+// A label carries its typeface as plain attributes, so the inspector edits them as text with
+// suggestions rather than as a closed picker — a family this machine lacks is still the right
+// answer for a file that opens elsewhere. The LAYERS row for a label says what the label says.
+test("a label's typeface is editable and its layer row reads its words", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="20" y="50" font-size="10" fill="#000">Hello</text></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+
+  // The row names itself from the label's own words, and stands in a "T" for the thumbnail a
+  // label has no geometry to draw.
+  const row = page.locator(".layerlist .row-btn").first();
+  await expect(row).toHaveText("Hello");
+  await expect(page.locator(".layerlist .thumb.glyph")).toHaveText("T");
+
+  await row.click();
+  const family = page.locator('input[list="nib-font-families"]');
+  await expect(family).toHaveValue("");
+
+  await family.fill("serif");
+  await family.press("Enter");
+  const label = page.locator("svg.canvas text[data-uid]");
+  await expect(label).toHaveAttribute("font-family", "serif");
+
+  // Slant is a toggle, and it lights while it's on.
+  const italic = page.getByRole("button", { name: "italic", exact: true });
+  await italic.click();
+  await expect(label).toHaveAttribute("font-style", "italic");
+  await expect(italic).toHaveClass(/\bon\b/);
+  await italic.click();
+  await expect(label).not.toHaveAttribute("font-style", "italic");
+
+  // Each is one undo step — a typeface change rides the same history as any other edit.
+  await page.keyboard.press("Meta+z");
+  await expect(label).toHaveAttribute("font-style", "italic");
+});
+
 test("double-click a text label edits it in place", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {

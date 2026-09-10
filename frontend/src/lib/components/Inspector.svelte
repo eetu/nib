@@ -26,6 +26,7 @@
   import { editor } from "$lib/stores/document.svelte";
   import { settings } from "$lib/stores/settings.svelte";
   import { tools } from "$lib/stores/tool.svelte";
+  import { canReadInstalledFonts, installedFamilyNames } from "$lib/text/fonts";
   import { outlineText, warmFontFor } from "$lib/text/outline";
   import { scaleSubpaths, shearSubpaths } from "$lib/tools/transform";
 
@@ -68,6 +69,26 @@
     if (elementSel?.kind === "element")
       editor.setNodeText(elementSel.uid, (e.currentTarget as HTMLInputElement).value);
   }
+
+  /**
+   * Families to suggest in the font field.
+   *
+   * A `font-family` is just text in the document — anything can be typed, and a name the machine
+   * lacks still renders wherever the font exists. Chromium can *list* what's installed
+   * (permission-gated), so where it will, the field offers those names; everywhere else the same
+   * field takes typing, with the generic families as the floor.
+   */
+  const GENERIC_FAMILIES = ["sans-serif", "serif", "monospace"];
+  let installedFamilies = $state<string[]>([]);
+  let askedForFamilies = false;
+
+  async function suggestFamilies(): Promise<void> {
+    if (askedForFamilies || !canReadInstalledFonts()) return;
+    askedForFamilies = true; // one prompt per session, whatever the answer
+    installedFamilies = await installedFamilyNames();
+  }
+
+  const fontSuggestions = $derived([...GENERIC_FAMILIES, ...installedFamilies]);
 
   // Effective style being edited: a selected path (drawn = attributes, imported
   // = attributes + override), else the new-shape defaults when a create tool is
@@ -280,7 +301,21 @@
     return hasKids ? "group" : "leaf";
   }
   function treeName(n: RenderNode): string {
-    return n.kind === "element" ? n.attrs.id || n.tag : "";
+    if (n.kind !== "element") return "";
+    // A label's own words name it better than "text" or a generated id ever could — it's how
+    // anyone refers to it out loud ("the title", "Rotate me"). An explicit id still wins, since
+    // someone typed it on purpose.
+    if (n.tag === "text" && !n.attrs.id) {
+      const words = nodeText(n).trim();
+      if (words) return words;
+    }
+    return n.attrs.id || n.tag;
+  }
+
+  /** The words inside an element, its `<tspan>`s included. */
+  function nodeText(n: RenderNode): string {
+    if (n.kind === "text") return n.text;
+    return n.kind === "element" ? n.children.map(nodeText).join("") : "";
   }
 
   // Group context menu: reorder (z), toggle/flip the live-boolean op, ungroup. Works on any tree
@@ -576,15 +611,62 @@
       {/if}
       {#if elTag === "text"}
         <label class="row">
-          <span class="rlbl">size</span>
+          <span class="rlbl">font</span>
+          <!-- Free text with suggestions, not a closed picker: the family is a name in the
+               document, and a font this machine lacks is still the right answer for a file that
+               will be opened somewhere else. -->
           <input
-            type="number"
-            min="0"
-            step="1"
-            value={elAttr("font-size") || "16"}
-            onchange={(e) => setElAttr("font-size", e)}
+            class="dash"
+            type="text"
+            list="nib-font-families"
+            placeholder="sans-serif"
+            spellcheck="false"
+            value={elAttr("font-family")}
+            onfocus={suggestFamilies}
+            onchange={(e) => setElAttr("font-family", e)}
           />
         </label>
+        <datalist id="nib-font-families">
+          {#each fontSuggestions as family (family)}
+            <option value={family}></option>
+          {/each}
+        </datalist>
+        <div class="coords">
+          <label
+            >size <input
+              type="number"
+              min="0"
+              step="1"
+              value={elAttr("font-size") || "16"}
+              onchange={(e) => setElAttr("font-size", e)}
+            /></label
+          >
+          <label
+            >weight <input
+              type="text"
+              placeholder="normal"
+              spellcheck="false"
+              value={elAttr("font-weight")}
+              onchange={(e) => setElAttr("font-weight", e)}
+            /></label
+          >
+        </div>
+        <!-- Slant is two-state, so it's a toggle rather than another text field — lit when on,
+             which is what an accent border means everywhere else in this panel. -->
+        <button
+          class="ghost-btn slant-toggle"
+          class:on={elAttr("font-style") === "italic"}
+          title="italic"
+          onclick={() =>
+            elementSel?.kind === "element" &&
+            editor.setNodeAttr(
+              elementSel.uid,
+              "font-style",
+              elAttr("font-style") === "italic" ? null : "italic",
+            )}
+        >
+          italic
+        </button>
         <ColorInput
           label="fill"
           value={elAttr("fill") || "#000000"}
@@ -996,7 +1078,13 @@
           ondrop={onRowDrop}
           ondragend={onRowDragEnd}
         >
-          <span class="thumb empty"></span>
+          <!-- A label has no geometry to draw a thumbnail from, so it gets the sign for text
+               instead of a blank square: the slot still says what kind of thing the row is. -->
+          {#if n.tag === "text"}
+            <span class="thumb glyph" aria-hidden="true">T</span>
+          {:else}
+            <span class="thumb empty"></span>
+          {/if}
           <button
             class="row-btn"
             class:active={editor.selectedElementUid === n.uid}
@@ -1524,6 +1612,17 @@
     color: var(--halo-accent);
   }
 
+  .slant-toggle {
+    width: 100%;
+    margin-top: 6px;
+    font-style: italic;
+  }
+
+  .slant-toggle.on {
+    border-color: var(--halo-accent);
+    color: var(--halo-accent);
+  }
+
   .comprow .disclosure {
     flex: none;
     display: flex;
@@ -1660,6 +1759,16 @@
 
   .layerlist .eye.on {
     color: var(--halo-accent);
+  }
+
+  /* the text sign in a label row's thumbnail slot */
+  .layerlist .thumb.glyph {
+    display: grid;
+    place-items: center;
+    color: var(--halo-text-muted);
+    font-family: var(--halo-font-heading);
+    font-size: 13px;
+    line-height: 1;
   }
 
   /* a locked row reads as inert (it isn't selectable on the canvas) */
