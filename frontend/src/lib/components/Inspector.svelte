@@ -20,6 +20,7 @@
   import Pipette from "@lucide/svelte/icons/pipette";
   import Trash2 from "@lucide/svelte/icons/trash-2";
 
+  import { type MenuItem, openMenu } from "$lib/menu.svelte";
   import { tightBounds } from "$lib/model/geometry";
   import { pathToD } from "$lib/model/path";
   import type { NodeType, PathElement, RenderNode } from "$lib/model/types";
@@ -286,28 +287,34 @@
   // Group context menu: reorder (z), toggle/flip the live-boolean op, ungroup. Works on any tree
   // group node (imported or drawn) — one representation.
   function openTreeGroupMenu(e: MouseEvent, n: RenderNode) {
-    e.preventDefault();
     if (n.kind !== "element") return;
     const uid = n.uid;
-    const items: Menu["items"] = [
+    const items: MenuItem[] = [
       { label: "rename", run: () => startGroupRename(uid, treeName(n)) },
       { label: "bring to front", run: () => editor.reorderNodeExtreme(uid, true) },
       { label: "bring forward", run: () => editor.reorderNode(uid, true) },
       { label: "send backward", run: () => editor.reorderNode(uid, false) },
       { label: "send to back", run: () => editor.reorderNodeExtreme(uid, false) },
     ];
-    // Live-boolean ops are a pro (advanced) path-craft feature — hidden in basic (touch-up) mode,
-    // matching the multi-select boolean buttons + palette.
-    if (advanced) {
-      for (const op of ["union", "subtract", "intersect", "exclude"] as const) {
-        const mark = n.booleanOp === op ? "• " : "";
-        items.push({ label: `${mark}${op}`, run: () => editor.setNodeBoolean(uid, op) });
-      }
-      if (n.booleanOp)
-        items.push({ label: "flatten (plain group)", run: () => editor.setNodeBoolean(uid, null) });
+    // Live-boolean ops are a pro feature. In basic (touch-up) mode they stay listed but grey,
+    // saying where they live — a verb that vanishes teaches that it doesn't exist.
+    for (const op of ["union", "subtract", "intersect", "exclude"] as const) {
+      items.push({
+        label: op,
+        hint: n.booleanOp === op ? "on" : advanced ? undefined : "advanced mode",
+        disabled: !advanced,
+        run: () => editor.setNodeBoolean(uid, op),
+      });
     }
-    items.push({ label: "ungroup", danger: false, run: () => editor.ungroupNode(uid) });
-    menu = { x: e.clientX, y: e.clientY, items };
+    if (n.booleanOp)
+      items.push({
+        label: "flatten (plain group)",
+        disabled: !advanced,
+        hint: advanced ? undefined : "advanced mode",
+        run: () => editor.setNodeBoolean(uid, null),
+      });
+    items.push({ label: "ungroup", run: () => editor.ungroupNode(uid) });
+    openMenu(e, treeName(n), items);
   }
 
   // Group the current selection into a nested `<g>` on the tree. Delegates to the facade so the
@@ -336,64 +343,41 @@
     if (confirm(`delete component “${name}”${note}?`)) editor.deleteComponent(uid);
   }
 
-  // Right-click context menu for a row (path or group) — an action list at the cursor.
-  type Menu = {
-    x: number;
-    y: number;
-    items: { label: string; danger?: boolean; run: () => void }[];
-  };
-
-  // Keep the menu inside the viewport (raw cursor coords can overflow the bottom/right edge) and
   // move keyboard focus into it so it's operable + Escape/arrows work.
-  function placeMenu(node: HTMLElement) {
-    const r = node.getBoundingClientRect();
-    const pad = 8;
-    const dx = Math.min(0, window.innerWidth - pad - r.right);
-    const dy = Math.min(0, window.innerHeight - pad - r.bottom);
-    if (dx || dy) node.style.transform = `translate(${dx}px, ${dy}px)`;
-    node.querySelector("button")?.focus();
-  }
-
-  function onMenuKeydown(e: KeyboardEvent) {
-    const items = [
-      ...(e.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>("button"),
-    ];
-    const i = items.indexOf(document.activeElement as HTMLButtonElement);
-    if (e.key === "Escape") {
-      menu = null;
-      e.stopPropagation(); // don't let +page's window Escape also fire (it would deselect)
-      e.preventDefault();
-    } else if (e.key === "ArrowDown") {
-      items[(i + 1) % items.length]?.focus();
-      e.preventDefault();
-    } else if (e.key === "ArrowUp") {
-      items[(i - 1 + items.length) % items.length]?.focus();
-      e.preventDefault();
-    }
-  }
-  let menu = $state<Menu | null>(null);
 
   function openPathMenu(e: MouseEvent, index: number, name: string) {
-    e.preventDefault();
     const uid = doc?.paths[index]?.uid;
-    menu = {
-      x: e.clientX,
-      y: e.clientY,
-      items: [
-        { label: "rename", run: () => startRename(index, name) },
-        { label: "duplicate", run: () => (editor.selectPath(index), editor.duplicateSelected()) },
-        // Tree z-order (imported shapes have a uid); drawn rows reorder by drag instead.
-        ...(uid
-          ? [
-              { label: "bring to front", run: () => editor.reorderNodeExtreme(uid, true) },
-              { label: "bring forward", run: () => editor.reorderNode(uid, true) },
-              { label: "send backward", run: () => editor.reorderNode(uid, false) },
-              { label: "send to back", run: () => editor.reorderNodeExtreme(uid, false) },
-            ]
-          : []),
-        { label: "delete", danger: true, run: () => editor.deletePath(index) },
-      ],
-    };
+    openMenu(e, name, [
+      { label: "rename", run: () => startRename(index, name) },
+      { label: "duplicate", run: () => (editor.selectPath(index), editor.duplicateSelected()) },
+      // Tree z-order needs a tree node; a drawn row that has none reorders by dragging instead,
+      // and says so rather than hiding four verbs the row above it offers.
+      {
+        label: "bring to front",
+        disabled: !uid,
+        hint: uid ? undefined : "drag the row to reorder",
+        run: () => uid && editor.reorderNodeExtreme(uid, true),
+      },
+      {
+        label: "bring forward",
+        disabled: !uid,
+        hint: uid ? undefined : "drag the row to reorder",
+        run: () => uid && editor.reorderNode(uid, true),
+      },
+      {
+        label: "send backward",
+        disabled: !uid,
+        hint: uid ? undefined : "drag the row to reorder",
+        run: () => uid && editor.reorderNode(uid, false),
+      },
+      {
+        label: "send to back",
+        disabled: !uid,
+        hint: uid ? undefined : "drag the row to reorder",
+        run: () => uid && editor.reorderNodeExtreme(uid, false),
+      },
+      { label: "delete", danger: true, run: () => editor.deletePath(index) },
+    ]);
   }
 
   const BOOL_GLYPH: Record<string, string> = {
@@ -1123,38 +1107,6 @@
       <p class="empty">no shapes</p>
     {/if}
   </section>
-
-  {#if menu}
-    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div
-      class="ctx-scrim"
-      onclick={() => (menu = null)}
-      oncontextmenu={(e) => {
-        e.preventDefault();
-        menu = null;
-      }}
-    ></div>
-    <div
-      class="ctx"
-      style:left="{menu.x}px"
-      style:top="{menu.y}px"
-      role="menu"
-      tabindex="-1"
-      use:placeMenu
-      onkeydown={onMenuKeydown}
-    >
-      {#each menu.items as it (it.label)}
-        <button
-          role="menuitem"
-          class:danger={it.danger}
-          onclick={() => {
-            it.run();
-            menu = null;
-          }}>{it.label}</button
-        >
-      {/each}
-    </div>
-  {/if}
 </aside>
 
 <style>
@@ -1592,44 +1544,6 @@
   }
 
   /* right-click context menu */
-  .ctx-scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-  }
-
-  .ctx {
-    position: fixed;
-    z-index: 61;
-    min-width: 120px;
-    padding: 4px;
-    border: 1px solid var(--halo-border);
-    border-radius: var(--halo-radius);
-    background: var(--halo-bg-light);
-    box-shadow: var(--halo-shadow, 0 8px 24px rgb(0 0 0 / 0.25));
-  }
-
-  .ctx button {
-    display: block;
-    width: 100%;
-    padding: 6px 10px;
-    border: none;
-    border-radius: var(--halo-radius);
-    background: transparent;
-    color: var(--halo-text-main);
-    text-align: left;
-    font-size: 13px;
-  }
-
-  .ctx button:hover {
-    background: var(--halo-accent-soft);
-    color: var(--halo-accent);
-  }
-
-  .ctx button.danger:hover {
-    background: var(--halo-accent-soft);
-    color: var(--halo-error);
-  }
 
   /* drop indicators (panel is reversed, so doc-"after" = higher z = a line at the row's top). */
   .layerlist li.dropafter {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { type MenuItem, openMenu } from "$lib/menu.svelte";
   import { pathToD } from "$lib/model/path";
   import type { PathElement, Point, RenderNode, ViewBox } from "$lib/model/types";
   import { canvas } from "$lib/stores/canvas.svelte";
@@ -7,6 +8,7 @@
   import { settings } from "$lib/stores/settings.svelte";
   import { tools } from "$lib/stores/tool.svelte";
   import { viewport } from "$lib/stores/viewport.svelte";
+  import { outlineText } from "$lib/text/outline";
   import { getTool, type Hit, hitTest } from "$lib/tools";
   import {
     type Bounds,
@@ -20,7 +22,7 @@
     transformCursor,
     type TransformHandle,
   } from "$lib/tools/transform";
-  import { loadViewBox } from "$lib/view";
+  import { fitToView, loadViewBox } from "$lib/view";
 
   import Overlay from "./Overlay.svelte";
 
@@ -516,6 +518,78 @@
     editor.previewNodeAttr(elXf.uid, "transform", matrixStr(next));
   }
 
+  /**
+   * Right-click on the canvas: the verbs for whatever is under the pointer.
+   *
+   * A drawing surface is where people reach for a context menu most, and this is the one surface
+   * that used to answer with the browser's. It selects what it is about to act on first, so the
+   * menu and the highlight always agree about the subject.
+   */
+  function onCanvasContextMenu(e: MouseEvent) {
+    if (!editor.doc) return;
+    const screen = screenOf(e);
+    const hit = hitTest(screen);
+    const element = elementHit(e as unknown as PointerEvent);
+
+    if (hit.kind === "fill" || hit.kind === "segment") {
+      const index = hit.kind === "fill" ? hit.pathIndex : hit.pathIndex;
+      if (!editor.selectedPaths.includes(index)) editor.selectPath(index);
+      const path = editor.doc.paths[index];
+      const uid = path?.uid;
+      const items: MenuItem[] = [
+        { label: "duplicate", hint: "⌘D", run: () => editor.duplicateSelected() },
+        { label: "copy style", run: () => editor.copyStyle() },
+        {
+          label: "paste style",
+          disabled: !editor.canPasteStyle,
+          hint: editor.canPasteStyle ? undefined : "copy a style first",
+          run: () => editor.pasteStyle(),
+        },
+        {
+          label: "bring to front",
+          hint: "⌘⇧]",
+          disabled: !uid,
+          run: () => uid && editor.reorderNodeExtreme(uid, true),
+        },
+        {
+          label: "send to back",
+          hint: "⌘⇧[",
+          disabled: !uid,
+          run: () => uid && editor.reorderNodeExtreme(uid, false),
+        },
+        {
+          label: path?.locked ? "unlock" : "lock",
+          run: () => editor.setPathLocked(index, !path?.locked),
+        },
+        { label: "delete", danger: true, hint: "⌫", run: () => editor.deletePath(index) },
+      ];
+      openMenu(e, path?.id ?? "shape", items);
+      return;
+    }
+
+    if (element) {
+      editor.selectElement(element.uid);
+      const label = editor.textInfo(element.uid);
+      openMenu(e, label?.name || label?.text || element.el.tagName.toLowerCase(), [
+        {
+          label: "convert to outlines",
+          disabled: !label,
+          hint: label ? undefined : "only a text label outlines",
+          run: () => void outlineText(element.uid),
+        },
+        { label: "hide", run: () => editor.setNodeHidden(element.uid, true) },
+      ]);
+      return;
+    }
+
+    // Empty canvas: the verbs that belong to the document rather than a shape.
+    openMenu(e, "canvas", [
+      { label: "paste", hint: "⌘V", disabled: !editor.canPaste, run: () => editor.paste() },
+      { label: "select all", hint: "⌘A", run: () => editor.selectAll() },
+      { label: "fit to view", hint: "0", run: () => fitToView() },
+    ]);
+  }
+
   function onPointerDown(e: PointerEvent) {
     if (!editor.doc) return;
     setPointer(e.pointerId, screenOf(e));
@@ -729,6 +803,7 @@
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
     onpointercancel={onPointerCancel}
+    oncontextmenu={onCanvasContextMenu}
     ondblclick={onDblClick}
     onwheel={onWheel}
     {...gestureHandlers}

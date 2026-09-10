@@ -2526,3 +2526,84 @@ test("rotates about a pivot you place, not the shape's centre", async ({ page })
   const undone = await shape.evaluate((el) => (el as SVGGraphicsElement).getBoundingClientRect().x);
   expect(Math.abs(undone - before)).toBeLessThan(3);
 });
+
+// The context-menu policy, which the interaction skill calls the 1.0 gate: one menu, every
+// surface, and the browser's never appears except in a text field. A drawing surface invites
+// right-click constantly — answering it with Back/Reload is the loudest inconsistency an app can
+// ship, and "sometimes ours, sometimes theirs" is worse than either alone.
+test("right-click answers with nib's menu everywhere but text fields", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="brick" x="30" y="30" width="40" height="40" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await expect(page.locator("svg.canvas g.artwork path")).toBeAttached();
+
+  const menu = page.locator("[role='menu']");
+  const shape = (await page.locator("svg.canvas g.artwork path").boundingBox())!;
+
+  // 1. The canvas — the surface that used to give the browser's menu and nothing else.
+  await page.mouse.click(shape.x + shape.width / 2, shape.y + shape.height / 2, {
+    button: "right",
+  });
+  await expect(menu).toBeVisible();
+  // It names its subject and carries the shape's verbs.
+  await expect(menu).toContainText("brick");
+  await expect(menu.getByRole("menuitem", { name: "duplicate" })).toBeVisible();
+  // A verb that doesn't apply is greyed with a reason, not missing.
+  const pasteStyle = menu.getByRole("menuitem", { name: "paste style" });
+  await expect(pasteStyle).toBeDisabled();
+  await expect(pasteStyle).toHaveAttribute("title", /copy a style first/);
+
+  // Escape closes the menu — and only the menu, the outermost rung of the ladder.
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
+
+  // 2. Empty canvas gets the document's verbs rather than nothing.
+  await page.mouse.click(shape.x - 80, shape.y - 40, { button: "right" });
+  await expect(menu).toContainText("canvas");
+  await expect(menu.getByRole("menuitem", { name: "select all" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // 3. A LAYERS row answers with the same component.
+  const row = page.locator("aside .layers li").first();
+  await row.click({ button: "right" });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "rename" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // 4. Only one menu exists at a time, wherever it was opened from.
+  await page.mouse.click(shape.x + shape.width / 2, shape.y + shape.height / 2, {
+    button: "right",
+  });
+  await row.click({ button: "right" });
+  await expect(menu).toHaveCount(1);
+  await page.keyboard.press("Escape");
+
+  // 5. Text fields keep the browser's menu: nib must not swallow paste and spellcheck. The
+  //    handler runs at the window, so this asserts the exception survives every ancestor.
+  const defaultPrevented = await page.evaluate(() => {
+    const input = document.querySelector("aside input") as HTMLInputElement | null;
+    if (!input) return null;
+    const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    input.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  });
+  expect(defaultPrevented).toBe(false);
+
+  // …while anywhere else it is suppressed.
+  const suppressed = await page.evaluate(() => {
+    const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    document.querySelector("svg.canvas")!.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  });
+  expect(suppressed).toBe(true);
+});

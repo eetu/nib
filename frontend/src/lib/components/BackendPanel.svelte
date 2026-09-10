@@ -13,6 +13,7 @@
     renameProject,
   } from "$lib/backend/client";
   import { sync } from "$lib/backend/sync.svelte";
+  import { openMenu } from "$lib/menu.svelte";
   import { editor } from "$lib/stores/document.svelte";
 
   let projects = $state<ProjectMeta[]>([]);
@@ -106,40 +107,13 @@
     }
   }
 
-  type Menu = { x: number; y: number; project: ProjectMeta };
-  let menu = $state<Menu | null>(null);
-
-  function openMenu(e: MouseEvent, project: ProjectMeta) {
-    e.preventDefault();
-    menu = { x: e.clientX, y: e.clientY, project };
-  }
-
-  // Keep the menu on screen and move focus into it, so Escape/arrows work (mirrors Inspector).
-  function placeMenu(node: HTMLElement) {
-    const r = node.getBoundingClientRect();
-    const pad = 8;
-    const dx = Math.min(0, window.innerWidth - pad - r.right);
-    const dy = Math.min(0, window.innerHeight - pad - r.bottom);
-    if (dx || dy) node.style.transform = `translate(${dx}px, ${dy}px)`;
-    node.querySelector("button")?.focus();
-  }
-
-  function onMenuKeydown(e: KeyboardEvent) {
-    const items = [
-      ...(e.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>("button"),
-    ];
-    const i = items.indexOf(document.activeElement as HTMLButtonElement);
-    if (e.key === "Escape") {
-      menu = null;
-      e.stopPropagation();
-      e.preventDefault();
-    } else if (e.key === "ArrowDown") {
-      items[(i + 1) % items.length]?.focus();
-      e.preventDefault();
-    } else if (e.key === "ArrowUp") {
-      items[(i - 1 + items.length) % items.length]?.focus();
-      e.preventDefault();
-    }
+  /** The verbs for one project row — the same list the "⋯" button opens. */
+  function projectMenu(e: MouseEvent, project: ProjectMeta) {
+    openMenu(e, project.name, [
+      { label: "open", run: () => void open(project.id) },
+      { label: "rename", run: () => startRename(project) },
+      { label: "delete", danger: true, run: () => void remove(project) },
+    ]);
   }
 
   function autofocus(node: HTMLInputElement) {
@@ -174,7 +148,7 @@
             class:active={sync.projectId === p.id}
             onclick={() => open(p.id)}
             ondblclick={() => startRename(p)}
-            oncontextmenu={(e) => openMenu(e, p)}
+            oncontextmenu={(e) => projectMenu(e, p)}
             title="click to open · double-click to rename · right-click for more"
           >
             {p.name}
@@ -189,45 +163,6 @@
     <button onclick={refresh}>refresh</button>
   </div>
 </aside>
-
-{#if menu}
-  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div
-    class="ctx-scrim"
-    onclick={() => (menu = null)}
-    oncontextmenu={(e) => {
-      e.preventDefault();
-      menu = null;
-    }}
-  ></div>
-  <div
-    class="ctx"
-    style:left="{menu.x}px"
-    style:top="{menu.y}px"
-    role="menu"
-    tabindex="-1"
-    use:placeMenu
-    onkeydown={onMenuKeydown}
-  >
-    <button
-      role="menuitem"
-      onclick={() => {
-        const p = menu?.project;
-        menu = null;
-        if (p) startRename(p);
-      }}>rename</button
-    >
-    <button
-      role="menuitem"
-      class="danger"
-      onclick={() => {
-        const p = menu?.project;
-        menu = null;
-        if (p) void remove(p);
-      }}>delete</button
-    >
-  </div>
-{/if}
 
 <style>
   .backend {
@@ -312,44 +247,6 @@
   }
 
   /* right-click context menu — matches the Inspector's LAYERS rows */
-  .ctx-scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-  }
-
-  .ctx {
-    position: fixed;
-    z-index: 61;
-    min-width: 120px;
-    padding: 4px;
-    border: 1px solid var(--halo-border);
-    border-radius: var(--halo-radius);
-    background: var(--halo-bg-light);
-    box-shadow: var(--halo-shadow, 0 8px 24px rgb(0 0 0 / 0.25));
-  }
-
-  .ctx button {
-    display: block;
-    width: 100%;
-    padding: 6px 10px;
-    border: none;
-    border-radius: var(--halo-radius);
-    background: transparent;
-    color: var(--halo-text-main);
-    text-align: left;
-    font-size: 13px;
-  }
-
-  .ctx button:hover {
-    background: var(--halo-accent-soft);
-    color: var(--halo-accent);
-  }
-
-  .ctx button.danger:hover {
-    background: var(--halo-accent-soft);
-    color: var(--halo-error);
-  }
 
   .err {
     margin: 0;
