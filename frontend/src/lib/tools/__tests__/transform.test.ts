@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
 
+import type { Subpath } from "$lib/model/types";
+
 import {
   boundsCorners,
   boxFrame,
+  framedCenter,
+  framedCorners,
   frameHit,
+  fromFrame,
   insideQuad,
+  orientedBounds,
   ROTATE_KNOB_PX,
+  rotateSubpaths,
+  scaleSubpathsFramed,
+  toFrame,
   transformCursor,
 } from "../transform";
 
@@ -117,5 +126,100 @@ describe("transformCursor", () => {
   it("is unchanged by a half turn — a resize axis has no direction", () => {
     for (const h of ["n", "ne", "e", "se"] as const)
       expect(transformCursor(h, Math.PI)).toBe(transformCursor(h));
+  });
+});
+
+// --- a shape's own frame -----------------------------------------------------------------------
+// A rotation bakes into a path's anchors, so `boxAngle` is the only record of which way it was
+// turned. These are the round trips that turn that one number into a box that hugs the shape and
+// handles that pull along its edges.
+
+const square: Subpath[] = [
+  {
+    closed: true,
+    nodes: [
+      { type: "corner", point: { x: 10, y: 0 } },
+      { type: "corner", point: { x: 30, y: 0 } },
+      { type: "corner", point: { x: 30, y: 10 } },
+      { type: "corner", point: { x: 10, y: 10 } },
+    ],
+  },
+];
+
+describe("toFrame / fromFrame", () => {
+  it("round-trip to the same point", () => {
+    const p = { x: 7, y: -3 };
+    const back = fromFrame(toFrame(p, 0.7), 0.7);
+    expect(back.x).toBeCloseTo(p.x);
+    expect(back.y).toBeCloseTo(p.y);
+  });
+
+  it("are identity at no tilt", () => {
+    expect(toFrame({ x: 5, y: 9 }, 0)).toEqual({ x: 5, y: 9 });
+  });
+});
+
+describe("orientedBounds", () => {
+  it("is the plain tight box at no tilt", () => {
+    expect(orientedBounds(square, 0)).toEqual({ minX: 10, minY: 0, maxX: 30, maxY: 10 });
+  });
+
+  it("keeps a turned shape's own size, where axis-aligned bounds would not", () => {
+    const angle = Math.PI / 6;
+    const turned = rotateSubpaths(square, { x: 20, y: 5 }, angle);
+    const own = orientedBounds(turned, angle)!;
+    expect(own.maxX - own.minX).toBeCloseTo(20);
+    expect(own.maxY - own.minY).toBeCloseTo(10);
+    // The document-axis box of the same geometry is bigger in both directions — which is exactly
+    // why a box drawn from it can't hug the shape.
+    const axis = orientedBounds(turned, 0)!;
+    expect(axis.maxX - axis.minX).toBeGreaterThan(20.5);
+    expect(axis.maxY - axis.minY).toBeGreaterThan(10.5);
+  });
+});
+
+describe("framedCorners / framedCenter", () => {
+  it("put the box back where the shape is", () => {
+    const angle = Math.PI / 6;
+    const turned = rotateSubpaths(square, { x: 20, y: 5 }, angle);
+    const own = orientedBounds(turned, angle)!;
+    const corners = framedCorners(own, angle);
+    // Each corner of the shape's own box coincides with a corner of the turned square.
+    for (const node of turned[0].nodes) {
+      const near = Math.min(
+        ...corners.map((c) => Math.hypot(c.x - node.point.x, c.y - node.point.y)),
+      );
+      expect(near).toBeCloseTo(0);
+    }
+    // And the centre is the shape's centre — not the centre of its document-axis bounds.
+    const c = framedCenter(own, angle);
+    expect(c.x).toBeCloseTo(20);
+    expect(c.y).toBeCloseTo(5);
+  });
+});
+
+describe("scaleSubpathsFramed", () => {
+  it("scales along a tilted box's own axes, holding the anchor still", () => {
+    const angle = Math.PI / 4;
+    const turned = rotateSubpaths(square, { x: 20, y: 5 }, angle);
+    const own = orientedBounds(turned, angle)!;
+    const anchor = framedCorners(own, angle)[0]; // nw — the fixed corner when dragging se
+    const out = scaleSubpathsFramed(turned, anchor, 2, 1, angle);
+
+    // The anchor stayed put...
+    const stuck = Math.min(
+      ...out[0].nodes.map((n) => Math.hypot(n.point.x - anchor.x, n.point.y - anchor.y)),
+    );
+    expect(stuck).toBeCloseTo(0);
+    // ...and the shape is twice as wide *in its own frame*, exactly as tall.
+    const after = orientedBounds(out, angle)!;
+    expect(after.maxX - after.minX).toBeCloseTo(40);
+    expect(after.maxY - after.minY).toBeCloseTo(10);
+  });
+
+  it("matches the plain scale at no tilt", () => {
+    const a = { x: 10, y: 0 };
+    const framed = scaleSubpathsFramed(square, a, 2, 3, 0);
+    expect(orientedBounds(framed, 0)).toEqual({ minX: 10, minY: 0, maxX: 50, maxY: 30 });
   });
 });

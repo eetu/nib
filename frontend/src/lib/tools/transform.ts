@@ -1,3 +1,4 @@
+import { tightBounds } from "$lib/model/geometry";
 import type { PathNode, Point, Subpath } from "$lib/model/types";
 
 export type TransformHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
@@ -167,6 +168,93 @@ export function handleAnchor(
     anchor: { x: east ? bb.minX : bb.maxX, y: south ? bb.minY : bb.maxY },
     moving: { x: east ? bb.maxX : bb.minX, y: south ? bb.maxY : bb.minY },
   };
+}
+
+/**
+ * A shape's bounds measured in a frame tilted by `angle` — its *own* bounds, when the angle is the
+ * one it was turned by (`PathElement.boxAngle`).
+ *
+ * The geometry is rotated back by `-angle` about the origin first, so the result is an
+ * axis-aligned box *in that frame*; rotating its corners forward again (`framedCorners`) puts them
+ * where the shape actually is. That round trip is what gives a turned shape a box that hugs it,
+ * and handles that pull along its own edges rather than the document's.
+ */
+export function orientedBounds(subpaths: Subpath[], angle: number): Bounds | null {
+  if (!angle) return tightBounds(subpaths);
+  return tightBounds(rotateSubpaths(subpaths, ORIGIN, -angle));
+}
+
+const ORIGIN: Point = { x: 0, y: 0 };
+
+/** A document point in a frame tilted by `angle` — where `orientedBounds` measures. */
+export function toFrame(p: Point, angle: number): Point {
+  if (!angle) return p;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return { x: p.x * cos + p.y * sin, y: -p.x * sin + p.y * cos };
+}
+
+/** The inverse of `toFrame`: a framed point back in document space. */
+export function fromFrame(p: Point, angle: number): Point {
+  if (!angle) return p;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return { x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos };
+}
+
+/** The corners (nw, ne, se, sw) of bounds measured in a frame tilted by `angle`, back in document
+ *  space — the inverse of the rotation `orientedBounds` applied. */
+export function framedCorners(bb: Bounds, angle: number): [Point, Point, Point, Point] {
+  return boundsCorners(bb, angle ? { pivot: ORIGIN, angle } : null);
+}
+
+/** The centre of bounds measured in a tilted frame, back in document space — the pivot a rotation
+ *  about "the box centre" actually turns about. */
+export function framedCenter(bb: Bounds, angle: number): Point {
+  const c = boxCenter(bb);
+  if (!angle) return c;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return { x: c.x * cos - c.y * sin, y: c.x * sin + c.y * cos };
+}
+
+/**
+ * Scale a reference geometry about `anchor` by (sx, sy) **along the axes of a frame tilted by
+ * `angle`** — so dragging the east handle of a box turned 30° widens the shape along its own
+ * edge instead of stretching it across the document's x.
+ */
+export function scaleSubpathsFramed(
+  ref: Subpath[],
+  anchor: Point,
+  sx: number,
+  sy: number,
+  angle: number,
+): Subpath[] {
+  if (!angle) return scaleSubpaths(ref, anchor, sx, sy);
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const at = (p: Point): Point => {
+    // Into the frame, scale, back out — all about the anchor, which therefore stays put.
+    const dx = p.x - anchor.x;
+    const dy = p.y - anchor.y;
+    const fx = (dx * cos + dy * sin) * sx;
+    const fy = (-dx * sin + dy * cos) * sy;
+    return { x: anchor.x + fx * cos - fy * sin, y: anchor.y + fx * sin + fy * cos };
+  };
+  return mapSubpaths(ref, at);
+}
+
+/** Apply a point map to every anchor and handle, returning fresh subpaths. */
+function mapSubpaths(ref: Subpath[], at: (p: Point) => Point): Subpath[] {
+  return ref.map((sp) => ({
+    closed: sp.closed,
+    nodes: sp.nodes.map((n): PathNode => ({
+      type: n.type,
+      point: at(n.point),
+      handleIn: n.handleIn ? at(n.handleIn) : undefined,
+      handleOut: n.handleOut ? at(n.handleOut) : undefined,
+    })),
+  }));
 }
 
 /** Scale a reference geometry about an anchor by (sx, sy), returning fresh

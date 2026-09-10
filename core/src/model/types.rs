@@ -175,6 +175,27 @@ pub struct PathElement {
     /// never written to export — a nib annotation, unlike `hidden` (which is real `display:none`).
     #[serde(skip_serializing_if = "is_false", default)]
     pub locked: bool,
+    /// The orientation of this path's **selection box**, in radians clockwise — accumulated by
+    /// every rotation applied to it.
+    ///
+    /// Geometry here is baked in document space: rotating a path rewrites its anchors and keeps no
+    /// angle, which is what makes hit-testing, snapping and the boolean/offset ops simple. But it
+    /// also means nothing remembers which way the shape was *turned*, so its box could only ever
+    /// be the axis-aligned bounds of the result — and you cannot resize a turned shape along its
+    /// own axes from a box that doesn't know where they are.
+    ///
+    /// So the angle is remembered, and only the angle: bounds are measured in the frame it names
+    /// (`oriented_bounds`), which is enough to draw the box turned, put the handles on the shape's
+    /// own edges, and scale along them. Another nib annotation like `locked` — it rides the native
+    /// model (persists + syncs) and is **never written to SVG**, so a round-trip through a file
+    /// loses it and the box comes back upright. Storing it as a real element `transform` instead
+    /// would survive that, at the cost of every document-space consumer having to compose it.
+    #[serde(rename = "boxAngle", skip_serializing_if = "is_zero_f64", default)]
+    pub box_angle: f64,
+}
+
+fn is_zero_f64(v: &f64) -> bool {
+    *v == 0.0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

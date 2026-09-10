@@ -2600,10 +2600,12 @@ test("rotates about a pivot you place, not the shape's centre", async ({ page })
   expect(Math.abs(undone - before)).toBeLessThan(3);
 });
 
-// While a rotation is in flight the box turns with the shape. It used to be re-derived every
-// frame as the axis-aligned bounds of mid-rotation geometry, so a 90° swing made it breathe from
-// wide to tall while the handles sat still — which reads as a resize, not a turn.
-test("the selection box turns during a rotation instead of resizing", async ({ page }) => {
+// The selection box turns with the shape and *stays* turned, the way Pixelmator's does. Its tilt
+// is stored (`PathElement.boxAngle`) because the geometry isn't — a rotation bakes into the
+// anchors — so without it the box could only ever be the axis-aligned bounds of the result: it
+// breathed from wide to tall mid-swing while the handles sat still (which reads as a resize), and
+// snapped upright on release, leaving no way to resize a turned shape along its own edges.
+test("the selection box turns with the shape, and stays turned", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 30_000,
@@ -2618,7 +2620,8 @@ test("the selection box turns during a rotation instead of resizing", async ({ p
   await page.keyboard.press("Meta+Enter");
   await page.keyboard.press("v");
 
-  const shape = (await page.locator("svg.canvas g.artwork path").boundingBox())!;
+  const shapeEl = page.locator("svg.canvas g.artwork path");
+  const shape = (await shapeEl.boundingBox())!;
   const centre = { x: shape.x + shape.width / 2, y: shape.y + shape.height / 2 };
   await page.mouse.click(centre.x, centre.y);
 
@@ -2646,19 +2649,53 @@ test("the selection box turns during a rotation instead of resizing", async ({ p
 
   await page.mouse.up();
 
-  // Released, a *shape's* box is back to describing the geometry that now exists: nib bakes
-  // rotation into the path rather than storing an angle, so an upright box around a turned shape
-  // is the truth about the model. (An element keeps its angle — see the label test below — because
-  // there the rotation really is stored, as a matrix on the node.)
+  // Released, the box keeps the angle it was turned to and still hugs the shape — it is not the
+  // axis-aligned bounds of the result, which for a wide shape swung 113° would be far squarer.
   const settled = await boxGeom(box);
-  expect(Math.abs(settled.deg)).toBeLessThan(0.5);
-  expect(settled.aspect).toBeLessThan(rest.aspect); // squarer: it's the turned shape's bounds
+  expect(settled.deg).toBeCloseTo(spinning.deg, 0);
+  expect(settled.aspect).toBeCloseTo(rest.aspect, 1);
+
+  // And the handles came with it, so a resize pulls along the shape's own edges. Dragging the east
+  // handle of a box turned off-axis has to move the shape's document-space bounds in *both*
+  // directions; a scale along the document's x could only widen it.
+  const bboxOf = async () =>
+    await shapeEl.evaluate((el) => {
+      const b = (el as SVGGraphicsElement).getBoundingClientRect();
+      return { w: b.width, h: b.height };
+    });
+  const beforeResize = await bboxOf();
+  const east = await page
+    .locator("svg.canvas g.overlay rect.xf-handle")
+    .nth(3)
+    .evaluate((el) => {
+      const b = (el as SVGGraphicsElement).getBoundingClientRect();
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    });
+  await page.mouse.move(east.x, east.y);
+  await page.mouse.down();
+  await page.mouse.move(east.x + 60, east.y + 60, { steps: 5 });
+  await page.mouse.up();
+  const afterResize = await bboxOf();
+  expect(Math.abs(afterResize.w - beforeResize.w)).toBeGreaterThan(5);
+  expect(Math.abs(afterResize.h - beforeResize.h)).toBeGreaterThan(5);
+
+  // The box is still at the same angle: a resize doesn't re-orient it.
+  expect((await boxGeom(box)).deg).toBeCloseTo(settled.deg, 0);
+
+  // The tilt rides history like any other edit: undo the resize, then the rotation, and the box
+  // is upright again. (A stored angle that undo couldn't reach would leave the box describing a
+  // shape that no longer exists.)
+  await page.keyboard.press("Meta+z");
+  await page.keyboard.press("Meta+z");
+  await page.mouse.click(centre.x, centre.y); // undo restores the doc, not the selection
+  await expect(box).toBeAttached();
+  expect(Math.abs((await boxGeom(box)).deg)).toBeLessThan(0.5);
 });
 
-// A label's rotation is genuinely *stored* — a matrix on the node — so unlike a shape's, its box
-// has no reason to snap upright on release. It's measured from the label's own untransformed bbox
-// mapped through its screen matrix, which keeps the box on the object: turned while turning, and
-// still turned afterwards, with its handles on the label's own axes (Pixelmator-style).
+// A label reaches the same place by a different route: it has no anchor geometry, so its rotation
+// lives as a matrix on the node and its box is measured from its own untransformed bbox mapped
+// through its screen matrix. Same outcome as a shape's stored `boxAngle` — turned while turning,
+// still turned after, handles on the object's own axes.
 test("a label's box turns as it rotates, and stays turned", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {

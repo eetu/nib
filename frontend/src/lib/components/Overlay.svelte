@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { tightBounds } from "$lib/model/geometry";
   import { pathToD } from "$lib/model/path";
   import { nodeRefEquals, type Subpath } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
@@ -8,10 +7,9 @@
   import { viewport } from "$lib/stores/viewport.svelte";
   import { activePivot } from "$lib/tools/rotate";
   import {
-    type Bounds,
-    boundsCorners,
     type BoxFrame,
     boxFrame,
+    framedCorners,
     padBounds,
     SELECT_PAD_PX,
   } from "$lib/tools/transform";
@@ -33,6 +31,11 @@
   // selection — node editing stays clean (just anchors + handles).
   const boxPath = $derived(
     editor.objectSelected ? (doc?.paths[editor.selectedPathIndex ?? -1] ?? null) : null,
+  );
+  // The transform box: drawn for a single object selection *or* a multi-select group, from the
+  // selection's own frame (bounds measured at its tilt).
+  const shapeBox = $derived(
+    (boxPath && !boxPath.deleted) || editor.multiSelected ? editor.selectionFrame : null,
   );
 
   // Project a path's geometry into screen space so its outline can be traced as
@@ -144,19 +147,16 @@
         />
       {/each}
     {/snippet}
-    {#snippet boundsBox(raw: Bounds)}
-      <!-- A shape's box, from document-space bounds. While a rotation is in flight it draws the
-           box the drag *started* with, turned about the pivot: nib bakes rotation into the
-           geometry, so re-deriving axis-aligned bounds per frame would breathe the box wider and
-           narrower while the handles stayed put, which reads as a resize. -->
-      {@const spin = interaction.rotation}
-      {@const bb = padBounds(spin ? spin.bounds : raw, viewport.toDocLength(SELECT_PAD_PX))}
-      {@const c = boundsCorners(bb, spin).map((p) => viewport.toScreen(p))}
+    {#if shapeBox}
+      <!-- The box for a shape selection — one shape or a multi-select group, which scale and
+           rotate as one (Pixelmator-style). Bounds come measured in the selection's own tilted
+           frame, so a shape turned 30° gets a box that hugs it rather than the axis-aligned bounds
+           around it; rotating the padded corners back out of that frame puts them where the shape
+           is. It follows a rotation *live* for free: the geometry and the angle turn together, so
+           bounds measured in the turning frame keep their size. -->
+      {@const bb = padBounds(shapeBox.bounds, viewport.toDocLength(SELECT_PAD_PX))}
+      {@const c = framedCorners(bb, shapeBox.angle).map((p) => viewport.toScreen(p))}
       {@render transformBox(boxFrame(c[0], c[1], c[2], c[3]))}
-    {/snippet}
-    {#if boxPath && !boxPath.deleted}
-      {@const raw = tightBounds(boxPath.subpaths)}
-      {#if raw}{@render boundsBox(raw)}{/if}
     {/if}
     {#if elementFrame}
       <!-- transform box for a selected non-shape element (text/image/use) -->
@@ -182,8 +182,6 @@
           <path class="sel-outline" d={md} />
         {/if}
       {/each}
-      {@const raw = editor.selectionBounds}
-      {#if raw}{@render boundsBox(raw)}{/if}
     {/if}
     {#if nodeEditing}
       {#each doc.paths as path, pi (pi)}

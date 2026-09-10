@@ -157,6 +157,12 @@ pub enum Op {
         cy: Option<f64>,
     },
 
+    /// Set the orientation of a path's selection box, in radians clockwise (see
+    /// `PathElement::box_angle`). The interactive rotate drag writes geometry live and sets this
+    /// alongside it; `RotatePath` accumulates it on its own, so numeric rotation and MCP agree
+    /// without the caller having to know the field exists.
+    SetPathBoxAngle { path: usize, angle: f64 },
+
     /// Insert a node on the segment leaving `segment` at parameter `t` (shape-preserving).
     InsertNode {
         path: usize,
@@ -429,7 +435,8 @@ fn drawn_path(
         renamed: false,
         hidden: false,
         locked: false,
-    }
+        box_angle: 0.0,
+            }
 }
 
 /// The single funnel for adding a drawn path: use the caller-supplied `uid` (so all clients agree
@@ -602,6 +609,7 @@ fn op_is_finite(op: &Op) -> bool {
         Op::FlipPath { cx, cy, .. } => {
             cx.is_none_or(f64::is_finite) && cy.is_none_or(f64::is_finite)
         }
+        Op::SetPathBoxAngle { angle, .. } => angle.is_finite(),
         Op::SetDropShadow {
             dx,
             dy,
@@ -765,6 +773,8 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 crate::model::geometry::rotate_subpaths(&p.subpaths, px, py, degrees.to_radians())
             };
             doc.paths[*path].subpaths = rot;
+            // The box turns with the shape, so a resize afterwards still pulls along its own axes.
+            doc.paths[*path].box_angle += degrees.to_radians();
             doc.paths[*path].edited = true;
             true
         }
@@ -791,6 +801,8 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 crate::model::geometry::flip_subpaths(&p.subpaths, px, py, *horizontal)
             };
             doc.paths[*path].subpaths = flipped;
+            // A mirrored shape's box mirrors too: the same tilt the other way.
+            doc.paths[*path].box_angle = -doc.paths[*path].box_angle;
             doc.paths[*path].edited = true;
             true
         }
@@ -962,6 +974,16 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 return false;
             }
             p.hidden = *hidden;
+            true
+        }
+        Op::SetPathBoxAngle { path, angle } => {
+            let Some(p) = doc.paths.get_mut(*path) else {
+                return false;
+            };
+            if p.deleted || p.box_angle == *angle {
+                return false;
+            }
+            p.box_angle = *angle;
             true
         }
         Op::SetPathLocked { path, locked } => {
@@ -1533,6 +1555,7 @@ mod tests {
                 renamed: false,
                 hidden: false,
                 locked: false,
+                box_angle: 0.0,
             }],
             gradients: Vec::new(),
             tree: None,
@@ -1590,6 +1613,79 @@ mod tests {
             }
         ));
         assert_eq!(doc3.paths[0].subpaths[0].nodes[1].point, before);
+    }
+
+    #[test]
+    fn rotation_accumulates_the_box_angle_and_export_never_carries_it() {
+        use crate::model::document::{parse_svg, serialize_canonical};
+        let mut doc = parse_svg(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M 0 0 L 2 0 L 2 1"/></svg>"##,
+        )
+        .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+        assert_eq!(doc.paths[0].box_angle, 0.0);
+
+        // Two rotations compose, so the box keeps up with a shape turned in stages.
+        for _ in 0..2 {
+            assert!(apply(
+                &mut doc,
+                &Op::RotatePath {
+                    path: 0,
+                    degrees: 30.0,
+                    cx: None,
+                    cy: None
+                }
+            ));
+        }
+        assert!(
+            (doc.paths[0].box_angle - 60.0_f64.to_radians()).abs() < 1e-9,
+            "60°: {}",
+            doc.paths[0].box_angle
+        );
+
+        // A mirror tilts the box the other way, like the shape it describes.
+        assert!(apply(
+            &mut doc,
+            &Op::FlipPath {
+                path: 0,
+                horizontal: true,
+                cx: None,
+                cy: None
+            }
+        ));
+        assert!((doc.paths[0].box_angle + 60.0_f64.to_radians()).abs() < 1e-9);
+
+        // Set directly (the interactive drag's route), and a no-change set is a no-op.
+        assert!(apply(
+            &mut doc,
+            &Op::SetPathBoxAngle {
+                path: 0,
+                angle: 0.5
+            }
+        ));
+        assert_eq!(doc.paths[0].box_angle, 0.5);
+        assert!(!apply(
+            &mut doc,
+            &Op::SetPathBoxAngle {
+                path: 0,
+                angle: 0.5
+            }
+        ));
+        assert!(!apply(
+            &mut doc,
+            &Op::SetPathBoxAngle {
+                path: 0,
+                angle: f64::NAN
+            }
+        ));
+
+        // It's an editor annotation, like `locked`: SVG has no place for it, so export must not
+        // invent one — a file that carried it would be nib-specific markup.
+        let out = serialize_canonical(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(
+            !out.contains("boxAngle") && !out.contains("box-angle"),
+            "no nib annotation in the export: {out}"
+        );
     }
 
     #[test]

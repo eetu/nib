@@ -18,6 +18,7 @@ import type {
   TextInfo,
 } from "$lib/model/types";
 import { debounce, loadState, saveState } from "$lib/persistence";
+import { orientedBounds } from "$lib/tools/transform";
 
 import { tools } from "./tool.svelte";
 
@@ -303,6 +304,57 @@ class DocumentStore {
         : { ...b };
     }
     return box;
+  }
+
+  /**
+   * The tilt the selection's box is drawn at, radians — the shape's own `boxAngle`.
+   *
+   * A multi-selection only takes a tilt when its members *agree* on one. Turning a group about a
+   * shared pivot leaves every member at the same angle, so the common case works; but a box drawn
+   * at one member's angle around shapes turned differently would hug none of them, and its handles
+   * would scale them all along an axis that belongs to just one. Upright is the honest answer
+   * there.
+   */
+  get selectionAngle(): number {
+    if (!this.doc) return 0;
+    let angle: number | null = null;
+    for (const i of this.selectedPaths) {
+      const p = this.doc.paths[i];
+      if (!p || p.deleted) continue;
+      const a = p.boxAngle ?? 0;
+      if (angle === null) angle = a;
+      else if (Math.abs(angle - a) > 1e-6) return 0;
+    }
+    return angle ?? 0;
+  }
+
+  /**
+   * The selection's box: bounds measured in its own tilted frame, plus that tilt.
+   *
+   * This — not `selectionBounds` — is what the transform box is drawn from and what its handles
+   * hit-test and scale against, so a turned shape gets a box that hugs it. The document-axis
+   * `selectionBounds` stays the right answer for anything that reasons in document space
+   * (align/distribute, fit-to-selection, a flip pivot).
+   */
+  get selectionFrame(): { bounds: Bounds; angle: number } | null {
+    if (!this.doc || this.selectedPaths.length === 0) return null;
+    const angle = this.selectionAngle;
+    let box: Bounds | null = null;
+    for (const i of this.selectedPaths) {
+      const p = this.doc.paths[i];
+      if (!p || p.deleted) continue;
+      const b = orientedBounds(p.subpaths, angle);
+      if (!b) continue;
+      box = box
+        ? {
+            minX: Math.min(box.minX, b.minX),
+            minY: Math.min(box.minY, b.minY),
+            maxX: Math.max(box.maxX, b.maxX),
+            maxY: Math.max(box.maxY, b.maxY),
+          }
+        : { ...b };
+    }
+    return box ? { bounds: box, angle } : null;
   }
 
   get selectedNode(): PathNode | null {
@@ -1335,6 +1387,15 @@ class DocumentStore {
 
   setSubpaths(pathIndex: number, subpaths: Subpath[]): void {
     this.#apply({ type: "setSubpaths", path: pathIndex, subpaths });
+    this.#sync();
+  }
+
+  /** Set the tilt of a path's selection box (radians). Live, like `setSubpaths` — a rotate drag
+   *  writes geometry and angle together each frame, and one `commit` at the end makes them one
+   *  undo step. */
+  setBoxAngle(pathIndex: number, angle: number): void {
+    if (!Number.isFinite(angle)) return;
+    this.#apply({ type: "setPathBoxAngle", path: pathIndex, angle });
     this.#sync();
   }
 

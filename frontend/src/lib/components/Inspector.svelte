@@ -207,6 +207,13 @@
   }
 
   // The selected path's bounding box, for the numeric transform panel.
+  //
+  // Deliberately the **document-space** box, not the shape's own tilted one (`boxAngle`), even
+  // once the canvas box is turned: X/Y here are the bbox corner, a place you can point at in the
+  // document, whereas the same corner measured in a tilted frame is a coordinate in a space
+  // nothing else in the panel uses. So the numbers and the field below scale along the same axes
+  // they're quoted in. (Pixelmator's own-size-plus-angle panel is a further step, and would want
+  // all four fields moved into the shape's frame together.)
   const bounds = $derived(path ? tightBounds(path.subpaths) : null);
 
   // Edit a bbox field: x/y translate the whole path; w/h scale it about its top-left corner.

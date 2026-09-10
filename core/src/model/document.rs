@@ -209,7 +209,8 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
                 renamed: false,
                 hidden: false,
                 locked: false,
-            }
+                box_angle: 0.0,
+                            }
         })
         .collect();
 
@@ -716,6 +717,7 @@ mod tests {
             renamed: false,
             hidden: false,
             locked: false,
+            box_angle: 0.0,
         }
     }
 

@@ -5,7 +5,14 @@ import { editor } from "$lib/stores/document.svelte";
 import { tools } from "$lib/stores/tool.svelte";
 import { viewport } from "$lib/stores/viewport.svelte";
 
-import { HANDLE_HIT_PX, handlePoints, padBounds, ROTATE_KNOB_PX, SELECT_PAD_PX } from "./transform";
+import {
+  boxFrame,
+  framedCorners,
+  frameHit,
+  HANDLE_HIT_PX,
+  padBounds,
+  SELECT_PAD_PX,
+} from "./transform";
 import type { Hit } from "./types";
 
 const ANCHOR_HIT_PX = 11;
@@ -106,17 +113,15 @@ export function hitTest(screen: Point): Hit {
   //    at corners/edges of the union box not occupied by a node. Both use selectionBounds so
   //    a group scales/rotates as one (Pixelmator-style).
   if (editor.objectSelected || editor.multiSelected) {
-    const raw = editor.selectionBounds;
-    if (raw) {
-      const bb = padBounds(raw, viewport.toDocLength(SELECT_PAD_PX));
-      // Rotate knob, above the box's top-centre.
-      const top = viewport.toScreen({ x: (bb.minX + bb.maxX) / 2, y: bb.minY });
-      if (distance({ x: top.x, y: top.y - ROTATE_KNOB_PX }, screen) <= HANDLE_HIT_PX) {
-        return { kind: "rotate" };
-      }
-      for (const { handle, point } of handlePoints(bb)) {
-        if (screenDist(point, screen) <= HANDLE_HIT_PX) return { kind: "transform", handle };
-      }
+    const box = editor.selectionFrame;
+    if (box) {
+      // Built the same way the overlay builds it, and measured against the same points — so a
+      // turned box grabs exactly where it looks, knob included.
+      const bb = padBounds(box.bounds, viewport.toDocLength(SELECT_PAD_PX));
+      const c = framedCorners(bb, box.angle).map((p) => viewport.toScreen(p));
+      const hit = frameHit(boxFrame(c[0], c[1], c[2], c[3]), screen);
+      if (hit?.t === "rotate") return { kind: "rotate" };
+      if (hit) return { kind: "transform", handle: hit.handle };
     }
   }
 

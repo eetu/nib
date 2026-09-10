@@ -146,17 +146,31 @@ Per-area detail in `frontend/CLAUDE.md`.
   marker on screen, typing an angle has to mean what dragging one means. The op vocabulary already
   took a pivot (`RotatePath {cx, cy}`, one shared pivot for a multi-selection), so this is UI over
   a core that was ready — and MCP gets the same rotation without knowing the tool exists.
-  **The box turns while you turn it** (`interaction.rotation`: the bounds the drag started with,
-  the pivot, the live angle — one SVG `rotate` carries the rect, the knob and all eight handles).
-  Re-deriving it per frame from mid-rotation geometry made it breathe wide-to-tall while the
-  handles sat still, which reads as a resize. On release it returns to the axis-aligned bounds of
-  the geometry that now exists: nib **bakes** rotation into the path rather than storing an angle,
-  so an upright box around a turned shape is the truth about the model. A box that stayed turned
-  would need a per-shape transform in the document — a real model change, not a drawing one.
-  **A non-shape element's box stays turned, because its rotation really is stored** — the composed
-  `transform` matrix on the node. So instead of the store above, its box is measured as the
-  element's *own* untransformed `getBBox()` mapped through its `getScreenCTM()` (which includes
-  that matrix): turned while turning, still turned afterwards, Pixelmator-style. A
+  **The box turns while you turn it and stays turned** (Pixelmator-style), which needs the tilt
+  *stored*, because the geometry isn't: a rotation bakes into the anchors. So `PathElement`
+  carries **`box_angle`** — radians, accumulated by `RotatePath` (and negated by `FlipPath`),
+  settable live by a drag via `SetPathBoxAngle`. Bounds are then measured **in the frame it names**
+  (`orientedBounds` = tight bounds of the geometry rotated back by −θ; `framedCorners`/
+  `framedCenter` put them back), which is what gives a turned shape a box that hugs it. That falls
+  out of the same arithmetic for free during a drag: geometry and angle turn *together*, so bounds
+  measured in the turning frame keep their size and the box swings instead of breathing
+  wide-to-tall — the old `interaction.rotation` "draw the box the drag started with" store is gone.
+  The point of a turned box is that its handles are the shape's **own axes**, so **the scale drag
+  runs entirely in that frame** (`handleAnchor` on the framed bounds, the cursor rotated in,
+  `scaleSubpathsFramed` out) — otherwise the east handle would travel along the box's edge while
+  the shape stretched across the document's x. `editor.selectionFrame` is the one source for box +
+  hit-test + drag; **a multi-selection only takes a tilt when its members agree on one** (turning a
+  group about a shared pivot leaves them equal, so the common case works; a box at one member's
+  angle around differently-turned shapes would hug none of them). `box_angle` is a **nib
+  annotation like `locked`** — it rides the native model (persists + syncs) and is **never written
+  to SVG**, so a round-trip through a file comes back upright; storing a real element `transform`
+  instead would survive that, at the cost of every document-space consumer having to compose it.
+  The Inspector's numeric X/Y/W/H stays **document-space** on purpose: X/Y there is a corner you
+  can point at, and the fields scale along the axes they're quoted in.
+  **A non-shape element reaches the same place by a different route: its rotation is already
+  stored** — the composed `transform` matrix on the node, so it needs no `box_angle`. Its box is
+  measured as the element's *own* untransformed `getBBox()` mapped through its `getScreenCTM()`
+  (which includes that matrix): turned while turning, still turned afterwards. A
   `getBoundingClientRect` can't do this — it's the axis-aligned box *around* a turned label, so a
   box drawn from it snaps upright on release and can't say which way the label's own edges run.
   That last part is the point: the handles land on the label's **own axes**, so **scale and rotate

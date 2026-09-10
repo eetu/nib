@@ -8,13 +8,12 @@
 // Two gestures, told apart by whether the pointer travelled: a click places the pivot, a drag
 // turns the selection about it. Nothing else competes for the canvas while this tool is active.
 
-import type { Point, Subpath } from "$lib/model/types";
+import type { Point } from "$lib/model/types";
 import { editor } from "$lib/stores/document.svelte";
-import { interaction } from "$lib/stores/interaction.svelte";
 import { tools } from "$lib/stores/tool.svelte";
 import { viewport } from "$lib/stores/viewport.svelte";
 
-import { snapBypassed } from "./shape-util";
+import { snapBypassed, snapshotTargets } from "./shape-util";
 import { boxCenter, rotateSubpaths } from "./transform";
 import type { DragSession, Tool } from "./types";
 
@@ -28,21 +27,6 @@ export function activePivot(): Point | null {
   if (tools.pivot) return tools.pivot;
   const bb = editor.selectionBounds;
   return bb ? boxCenter(bb) : null;
-}
-
-/** Deep-clone the selection's geometry — the reference a rotation turns *from*, so the drag stays
- *  absolute and a slow circle doesn't accumulate rounding. Mirrors the select tool's snapshot. */
-function snapshotTargets(): { pi: number; ref: Subpath[] }[] {
-  const doc = editor.doc;
-  if (!doc) return [];
-  return editor.selectedPaths
-    .map((pi) => {
-      const p = doc.paths[pi];
-      return p && !p.deleted
-        ? { pi, ref: JSON.parse(JSON.stringify(p.subpaths)) as Subpath[] }
-        : null;
-    })
-    .filter((t): t is { pi: number; ref: Subpath[] } => t !== null);
 }
 
 /** The points a dragged pivot snaps to: the selection box's corners, edge midpoints and centre —
@@ -92,7 +76,6 @@ function movePivotDrag(): DragSession {
  *  steps. A press that never travels far enough places the pivot instead — see `begin`. */
 function rotateDrag(start: Point, pivot: Point): DragSession {
   const targets = snapshotTargets();
-  const bounds = editor.selectionBounds;
   const startAngle = Math.atan2(start.y - pivot.y, start.x - pivot.x);
   let moved = false;
   return {
@@ -102,18 +85,18 @@ function rotateDrag(start: Point, pivot: Point): DragSession {
         const step = Math.PI / 12; // 15°
         delta = Math.round(delta / step) * step;
       }
-      for (const t of targets) editor.setSubpaths(t.pi, rotateSubpaths(t.ref, pivot, delta));
-      // Hand the overlay the box to turn, so it swings about the pivot with the shape instead of
-      // re-deriving an axis-aligned box from geometry that is mid-rotation.
-      if (bounds) interaction.rotation = { bounds, pivot, angle: delta };
+      // Geometry and box tilt turn together, so the box swings about the pivot with the shape —
+      // and stays turned afterwards, however far from the shape's centre the pivot sat.
+      for (const t of targets) {
+        editor.setSubpaths(t.pi, rotateSubpaths(t.ref, pivot, delta));
+        editor.setBoxAngle(t.pi, t.angle + delta);
+      }
       moved = true;
     },
     up() {
-      interaction.rotation = null;
       if (moved) editor.commit();
     },
     cancel() {
-      interaction.rotation = null;
       if (moved) editor.revert();
     },
   };
