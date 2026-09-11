@@ -1,5 +1,5 @@
 import { tightBounds } from "$lib/model/geometry";
-import type { NodeRef, Point, Subpath } from "$lib/model/types";
+import type { NodeRef, Point } from "$lib/model/types";
 import { collectAnchors, findSnap, isCloseLoop, snapToGrid } from "$lib/snap";
 import { editor } from "$lib/stores/document.svelte";
 import { interaction } from "$lib/stores/interaction.svelte";
@@ -7,13 +7,15 @@ import { tools } from "$lib/stores/tool.svelte";
 import { viewport } from "$lib/stores/viewport.svelte";
 
 import { alignGuides, gridSnapBox } from "./guides";
-import { snapBypassed } from "./shape-util";
+import { snapBypassed, snapshotTargets } from "./shape-util";
 import {
   type Bounds,
-  boxCenter,
+  framedCenter,
+  fromFrame,
   handleAnchor,
   rotateSubpaths,
-  scaleSubpaths,
+  scaleSubpathsFramed,
+  toFrame,
   transformCursor,
   type TransformHandle,
 } from "./transform";
@@ -228,40 +230,32 @@ function marqueeDrag(start: Point): DragSession {
   };
 }
 
-/** Deep-clone the subpaths of every selected path — the reference geometry a transform drag
- *  scales/rotates from (stable across the whole gesture). One shape or a whole group; both
- *  transform about the union box, so a multi-selection scales/rotates as one (Pixelmator-style). */
-function snapshotTargets(): { pi: number; ref: Subpath[] }[] {
-  const doc = editor.doc;
-  if (!doc) return [];
-  return editor.selectedPaths
-    .map((pi) => {
-      const p = doc.paths[pi];
-      return p && !p.deleted
-        ? { pi, ref: JSON.parse(JSON.stringify(p.subpaths)) as Subpath[] }
-        : null;
-    })
-    .filter((t): t is { pi: number; ref: Subpath[] } => t !== null);
-}
-
 /** Rotate the object selection (one shape or a multi-select group) by dragging the knob above
  *  the box. Rotation is about the union box centre, relative to the geometry at drag start;
  *  shift snaps to 15° steps. */
 function rotateDrag(start: Point): DragSession {
   const targets = snapshotTargets();
-  const bb = editor.selectionBounds;
-  const center = bb ? boxCenter(bb) : { x: 0, y: 0 };
+  const box = editor.selectionFrame;
+  // The centre of the box as drawn, which for a turned selection is not the centre of its
+  // document-axis bounds.
+  const center = box ? framedCenter(box.bounds, box.angle) : { x: 0, y: 0 };
   const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
   let moved = false;
   return {
     move(cursor, event) {
-      if (!bb) return;
+      if (!box) return;
       let delta = Math.atan2(cursor.y - center.y, cursor.x - center.x) - startAngle;
       if (event.shiftKey) {
         const step = Math.PI / 12; // 15°
         delta = Math.round(delta / step) * step;
       }
-      for (const t of targets) editor.setSubpaths(t.pi, rotateSubpaths(t.ref, center, delta));
+      // Geometry and box tilt turn together, which is what makes the box follow the drag without
+      // any separate "draw it turning" feedback: bounds measured in the turning frame keep their
+      // size, so the box swings rather than breathing wide-to-tall.
+      for (const t of targets) {
+        editor.setSubpaths(t.pi, rotateSubpaths(t.ref, center, delta));
+        editor.setBoxAngle(t.pi, t.angle + delta);
+      }
       moved = true;
     },
     up() {
@@ -277,28 +271,37 @@ function rotateDrag(start: Point): DragSession {
  *  handle, about the opposite anchor of the union box; shift keeps the aspect ratio. */
 function scaleDrag(handle: TransformHandle): DragSession {
   const targets = snapshotTargets();
-  const bb = editor.selectionBounds;
+  const box = editor.selectionFrame;
+  const angle = box?.angle ?? 0;
   let moved = false;
   return {
     move(cursor, event) {
-      if (!bb) return;
-      const g = handleAnchor(handle, bb);
+      if (!box) return;
+      // All of this happens **in the box's own frame**, where it's axis-aligned: the anchor and
+      // moving points come straight off the framed bounds, and the cursor rotates in to meet them.
+      // Otherwise the east handle of a turned box would stretch the shape across the document's x
+      // while the handle itself travelled along the box's edge — the handle and the shape
+      // disagreeing is exactly what a turned box must not do.
+      const g = handleAnchor(handle, box.bounds);
+      const cur = toFrame(cursor, angle);
       let sx = 1;
       let sy = 1;
       if (g.sx) {
         const d = g.moving.x - g.anchor.x;
-        if (d !== 0) sx = (cursor.x - g.anchor.x) / d;
+        if (d !== 0) sx = (cur.x - g.anchor.x) / d;
       }
       if (g.sy) {
         const d = g.moving.y - g.anchor.y;
-        if (d !== 0) sy = (cursor.y - g.anchor.y) / d;
+        if (d !== 0) sy = (cur.y - g.anchor.y) / d;
       }
       if (event.shiftKey && g.sx && g.sy) {
         const m = Math.max(Math.abs(sx), Math.abs(sy));
         sx = sx < 0 ? -m : m;
         sy = sy < 0 ? -m : m;
       }
-      for (const t of targets) editor.setSubpaths(t.pi, scaleSubpaths(t.ref, g.anchor, sx, sy));
+      const anchor = fromFrame(g.anchor, angle);
+      for (const t of targets)
+        editor.setSubpaths(t.pi, scaleSubpathsFramed(t.ref, anchor, sx, sy, angle));
       moved = true;
     },
     up() {
@@ -313,7 +316,8 @@ function scaleDrag(handle: TransformHandle): DragSession {
 export const selectTool: Tool = {
   id: "select",
   cursor(hit) {
-    if (hit.kind === "transform") return transformCursor(hit.handle);
+    if (hit.kind === "transform")
+      return transformCursor(hit.handle, editor.selectionFrame?.angle ?? 0);
     if (hit.kind === "rotate") return "grab";
     if (hit.kind === "handle" || hit.kind === "anchor") return "grab";
     if (hit.kind === "segment" || hit.kind === "fill") return "move";

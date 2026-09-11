@@ -144,6 +144,7 @@ mod tests {
             renamed: false,
             hidden: false,
             locked: false,
+            box_angle: 0.0,
         }
     }
 

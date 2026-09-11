@@ -169,6 +169,48 @@ Per-area detail in `frontend/CLAUDE.md`.
   marker on screen, typing an angle has to mean what dragging one means. The op vocabulary already
   took a pivot (`RotatePath {cx, cy}`, one shared pivot for a multi-selection), so this is UI over
   a core that was ready — and MCP gets the same rotation without knowing the tool exists.
+  **The box turns while you turn it and stays turned** (Pixelmator-style), which needs the tilt
+  *stored*, because the geometry isn't: a rotation bakes into the anchors. So `PathElement`
+  carries **`box_angle`** — radians, accumulated by `RotatePath` (and negated by `FlipPath`),
+  settable live by a drag via `SetPathBoxAngle`. Bounds are then measured **in the frame it names**
+  (`orientedBounds` = tight bounds of the geometry rotated back by −θ; `framedCorners`/
+  `framedCenter` put them back), which is what gives a turned shape a box that hugs it. That falls
+  out of the same arithmetic for free during a drag: geometry and angle turn *together*, so bounds
+  measured in the turning frame keep their size and the box swings instead of breathing
+  wide-to-tall — the old `interaction.rotation` "draw the box the drag started with" store is gone.
+  The point of a turned box is that its handles are the shape's **own axes**, so **the scale drag
+  runs entirely in that frame** (`handleAnchor` on the framed bounds, the cursor rotated in,
+  `scaleSubpathsFramed` out) — otherwise the east handle would travel along the box's edge while
+  the shape stretched across the document's x. `editor.selectionFrame` is the one source for box +
+  hit-test + drag; **a multi-selection only takes a tilt when its members agree on one** (turning a
+  group about a shared pivot leaves them equal, so the common case works; a box at one member's
+  angle around differently-turned shapes would hug none of them). `box_angle` is a **nib
+  annotation like `locked`** — it rides the native model (persists + syncs) and is **never written
+  to SVG**, so a round-trip through a file comes back upright; storing a real element `transform`
+  instead would survive that, at the cost of every document-space consumer having to compose it.
+  The Inspector's numeric X/Y/W/H stays **document-space** on purpose: X/Y there is a corner you
+  can point at, and the fields scale along the axes they're quoted in.
+  **A non-shape element reaches the same place by a different route: its rotation is already
+  stored** — the composed `transform` matrix on the node, so it needs no `box_angle`. Its box is
+  measured as the element's *own* untransformed `getBBox()` mapped through its `getScreenCTM()`
+  (which includes that matrix): turned while turning, still turned afterwards. A
+  `getBoundingClientRect` can't do this — it's the axis-aligned box *around* a turned label, so a
+  box drawn from it snaps upright on release and can't say which way the label's own edges run.
+  That last part is the point: the handles land on the label's **own axes**, so **scale and rotate
+  compose on the element's side** (`m0 · L`, in the space `getBBox` lives in) rather than the
+  parent's — dragging the east handle of a box turned 30° widens the label along its own baseline
+  instead of shearing it out across the parent's x. Move stays in the *parent* space, since
+  "follow the cursor" is a screen direction. Both mappers are captured once per gesture.
+- **The selection box is a `BoxFrame` — points, not a rect** (`tools/transform.ts`): four screen-
+  space corners plus the eight handles, the knob, and the box's tilt. A turned box can't be an
+  `x/y/width/height` rect plus a rotation without the drawing and the hit-test each doing that
+  arithmetic separately, which is how they drift apart; points are the one representation both
+  share (`Overlay` traces a `<polygon>`, `frameHit`/`insideQuad` measure the same points). The
+  upright case is the degenerate one, so shapes and elements draw through the same snippet — and
+  when a path finally stores an angle, it supplies turned corners and nothing else changes. Only
+  the parts drawn at a fixed pixel size read `frame.angle`: the handle squares and the resize
+  cursors (`transformCursor(handle, angle)` — an `ew-resize` arrow on a 45°-turned box points
+  somewhere the drag won't go).
 - **Selection = node + path (+ element).** `selection` is the active node;
   `selectedPath` is an explicit path selection (PATHS row / path-body click).
   `selectedPathIndex` is the effective selected path: the selected node's path if
@@ -436,7 +478,13 @@ client-side pro pillars, all running on the core):
   6. **Rotate/skew about a freely-movable pivot — LANDED.** It is a tool of its own (`e`), which
      is what the conflict with the select tool's drag-to-move + double-click-to-node-edit always
      implied: click places the pivot, drag turns about it, and numeric rotate/skew follow the same
-     point. See the tools convention above. **Next: freeze the editor UI (1.0 RC).**
+     point. See the tools convention above.
+  7. **A selection box that stays turned — LANDED.** Pixelmator-style: the box holds the angle it
+     was rotated to instead of snapping to axis-aligned bounds, and its handles resize along the
+     shape's own edges. Shapes needed the tilt *stored* (`PathElement::box_angle`, a nib annotation
+     like `locked`); a text/image/use element already stored it as a node `transform`, so its box
+     is measured from `getBBox` × `getScreenCTM` instead. Both draw through one `BoxFrame` of
+     screen-space points. See the two conventions above. **Next: freeze the editor UI (1.0 RC).**
 - **Editor track = A → B → E → finalize; Phase C rides alongside.** Phase E is the
   *editor's capstone* — once it lands the editor is feature-complete and the remaining work
   is **finalization** (coverage/fidelity on a real-SVG corpus, robustness + large-doc perf,

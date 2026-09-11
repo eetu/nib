@@ -1,6 +1,34 @@
 import { existsSync } from "node:fs";
 
-import { expect, test } from "@playwright/test";
+import { expect, type Locator, test } from "@playwright/test";
+
+/**
+ * The selection box's own proportions and tilt, read from its four corners.
+ *
+ * The box is a polygon of screen-space points rather than a rect plus a rotation, so this measures
+ * what a person sees: the length of its top edge (`w`), of its side (`h`), the `aspect` between
+ * them, and the angle the top edge runs at (`deg`).
+ *
+ * Compare rotations by `aspect` and `deg`, never by `w`/`h` alone: a box that *turns* holds its
+ * proportions and changes its angle, while one re-derived from mid-rotation bounds squashes from
+ * wide to tall — which is the bug these tests exist for — and unlike the absolute lengths, the
+ * ratio doesn't move when the view's content-aware fit settles a frame later.
+ */
+async function boxGeom(
+  box: Locator,
+): Promise<{ w: number; h: number; aspect: number; deg: number }> {
+  const pts = (await box.getAttribute("points")) ?? "";
+  const [nw, ne, se] = pts
+    .trim()
+    .split(/\s+/)
+    .map((pair) => {
+      const [x, y] = pair.split(",").map(Number);
+      return { x, y };
+    });
+  const w = Math.hypot(ne.x - nw.x, ne.y - nw.y);
+  const h = Math.hypot(se.x - ne.x, se.y - ne.y);
+  return { w, h, aspect: w / h, deg: (Math.atan2(ne.y - nw.y, ne.x - nw.x) * 180) / Math.PI };
+}
 
 // Each test boots a fresh browser context (empty localStorage), which would trip the one-time
 // first-run interface chooser and cover the canvas. Seed a prior UI-level pick so every test boots
@@ -198,13 +226,13 @@ test("double-click enters node editing — anchors appear only then", { tag: "@c
 
   // Object mode: selecting shows the transform box but NO editable anchors.
   await page.mouse.click(cx, cy);
-  await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
+  await expect(page.locator("svg.canvas g.overlay polygon.sel-box")).toBeAttached();
   await expect(page.locator("svg.canvas g.overlay .anchor")).toHaveCount(0);
 
   // Double-click enters node editing → the square's four anchors appear.
   await page.mouse.dblclick(cx, cy);
   await expect(page.locator("svg.canvas g.overlay .anchor")).toHaveCount(4);
-  await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toHaveCount(0);
+  await expect(page.locator("svg.canvas g.overlay polygon.sel-box")).toHaveCount(0);
 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
@@ -276,7 +304,7 @@ test("multi-select shows group transform handles and scales all shapes together"
   await rows.nth(1).click({ modifiers: ["Shift"] });
 
   // The union box now carries the 8 resize handles (multi-select used to be move-only).
-  await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
+  await expect(page.locator("svg.canvas g.overlay polygon.sel-box")).toBeAttached();
   const handles = page.locator("svg.canvas g.overlay rect.xf-handle");
   await expect(handles).toHaveCount(8);
 
@@ -362,7 +390,7 @@ test("gradients: convert a shape's fill to a linear gradient", async ({ page }) 
   await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * 0.65);
   await page.mouse.up();
   await page.keyboard.press("v");
-  await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
+  await expect(page.locator("svg.canvas g.overlay polygon.sel-box")).toBeAttached();
 
   // Fill → linear gradient: a <linearGradient> def appears and the shape references it.
   await page.locator(".paint").filter({ hasText: "fill" }).getByRole("button", { name: "linear" }).click();
@@ -1391,9 +1419,9 @@ test("a <text> element is selectable and its content + attributes are editable",
     );
   await page.keyboard.press("Meta+Enter");
 
-  // The <text> is a leaf row in the panel (not a shape/group). Selecting it opens the element
-  // section (there are no shape rows — text isn't an editable path).
-  const row = page.locator(".layerlist .row-btn").filter({ hasText: "text" });
+  // The <text> is a leaf row in the panel (not a shape/group), named by its own words. Selecting
+  // it opens the element section (there are no shape rows — text isn't an editable path).
+  const row = page.locator(".layerlist .row-btn").filter({ hasText: "hello" });
   await expect(row).toHaveCount(1);
   await row.click();
   await expect(page.getByRole("heading", { name: "text", exact: true })).toBeVisible();
@@ -1442,8 +1470,8 @@ test("a selected <text> element can be dragged on the canvas to move it", async 
   await page.keyboard.press("v");
 
   // Select via the panel row (reliable), then the overlay draws a box around the text's DOM bbox.
-  await page.locator(".layerlist .row-btn").filter({ hasText: "text" }).click();
-  const selBox = page.locator("svg.canvas g.overlay rect.sel-box");
+  await page.locator(".layerlist .row-btn").filter({ hasText: "hello" }).click();
+  const selBox = page.locator("svg.canvas g.overlay polygon.sel-box");
   await expect(selBox).toBeVisible();
 
   // Drag inside the box → the text's x moves (drag-anywhere-in-box, forgiving of glyph gaps).
@@ -1480,7 +1508,7 @@ test("a selected <text> can be resized + rotated with the transform box", async 
     );
   await page.keyboard.press("Meta+Enter");
   await page.keyboard.press("v");
-  await page.locator(".layerlist .row-btn").filter({ hasText: "text" }).click();
+  await page.locator(".layerlist .row-btn").filter({ hasText: "hello" }).click();
 
   const t = page.locator("svg.canvas g.artwork text");
   const handles = page.locator("svg.canvas g.overlay rect.xf-handle");
@@ -1713,7 +1741,7 @@ test("clicking a filled shape's interior selects it (fill hit-test)", async ({ p
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
 
   // The whole path is now object-selected → the transform box is drawn in the overlay.
-  await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
+  await expect(page.locator("svg.canvas g.overlay polygon.sel-box")).toBeAttached();
 
   // Rotate via the knob above the box → the path geometry (its `d`) changes.
   const beforeD = await page.locator("svg.canvas g.artwork path").getAttribute("d");
@@ -2033,6 +2061,91 @@ test("double-click a node toggles it between corner and smooth", async ({ page }
 
 // A <text> has no anchors to node-edit, so double-click means "edit the words": an input opens
 // over the label, seeded + selected, committing on Enter as a single undo step.
+// A label carries its typeface as plain attributes, so the inspector edits them as text with
+// suggestions rather than as a closed picker — a family this machine lacks is still the right
+// answer for a file that opens elsewhere. The LAYERS row for a label says what the label says.
+test("a label's typeface is editable and its layer row reads its words", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="20" y="50" font-size="10" fill="#000">Hello</text></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+
+  // The row names itself from the label's own words, and stands in a "T" for the thumbnail a
+  // label has no geometry to draw.
+  const row = page.locator(".layerlist .row-btn").first();
+  await expect(row).toHaveText("Hello");
+  await expect(page.locator(".layerlist .thumb.glyph")).toHaveText("T");
+
+  await row.click();
+  const family = page.locator('input[list="nib-font-families"]');
+  await expect(family).toHaveValue("");
+
+  await family.fill("serif");
+  await family.press("Enter");
+  const label = page.locator("svg.canvas text[data-uid]");
+  await expect(label).toHaveAttribute("font-family", "serif");
+
+  // Slant is a toggle, and it lights while it's on.
+  const italic = page.getByRole("button", { name: "italic", exact: true });
+  await italic.click();
+  await expect(label).toHaveAttribute("font-style", "italic");
+  await expect(italic).toHaveClass(/\bon\b/);
+  await italic.click();
+  await expect(label).not.toHaveAttribute("font-style", "italic");
+
+  // Each is one undo step — a typeface change rides the same history as any other edit.
+  await page.keyboard.press("Meta+z");
+  await expect(label).toHaveAttribute("font-style", "italic");
+});
+
+// The paint field's keyword picker. `none` used to sit twice in the fill block — once as a mode
+// chip, once as a `—` button on the row below — which reads as a mistake even though both worked.
+// The button is now a picker for the values a swatch can't reach, and it leaves `none` to the chip.
+test("a paint's SVG keywords are reachable without duplicating the none chip", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="20" y="20" width="60" height="40" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+  await page.locator(".layerlist .row-btn").first().click();
+
+  const shape = page.locator("svg.canvas g.artwork path");
+  const fill = page.locator(".paint").filter({ hasText: "fill" }).first();
+  const kinds = fill.getByLabel("fill value");
+
+  // Exactly one control in the fill block sets `none`: the mode chip.
+  await expect(fill.getByRole("button", { name: "—", exact: true })).toHaveCount(1);
+  await expect(kinds.locator("option")).toHaveText(["colour", "currentColor"]);
+
+  // The keyword the swatch can't express is now reachable.
+  await kinds.selectOption("currentColor");
+  await expect(shape).toHaveAttribute("fill", "currentColor");
+
+  // Coming back hands the colour back, rather than resetting to black.
+  await kinds.selectOption("color");
+  await expect(shape).toHaveAttribute("fill", "#3b82f6");
+
+  // And the chip still owns `none`.
+  await fill.getByRole("button", { name: "—", exact: true }).click();
+  await expect(shape).toHaveAttribute("fill", "none");
+});
+
 test("double-click a text label edits it in place", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
@@ -2155,7 +2268,7 @@ test(
     const gx = ink.x;
     const gy = ink.y;
     await page.mouse.click(gx, gy);
-    await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
+    await expect(page.locator("svg.canvas g.overlay polygon.sel-box")).toBeAttached();
     // Past the double-click interval, else the drag's mousedown reads as a double-click and opens
     // the inline label editor instead.
     await page.waitForTimeout(600);
@@ -2489,7 +2602,7 @@ test("rotates about a pivot you place, not the shape's centre", async ({ page })
     return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
   });
   await page.mouse.click(centre.x, centre.y);
-  await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
+  await expect(page.locator("svg.canvas g.overlay polygon.sel-box")).toBeAttached();
 
   await page.keyboard.press("e");
   // The pivot shows at the selection's centre until it's moved.
@@ -2525,6 +2638,178 @@ test("rotates about a pivot you place, not the shape's centre", async ({ page })
   await page.keyboard.press("Meta+z");
   const undone = await shape.evaluate((el) => (el as SVGGraphicsElement).getBoundingClientRect().x);
   expect(Math.abs(undone - before)).toBeLessThan(3);
+});
+
+// The selection box turns with the shape and *stays* turned, the way Pixelmator's does. Its tilt
+// is stored (`PathElement.boxAngle`) because the geometry isn't — a rotation bakes into the
+// anchors — so without it the box could only ever be the axis-aligned bounds of the result: it
+// breathed from wide to tall mid-swing while the handles sat still (which reads as a resize), and
+// snapped upright on release, leaving no way to resize a turned shape along its own edges.
+test("the selection box turns with the shape, and stays turned", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      // Deliberately wide and short: a square would hide the bug this pins.
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="30" y="35" width="40" height="20" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const shapeEl = page.locator("svg.canvas g.artwork path");
+  const shape = (await shapeEl.boundingBox())!;
+  const centre = { x: shape.x + shape.width / 2, y: shape.y + shape.height / 2 };
+  await page.mouse.click(centre.x, centre.y);
+
+  const box = page.locator("svg.canvas g.overlay polygon.sel-box");
+
+  const rest = await boxGeom(box);
+  expect(Math.abs(rest.deg)).toBeLessThan(0.5); // upright, as authored
+  expect(rest.w).toBeGreaterThan(rest.h); // and wide
+
+  // Grab the knob and swing about a quarter turn, holding the drag open.
+  const knob = await page
+    .locator("svg.canvas g.overlay circle.rotate-knob")
+    .evaluate((el) => {
+      const b = (el as SVGGraphicsElement).getBoundingClientRect();
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    });
+  await page.mouse.move(knob.x, knob.y);
+  await page.mouse.down();
+  await page.mouse.move(centre.x + 140, centre.y + 60, { steps: 6 });
+
+  const spinning = await boxGeom(box);
+  // The box is the one the drag started with, turned — same proportions, real rotation.
+  expect(spinning.aspect).toBeCloseTo(rest.aspect, 1);
+  expect(Math.abs(spinning.deg)).toBeGreaterThan(20);
+
+  await page.mouse.up();
+
+  // Released, the box keeps the angle it was turned to and still hugs the shape — it is not the
+  // axis-aligned bounds of the result, which for a wide shape swung 113° would be far squarer.
+  const settled = await boxGeom(box);
+  expect(settled.deg).toBeCloseTo(spinning.deg, 0);
+  expect(settled.aspect).toBeCloseTo(rest.aspect, 1);
+
+  // And the handles came with it, so a resize pulls along the shape's own edges. Dragging the east
+  // handle of a box turned off-axis has to move the shape's document-space bounds in *both*
+  // directions; a scale along the document's x could only widen it.
+  const bboxOf = async () =>
+    await shapeEl.evaluate((el) => {
+      const b = (el as SVGGraphicsElement).getBoundingClientRect();
+      return { w: b.width, h: b.height };
+    });
+  const beforeResize = await bboxOf();
+  const east = await page
+    .locator("svg.canvas g.overlay rect.xf-handle")
+    .nth(3)
+    .evaluate((el) => {
+      const b = (el as SVGGraphicsElement).getBoundingClientRect();
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    });
+  await page.mouse.move(east.x, east.y);
+  await page.mouse.down();
+  await page.mouse.move(east.x + 60, east.y + 60, { steps: 5 });
+  await page.mouse.up();
+  const afterResize = await bboxOf();
+  expect(Math.abs(afterResize.w - beforeResize.w)).toBeGreaterThan(5);
+  expect(Math.abs(afterResize.h - beforeResize.h)).toBeGreaterThan(5);
+
+  // The box is still at the same angle: a resize doesn't re-orient it.
+  expect((await boxGeom(box)).deg).toBeCloseTo(settled.deg, 0);
+
+  // The tilt rides history like any other edit: undo the resize, then the rotation, and the box
+  // is upright again. (A stored angle that undo couldn't reach would leave the box describing a
+  // shape that no longer exists.)
+  await page.keyboard.press("Meta+z");
+  await page.keyboard.press("Meta+z");
+  await page.mouse.click(centre.x, centre.y); // undo restores the doc, not the selection
+  await expect(box).toBeAttached();
+  expect(Math.abs((await boxGeom(box)).deg)).toBeLessThan(0.5);
+});
+
+// A label reaches the same place by a different route: it has no anchor geometry, so its rotation
+// lives as a matrix on the node and its box is measured from its own untransformed bbox mapped
+// through its screen matrix. Same outcome as a shape's stored `boxAngle` — turned while turning,
+// still turned after, handles on the object's own axes.
+test("a label's box turns as it rotates, and stays turned", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="15" y="55" font-size="18" fill="#111">Rotate me</text></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // Select the label by clicking its ink (its client rect is roomier than its glyphs).
+  const label = page.locator("svg.canvas text[data-uid]");
+  const rect = await label.evaluate((el) => el.getBoundingClientRect().toJSON());
+  const ink = await page.evaluate((r) => {
+    for (let fy = 0.2; fy < 0.9; fy += 0.1)
+      for (let fx = 0.05; fx < 0.9; fx += 0.05) {
+        const x = r.x + r.width * fx;
+        const y = r.y + r.height * fy;
+        if (document.elementFromPoint(x, y)?.closest("text[data-uid]")) return { x, y };
+      }
+    return null;
+  }, rect);
+  if (!ink) throw new Error("no point on the label's glyphs");
+  await page.mouse.click(ink.x, ink.y);
+
+  const sel = page.locator("svg.canvas g.overlay polygon.sel-box");
+
+  const rest = await boxGeom(sel);
+  expect(Math.abs(rest.deg)).toBeLessThan(0.5);
+  expect(rest.w).toBeGreaterThan(rest.h); // a line of text is wide
+
+  const knob = await page
+    .locator("svg.canvas g.overlay circle.rotate-knob")
+    .evaluate((el) => {
+      const b = (el as SVGGraphicsElement).getBoundingClientRect();
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    });
+  const centre = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  await page.mouse.move(knob.x, knob.y);
+  await page.mouse.down();
+  await page.mouse.move(centre.x + 160, centre.y + 70, { steps: 6 });
+
+  const spinning = await boxGeom(sel);
+  expect(spinning.aspect).toBeCloseTo(rest.aspect, 1);
+  expect(Math.abs(spinning.deg)).toBeGreaterThan(15);
+
+  await page.mouse.up();
+
+  // The label really rotated (a matrix on the node) — and the box held its angle rather than
+  // collapsing to the axis-aligned bounds around it.
+  expect(await label.getAttribute("transform")).toMatch(/^matrix\(/);
+  const settled = await boxGeom(sel);
+  expect(settled.deg).toBeCloseTo(spinning.deg, 0);
+  expect(settled.aspect).toBeCloseTo(rest.aspect, 1);
+
+  // And the handles came with it: the SE handle sits on the turned box's own corner, which is what
+  // makes a resize after a rotation pull along the label's baseline instead of the parent's x.
+  const corner = await sel.evaluate((el) => {
+    const se = (el.getAttribute("points") ?? "").trim().split(/\s+/)[2];
+    const [x, y] = se.split(",").map(Number);
+    return { x, y };
+  });
+  const seHandle = await page
+    .locator("svg.canvas g.overlay rect.xf-handle")
+    .nth(4)
+    .evaluate((el) => {
+      const b = (el as SVGGraphicsElement).getBBox();
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    });
+  expect(Math.hypot(seHandle.x - corner.x, seHandle.y - corner.y)).toBeLessThan(1.5);
 });
 
 // The context-menu policy, which the interaction skill calls the 1.0 gate: one menu, every
@@ -2565,7 +2850,7 @@ test("right-click answers with nib's menu everywhere but text fields", async ({ 
   // Escape closes the menu — and only the menu, the outermost rung of the ladder.
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
-  await expect(page.locator("svg.canvas g.overlay rect.sel-box")).toBeAttached();
+  await expect(page.locator("svg.canvas g.overlay polygon.sel-box")).toBeAttached();
 
   // 2. Empty canvas gets the document's verbs rather than nothing.
   await page.mouse.click(shape.x - 80, shape.y - 40, { button: "right" });

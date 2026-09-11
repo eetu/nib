@@ -64,6 +64,11 @@ export type PathElement = {
   hidden?: boolean;
   /** Editor-only lock: a locked path isn't hit-testable/selectable on the canvas (not exported). */
   locked?: boolean;
+  /** The tilt of this path's selection box, radians clockwise — accumulated by every rotation
+   *  applied to it. Geometry is baked in document space, so this is the only record of which way
+   *  the shape was turned; bounds measured in the frame it names give the box its own axes. An
+   *  editor annotation like `locked`: never exported to SVG. */
+  boxAngle?: number;
 };
 
 export type ViewBox = {
