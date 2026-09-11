@@ -277,10 +277,14 @@
   </div>
 
   {#if mode === "solid" || mode === "none"}
+    <!-- No `none` keyword here: the mode row's `—` chip already is that control, and it's the one
+         that shows the state. -->
     <ColorInput
-      label=""
+      {label}
+      showLabel={false}
       {value}
       editable
+      keywords={["currentColor"]}
       oninput={(v) => previewPaint(v)}
       onchange={(v) => setPaint(v)}
     />
@@ -307,10 +311,13 @@
       {/each}
     </div>
     <div class="stoprow">
+      <!-- A stop has no "none" — an absent stop-color is black, not nothing. -->
       <ColorInput
-        label=""
+        label="{label} stop"
+        showLabel={false}
         value={stopColorValue(anyGrad.stops[selStop])}
         editable
+        keywords={["currentColor"]}
         oninput={(v) => updateStop(selStop, { color: v, opacity: undefined }, true)}
         onchange={(v) => updateStop(selStop, { color: v, opacity: undefined })}
       />

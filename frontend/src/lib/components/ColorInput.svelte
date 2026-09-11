@@ -1,14 +1,35 @@
 <script lang="ts">
   type Props = {
+    /** Names the field — shown in the label column, and the accessible name of every control in
+     *  it. A caller that draws the label itself passes `showLabel: false`; the name is still
+     *  needed, or the controls announce as a bare "value" / "alpha". */
     label: string;
+    showLabel?: boolean;
     value: string;
     editable: boolean;
     onchange: (value: string) => void;
     /** Live updates while the native picker / alpha slider is dragged (before commit). */
     oninput?: (value: string) => void;
+    /**
+     * The SVG paint keywords this field offers besides a colour — values that aren't a colour at
+     * all and so can't be reached through the swatch.
+     *
+     * A caller that already offers one elsewhere leaves it out: `PaintInput`'s segmented control
+     * has a `—` chip for `none`, so its field only offers `currentColor`. Two controls for one
+     * meaning, stacked on adjacent rows, read as a mistake even when both work.
+     */
+    keywords?: string[];
   };
 
-  let { label, value, editable, onchange, oninput }: Props = $props();
+  let {
+    label,
+    showLabel = true,
+    value,
+    editable,
+    onchange,
+    oninput,
+    keywords = ["none", "currentColor"],
+  }: Props = $props();
 
   const isNone = $derived(value === "none" || value === "");
 
@@ -62,12 +83,28 @@
   function alphaCommit(e: Event) {
     onchange(withAlpha(parsed.base, Number((e.currentTarget as HTMLInputElement).value) / 100));
   }
+
+  // --- the keyword picker -------------------------------------------------
+  // Which of the offered values is in force — a keyword, else an ordinary colour.
+  const kind = $derived(keywords.find((k) => k === value) ?? "color");
+
+  // The colour to come back to when a keyword is switched off. Remembered, because
+  // keyword → colour → keyword otherwise loses the colour you had and hands back black.
+  let lastColor = $state("#000000");
+  $effect(() => {
+    if (parsed.hex) lastColor = value;
+  });
+
+  function pickKind(e: Event) {
+    const v = (e.currentTarget as HTMLSelectElement).value;
+    onchange(v === "color" ? lastColor : v);
+  }
 </script>
 
 <div class="field">
-  <!-- Always reserve the label column (empty when used inside PaintInput, which shows the label
-       itself) so the swatch/hex align with the panel's other control rows. -->
-  <span class="lbl">{label}</span>
+  <!-- Always reserve the label column (drawn empty when the caller shows the label itself) so
+       the swatch/hex align with the panel's other control rows. -->
+  <span class="lbl">{showLabel ? label : ""}</span>
   <span class="swatch" class:none={isNone} style:background={swatchBg}>
     {#if editable}
       <input
@@ -87,14 +124,26 @@
     disabled={!editable}
     spellcheck="false"
   />
-  {#if editable}
-    <button
-      class="none-btn"
-      class:active={isNone}
-      title="none"
-      aria-label="{label} none"
-      onclick={() => onchange(isNone ? "#000000" : "none")}>—</button
-    >
+  {#if editable && keywords.length}
+    <!-- A native <select> under a caret, the same overlay trick the swatch uses for its colour
+         input: the keyboard, dismissal and placement come free, and the row keeps the footprint of
+         the single button this replaced. The chosen value is already legible twice over — the
+         swatch and the field both show it — so the trigger itself only needs to say "there are
+         other values here". -->
+    <span class="kw" class:keyword={kind !== "color"}>
+      <span class="caret" aria-hidden="true">▾</span>
+      <select
+        aria-label="{label} value"
+        title="paint value — a colour, or an SVG keyword"
+        value={kind}
+        onchange={pickKind}
+      >
+        <option value="color">colour</option>
+        {#each keywords as k (k)}
+          <option value={k}>{k}</option>
+        {/each}
+      </select>
+    </span>
   {/if}
   {#if editable && parsed.hex}
     <!-- alpha slider — wraps to its own line under the colour row -->
@@ -164,20 +213,48 @@
     font-size: 12px;
   }
 
-  .none-btn {
+  .kw {
+    position: relative;
+    display: grid;
     width: 22px;
     height: 22px;
     flex: none;
+    place-items: center;
     border: 1px solid var(--halo-border);
     border-radius: var(--halo-radius-pill);
     background: var(--halo-bg-main);
     color: var(--halo-text-muted);
-    line-height: 1;
   }
 
-  .none-btn.active {
+  /* a keyword is in force, not a colour — the same accent the mode chips use */
+  .kw.keyword {
     border-color: var(--halo-accent);
     color: var(--halo-accent);
+  }
+
+  /* the invisible select is what's focused, so the ring has to be drawn on its wrapper */
+  .kw:has(select:focus-visible) {
+    outline: 2px solid var(--halo-accent);
+    outline-offset: 1px;
+  }
+
+  .caret {
+    font-size: 10px;
+    line-height: 1;
+    pointer-events: none;
+  }
+
+  .kw select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: none;
+    appearance: none;
+    background: none;
+    cursor: pointer;
+    opacity: 0;
   }
 
   /* alpha row — forced onto its own line under the colour row */

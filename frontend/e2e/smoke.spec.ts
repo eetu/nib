@@ -2106,6 +2106,46 @@ test("a label's typeface is editable and its layer row reads its words", async (
   await expect(label).toHaveAttribute("font-style", "italic");
 });
 
+// The paint field's keyword picker. `none` used to sit twice in the fill block — once as a mode
+// chip, once as a `—` button on the row below — which reads as a mistake even though both worked.
+// The button is now a picker for the values a swatch can't reach, and it leaves `none` to the chip.
+test("a paint's SVG keywords are reachable without duplicating the none chip", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="20" y="20" width="60" height="40" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+  await page.locator(".layerlist .row-btn").first().click();
+
+  const shape = page.locator("svg.canvas g.artwork path");
+  const fill = page.locator(".paint").filter({ hasText: "fill" }).first();
+  const kinds = fill.getByLabel("fill value");
+
+  // Exactly one control in the fill block sets `none`: the mode chip.
+  await expect(fill.getByRole("button", { name: "—", exact: true })).toHaveCount(1);
+  await expect(kinds.locator("option")).toHaveText(["colour", "currentColor"]);
+
+  // The keyword the swatch can't express is now reachable.
+  await kinds.selectOption("currentColor");
+  await expect(shape).toHaveAttribute("fill", "currentColor");
+
+  // Coming back hands the colour back, rather than resetting to black.
+  await kinds.selectOption("color");
+  await expect(shape).toHaveAttribute("fill", "#3b82f6");
+
+  // And the chip still owns `none`.
+  await fill.getByRole("button", { name: "—", exact: true }).click();
+  await expect(shape).toHaveAttribute("fill", "none");
+});
+
 test("double-click a text label edits it in place", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
