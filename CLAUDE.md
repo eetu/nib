@@ -484,7 +484,15 @@ client-side pro pillars, all running on the core):
      shape's own edges. Shapes needed the tilt *stored* (`PathElement::box_angle`, a nib annotation
      like `locked`); a text/image/use element already stored it as a node `transform`, so its box
      is measured from `getBBox` × `getScreenCTM` instead. Both draw through one `BoxFrame` of
-     screen-space points. See the two conventions above. **Next: freeze the editor UI (1.0 RC).**
+     screen-space points. See the two conventions above.
+  8. **The editor is frozen; the MCP surface is what's still moving.** Every drawing tool added to
+     `/mcp` (`draw_path`, bulk targeting, `scale`/`move`/`mirror`/`measure`, `apply_ops`,
+     `undo`) came out of *actually drawing something through it* and noticing where it fought back
+     — and each session has found real bugs the unit tests didn't (a uid minted from a per-process
+     counter, a flip pivot silently ignored, a name that couldn't find a shape just drawn). That
+     loop hasn't converged, so **1.0 waits on more pair-drawing and fine-tuning of the tool
+     surface**, not on more editor features. Drive the tools against a live server when changing
+     them; compiling and unit tests have missed every one of those bugs.
 - **Editor track = A → B → E → finalize; Phase C rides alongside.** Phase E is the
   *editor's capstone* — once it lands the editor is feature-complete and the remaining work
   is **finalization** (coverage/fidelity on a real-SVG corpus, robustness + large-doc perf,
