@@ -24,8 +24,9 @@ use serde::Deserialize;
 use serde_json::json;
 use sqlx::SqlitePool;
 
+use nib_core::model::path::parse_path_d;
 use nib_core::model::tree::RenderNode;
-use nib_core::model::types::SvgDocument;
+use nib_core::model::types::{Subpath, SvgDocument};
 
 use crate::db::{self, User};
 use crate::session::{self, ProjectSession, Sessions};
@@ -46,10 +47,15 @@ document's viewBox units. Z-order = list order: the LAST path draws on top, so b
 2. get_document is a CHEAP TEXT outline of the structure — one line per path (#index, name, bounds, \
 fill/stroke). No image. Use it to plan, to measure, and to resync #indices. Prefer it over rendering \
 for anything that isn't 'I need to see what it looks like'.\n\
-3. Edit with add_shape (rect/ellipse/line/polygon/star by bounding box), apply_op (the full op \
-vocabulary), set_style, boolean_op, group, rename, rotate (degrees clockwise about a shape's centre). \
-Mutations return a ONE-LINE ack, not the document — that's deliberate; call get_document when you \
-need the current #indices.\n\
+3. DRAW with draw_path (SVG `d` data) for anything curved or irregular — a shell, a wave, a \
+silhouette; use add_shape only for true rectangles/ellipses/lines/polygons/stars. Then set_style, \
+set_gradient, boolean_op, group, rename, rotate, flip, duplicate, reorder, apply_op (the full op \
+vocabulary). Mutations return a ONE-LINE ack, not the document — that's deliberate; call \
+get_document when you need the current #indices.\n\
+3a. WORK IN BULK. rotate/flip/set_style/set_gradient/duplicate/reorder each take `index`, or \
+`indices`, or a `name` — and a name that's a GROUP acts on every shape inside it. Tilting a \
+nineteen-shape scene is ONE call naming the group, not nineteen. For a symmetric pair, duplicate \
+then flip the copy about a cx/cy line rather than authoring mirrored coordinates by hand.\n\
 4. NAME every shape by its role (add_shape's `name`, or rename afterwards) and GROUP related shapes \
 (group) so the result is a labeled, editable hierarchy a human can navigate — e.g. a 'face' group of \
 'left-eye'/'right-eye'/'mouth' — not an anonymous pile of paths. get_document echoes names back, so \
@@ -62,9 +68,14 @@ then `stamp` instances instead of re-drawing them — far fewer ops, and editing
 every instance (`list_components` shows what's defined).\n\
 5. render_document returns a PNG so you can SEE the result and verify it actually reads correctly \
 (get_document gives structure; this gives pixels). Images are token-heavy — render at checkpoints, \
-not after every edit; pass a small `width` for a quick glance.\n\
+not after every edit; pass a small `width` for a quick glance, or `around` a shape/group name to crop \
+in on one part instead of re-rendering the whole drawing.\n\
 6. Structural ops (group, boolean_op, reorder) RENUMBER #indices. Call get_document afterwards before \
-you address paths by index again.\n\
+you address paths by index again. Targeting by `name` is immune to this — one more reason to name things.\n\
+6a. A ROTATED shape's document-axis bounds are not its size: get_document appends its own size and \
+angle ('own 57.34×74.39 turned -25.69°') when it has been turned. Plan against those, and reuse the \
+angle — tilting new work by the same amount about the same pivot is what makes it sit inside a \
+tilted thing.\n\
 7. TEXT is not a path: a label has no anchors, no #index, and no geometry to boolean or reshape — \
 get_document lists labels separately. add_text places one; outline_text converts one (or all) into \
 editable glyph outlines, after which it behaves like any other shape and renders identically \
@@ -235,26 +246,25 @@ fn outline(s: &ProjectSession) -> String {
         if p.deleted {
             continue;
         }
-        let (mut minx, mut miny, mut maxx, mut maxy) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-        for sp in &p.subpaths {
-            for n in &sp.nodes {
-                minx = minx.min(n.point.x);
-                miny = miny.min(n.point.y);
-                maxx = maxx.max(n.point.x);
-                maxy = maxy.max(n.point.y);
-            }
-        }
-        let bbox = if minx <= maxx {
-            format!(
-                "[{} {} {}×{}]",
-                r(minx),
-                r(miny),
-                r(maxx - minx),
-                r(maxy - miny)
-            )
-        } else {
-            "[empty]".to_string()
+        let bbox = match path_bounds(&p.subpaths, 0.0) {
+            Some((x, y, w, h)) => format!("[{} {} {}×{}]", r(x), r(y), r(w), r(h)),
+            None => "[empty]".to_string(),
         };
+        // A turned shape's document-axis box is not its size: a 57×74 frame tilted 26° measures
+        // 84×92 on the page. Report what it actually is — its own box and the angle — or a caller
+        // reading only this line plans against a rectangle that doesn't exist.
+        let turned = (p.box_angle != 0.0)
+            .then(|| path_bounds(&p.subpaths, p.box_angle))
+            .flatten()
+            .map(|(_, _, w, h)| {
+                format!(
+                    " (own {}×{} turned {}°)",
+                    r(w),
+                    r(h),
+                    r(p.box_angle.to_degrees())
+                )
+            })
+            .unwrap_or_default();
         let style = |k: &str| {
             p.style_override
                 .as_ref()
@@ -274,10 +284,141 @@ fn outline(s: &ProjectSession) -> String {
             .map(|n| format!(" [in component: {n}]"))
             .unwrap_or_default();
         lines.push(format!(
-            "#{i} {id} {bbox} fill {fill}{stroke} {nodes}n{hidden}{in_comp}"
+            "#{i} {id} {bbox}{turned} fill {fill}{stroke} {nodes}n{hidden}{in_comp}"
         ));
     }
     lines.join("\n")
+}
+
+/// A path's bounds — **control handles included**, like the core's own `subpaths_bounds` —
+/// optionally measured in a frame tilted by `angle` radians. Returns `(min_x, min_y, w, h)`.
+///
+/// Anchors alone would be cheaper but wrong for exactly the paths that matter most: an arc drawn
+/// from two anchors and a pair of handles reports height 0, so a caller planning around it thinks
+/// it's a flat line. A bezier stays inside its control hull, so this box always contains the ink
+/// (it can be a little loose where a handle reaches past the curve).
+fn path_bounds(subpaths: &[Subpath], angle: f64) -> Option<(f64, f64, f64, f64)> {
+    let (cos, sin) = ((-angle).cos(), (-angle).sin());
+    let (mut minx, mut miny, mut maxx, mut maxy) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for sp in subpaths {
+        for n in &sp.nodes {
+            for pt in [Some(n.point), n.handle_in, n.handle_out]
+                .into_iter()
+                .flatten()
+            {
+                // Rotated *back* by the tilt, so the box is measured along the shape's own axes.
+                let (x, y) = if angle == 0.0 {
+                    (pt.x, pt.y)
+                } else {
+                    (pt.x * cos - pt.y * sin, pt.x * sin + pt.y * cos)
+                };
+                minx = minx.min(x);
+                miny = miny.min(y);
+                maxx = maxx.max(x);
+                maxy = maxy.max(y);
+            }
+        }
+    }
+    (minx <= maxx).then_some((minx, miny, maxx - minx, maxy - miny))
+}
+
+/// The render node with this uid, anywhere in the tree.
+fn find_render_node<'a>(nodes: &'a [RenderNode], uid: &str) -> Option<&'a RenderNode> {
+    for n in nodes {
+        if let RenderNode::Element {
+            uid: u, children, ..
+        } = n
+        {
+            if u == uid {
+                return Some(n);
+            }
+            if let Some(hit) = find_render_node(children, uid) {
+                return Some(hit);
+            }
+        }
+    }
+    None
+}
+
+/// Every editable path #index under a tree node — the node itself if it's a shape, or all the
+/// shapes inside it if it's a `<g>`. This is what makes a *group* addressable: "rotate the crab"
+/// rather than thirteen calls naming each leg.
+fn node_path_indices(doc: &SvgDocument, uid: &str) -> Vec<usize> {
+    let mut uids = vec![uid.to_string()];
+    if let Some(tree) = doc.tree.as_ref()
+        && let Some(node) = find_render_node(&tree.render_children(), uid)
+    {
+        collect_part_uids(node, &mut uids);
+    }
+    let mut out: Vec<usize> = uids
+        .iter()
+        .filter_map(|u| {
+            doc.paths
+                .iter()
+                .position(|p| !p.deleted && !p.uid.is_empty() && &p.uid == u)
+        })
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Which paths a tool acts on: one `index`, several `indices`, or everything under a `name`.
+///
+/// `name` is the interesting one — it resolves a shape OR a `<g>` group, and a group expands to
+/// every editable path inside it. Transforms used to be strictly one-#index-per-call, so tilting a
+/// nineteen-shape scene was nineteen identical calls; naming the group makes it one.
+fn resolve_targets(
+    doc: &SvgDocument,
+    index: Option<usize>,
+    indices: Option<&[usize]>,
+    name: Option<&str>,
+) -> Result<Vec<usize>, ErrorData> {
+    if let Some(n) = name.map(str::trim).filter(|n| !n.is_empty()) {
+        let mut out: Vec<usize> = Vec::new();
+        // A shape's name lives on the PATH. Only an imported or explicitly renamed node carries an
+        // `id` attribute in the tree, so a freshly drawn "wave" is invisible to a tree-attr lookup
+        // — matching `find`'s behaviour here is what makes naming reliable for things you drew.
+        for (i, p) in doc.paths.iter().enumerate() {
+            if !p.deleted && p.id.eq_ignore_ascii_case(n) {
+                out.push(i);
+            }
+        }
+        // ...and a tree node: a `<g>` expands to every shape inside it.
+        for uid in uids_by_id(doc, n) {
+            out.extend(node_path_indices(doc, &uid));
+        }
+        out.sort_unstable();
+        out.dedup();
+        if out.is_empty() {
+            return Err(bad(format!(
+                "no shape or group named \"{n}\" — call find or get_document"
+            )));
+        }
+        return Ok(out);
+    }
+    let listed: Vec<usize> = match (indices, index) {
+        (Some(v), _) if !v.is_empty() => v.to_vec(),
+        (_, Some(i)) => vec![i],
+        _ => return Err(bad("pass one of: index, indices, or name")),
+    };
+    for i in &listed {
+        match doc.paths.get(*i) {
+            None => return Err(bad(format!("no path at #{i}"))),
+            Some(p) if p.deleted => return Err(bad(format!("#{i} is deleted"))),
+            _ => {}
+        }
+    }
+    Ok(listed)
+}
+
+/// "#3" / "#3, #7 and 2 more" — an ack that names what was touched without echoing the document.
+fn listed(indices: &[usize]) -> String {
+    match indices.len() {
+        1 => format!("#{}", indices[0]),
+        2 => format!("#{} and #{}", indices[0], indices[1]),
+        n => format!("#{} … #{} ({n} shapes)", indices[0], indices[n - 1]),
+    }
 }
 
 /// Resolve a human name to the paths that match it — exact name first, then partial (contains),
@@ -465,16 +606,26 @@ fn shape_spec(
 /// and composited on white (a preview surface — nib's canvas backdrop is orthogonal). Pure-Rust,
 /// in-process. Labels render with the host's system fonts; on a `scratch` image there are none, so
 /// `<text>` silently doesn't draw — one more reason to outline text before it leaves nib.
-fn render_png(svg: &str, target: f32) -> Result<Vec<u8>, String> {
+/// As `render_png`, but optionally cropped to `region` — `(x, y, w, h)` in the **rendered tree's**
+/// coordinates (viewBox units, already offset by the viewBox origin).
+///
+/// The crop is done by rendering into a region-sized pixmap through a translate, not by rendering
+/// the whole document and cutting it up: a tight crop of a large drawing would otherwise allocate
+/// a pixmap scaled for the whole document — hundreds of megapixels for a close look at one corner.
+fn render_png_region(
+    svg: &str,
+    target: f32,
+    region: Option<(f32, f32, f32, f32)>,
+) -> Result<Vec<u8>, String> {
     let opt = usvg::Options {
         fontdb: crate::fonts::database(),
         ..usvg::Options::default()
     };
     let tree = usvg::Tree::from_str(svg, &opt).map_err(|e| e.to_string())?;
     let size = tree.size();
-    let (w, h) = (size.width(), size.height());
+    let (ox, oy, w, h) = region.unwrap_or((0.0, 0.0, size.width(), size.height()));
     if w <= 0.0 || h <= 0.0 {
-        return Err("document has no drawable area".into());
+        return Err("nothing to render there (zero-sized area)".into());
     }
     let scale = target / w.max(h);
     let pw = (w * scale).round().max(1.0) as u32;
@@ -483,7 +634,7 @@ fn render_png(svg: &str, target: f32) -> Result<Vec<u8>, String> {
     pixmap.fill(tiny_skia::Color::WHITE);
     resvg::render(
         &tree,
-        tiny_skia::Transform::from_scale(scale, scale),
+        tiny_skia::Transform::from_scale(scale, scale).pre_translate(-ox, -oy),
         &mut pixmap.as_mut(),
     );
     pixmap.encode_png().map_err(|e| e.to_string())
@@ -546,12 +697,26 @@ pub struct AddShapeParams {
     /// Corner radius (viewBox units) for a `rect` — rounds its corners. Ignored by other shapes.
     #[serde(default)]
     pub radius: Option<f64>,
+    /// For a `line` only: the far endpoint, so the line runs (x,y) → (x2,y2). Without it a line is
+    /// the bounding box's ↘ diagonal, which can't express a ↗ one at all. Prefer these.
+    #[serde(default)]
+    pub x2: Option<f64>,
+    #[serde(default)]
+    pub y2: Option<f64>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct SetStyleParams {
-    /// The path's integer index (from get_document).
-    pub index: usize,
+    /// The path's #index (from get_document). One of index / indices / name is required.
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// Several #indices, acted on in one call.
+    #[serde(default)]
+    pub indices: Option<Vec<usize>>,
+    /// A shape's or GROUP's name — a group expands to every shape inside it, so one call moves
+    /// the whole thing. Prefer this: it's what your co-author says out loud.
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(default)]
     pub fill: Option<String>,
     #[serde(default)]
@@ -615,12 +780,20 @@ pub struct StampParams {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct RotateParams {
-    /// The path's #index (from get_document).
-    pub index: usize,
+    /// The path's #index (from get_document). One of index / indices / name is required.
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// Several #indices, acted on in one call.
+    #[serde(default)]
+    pub indices: Option<Vec<usize>>,
+    /// A shape's or GROUP's name — a group expands to every shape inside it, so one call moves
+    /// the whole thing. Prefer this: it's what your co-author says out loud.
+    #[serde(default)]
+    pub name: Option<String>,
     /// Rotation in degrees, clockwise (like SVG `rotate()`).
     pub degrees: f64,
-    /// Optional pivot (viewBox units). Defaults to the shape's own bounding-box centre; pass a
-    /// shared pivot to rotate several shapes as one rigid group.
+    /// Optional pivot (viewBox units). Defaults to each shape's own bounding-box centre; pass a
+    /// shared pivot (or target a group by `name`) to turn several shapes as one rigid body.
     #[serde(default)]
     pub cx: Option<f64>,
     #[serde(default)]
@@ -698,16 +871,40 @@ pub struct AddTextParams {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct FlipParams {
-    /// The path's #index (from get_document).
-    pub index: usize,
+    /// The path's #index (from get_document). One of index / indices / name is required.
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// Several #indices, acted on in one call.
+    #[serde(default)]
+    pub indices: Option<Vec<usize>>,
+    /// A shape's or GROUP's name — a group expands to every shape inside it, so one call moves
+    /// the whole thing. Prefer this: it's what your co-author says out loud.
+    #[serde(default)]
+    pub name: Option<String>,
     /// "horizontal" (left↔right) or "vertical" (top↕bottom).
     pub axis: String,
+    /// Optional mirror line (viewBox units): `cx` is the vertical line x=cx for a horizontal flip,
+    /// `cy` the horizontal line y=cy for a vertical one. Defaults to the shape's own centre — pass
+    /// an explicit axis to mirror a copy ACROSS the drawing, which is how you build a symmetric
+    /// pair (duplicate, then flip about the centreline).
+    #[serde(default)]
+    pub cx: Option<f64>,
+    #[serde(default)]
+    pub cy: Option<f64>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct ReorderParams {
-    /// The path's #index (from get_document).
-    pub index: usize,
+    /// The path's #index (from get_document). One of index / indices / name is required.
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// Several #indices, acted on in one call.
+    #[serde(default)]
+    pub indices: Option<Vec<usize>>,
+    /// A shape's or GROUP's name — a group expands to every shape inside it, so one call moves
+    /// the whole thing. Prefer this: it's what your co-author says out loud.
+    #[serde(default)]
+    pub name: Option<String>,
     /// front | back | forward | backward.
     pub r#where: String,
 }
@@ -736,6 +933,88 @@ pub struct RenderParams {
     /// Target longest-side in px (default 512, clamped 128–1024). Smaller = cheaper (fewer tokens).
     #[serde(default)]
     pub width: Option<f64>,
+    /// Crop to one shape or group by name, padded a little — far cheaper than re-rendering the
+    /// whole document to check one corner of it.
+    #[serde(default)]
+    pub around: Option<String>,
+    /// Crop to an explicit region in viewBox units (all four required; overrides `around`).
+    #[serde(default)]
+    pub x: Option<f64>,
+    #[serde(default)]
+    pub y: Option<f64>,
+    #[serde(default)]
+    pub w: Option<f64>,
+    #[serde(default)]
+    pub h: Option<f64>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct DrawPathParams {
+    /// SVG path data — the `d` attribute. Absolute or relative, any of M/L/H/V/C/S/Q/T/A/Z; it is
+    /// normalised to cubic anchors on the way in, exactly like an imported file.
+    pub d: String,
+    /// A descriptive id/name (do this — see the workflow).
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub fill: Option<String>,
+    #[serde(default)]
+    pub stroke: Option<String>,
+    #[serde(default, rename = "strokeWidth")]
+    pub stroke_width: Option<f64>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct DuplicateParams {
+    /// The path's #index (from get_document). One of index / indices / name is required.
+    #[serde(default)]
+    pub index: Option<usize>,
+    #[serde(default)]
+    pub indices: Option<Vec<usize>>,
+    /// A shape's or GROUP's name — a group copies every shape inside it.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Offset for the copy (viewBox units). Default 0,0 — an exact overlay, which is what you want
+    /// before mirroring it into place.
+    #[serde(default)]
+    pub dx: Option<f64>,
+    #[serde(default)]
+    pub dy: Option<f64>,
+    /// Name for the copy. A single copy takes it verbatim; several get "-2", "-3", … appended.
+    /// Defaults to the original's name with "-copy".
+    #[serde(rename = "newName", default)]
+    pub new_name: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct SetGradientParams {
+    /// The path's #index (from get_document). One of index / indices / name is required.
+    #[serde(default)]
+    pub index: Option<usize>,
+    #[serde(default)]
+    pub indices: Option<Vec<usize>>,
+    /// A shape's or GROUP's name — every shape inside it takes the same gradient.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// "linear" (default) or "radial".
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Two or more colour stops, in order. Each is `{"offset":0..1,"color":"#rrggbb","opacity":0..1}`
+    /// — `opacity` optional. Two stops is the common case: a sky, a sea, a sheen.
+    pub stops: Vec<serde_json::Value>,
+    /// LINEAR: direction in degrees clockwise, 0 = left→right, 90 = top→bottom. Default 90.
+    #[serde(default)]
+    pub angle: Option<f64>,
+    /// RADIAL: centre + radius as fractions of the shape's own box (0..1). Default 0.5/0.5/0.5.
+    #[serde(default)]
+    pub cx: Option<f64>,
+    #[serde(default)]
+    pub cy: Option<f64>,
+    #[serde(default)]
+    pub r: Option<f64>,
+    /// Paint the stroke instead of the fill.
+    #[serde(default)]
+    pub stroke: Option<bool>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -883,7 +1162,7 @@ impl NibMcp {
     }
 
     #[tool(
-        description = "Render the active project to a PNG and return it as an image, so you can SEE the drawing and verify it reads correctly (get_document gives structure; this gives pixels). Image-heavy — render at checkpoints, not after every edit; pass a smaller `width` for a cheap glance. Composited on white; labels render with the server's fonts, which may substitute a different face than the author saw."
+        description = "Render the active project to a PNG and return it as an image, so you can SEE the drawing and verify it reads correctly (get_document gives structure; this gives pixels). Image-heavy — render at checkpoints, not after every edit; pass a smaller `width` for a cheap glance, or `around` a shape/group name (or an explicit x/y/w/h) to crop in on just that part instead of re-rendering everything. Composited on white; labels render with the server's fonts, which may substitute a different face than the author saw."
     )]
     async fn render_document(
         &self,
@@ -892,9 +1171,50 @@ impl NibMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
-        let svg = sess.lock().unwrap().editor.to_svg();
+        let (svg, region) = {
+            let s = sess.lock().unwrap();
+            let svg = s.editor.to_svg();
+            let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+            // The rendered tree's origin is the viewBox origin, so a caller's viewBox coordinates
+            // shift by it before they mean pixels.
+            let (ox, oy) = (doc.view_box.min_x, doc.view_box.min_y);
+            let region = match (p.x, p.y, p.w, p.h) {
+                (Some(x), Some(y), Some(w), Some(h)) => Some((x - ox, y - oy, w, h)),
+                _ => match p.around.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                    Some(n) => {
+                        let targets = resolve_targets(doc, None, None, Some(n))?;
+                        let (mut minx, mut miny, mut maxx, mut maxy) =
+                            (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+                        for i in &targets {
+                            if let Some((x, y, w, h)) = path_bounds(&doc.paths[*i].subpaths, 0.0) {
+                                minx = minx.min(x);
+                                miny = miny.min(y);
+                                maxx = maxx.max(x + w);
+                                maxy = maxy.max(y + h);
+                            }
+                        }
+                        if minx > maxx {
+                            return Err(bad(format!("\"{n}\" has no geometry to frame")));
+                        }
+                        // A crop flush to the ink reads as clipped; a tenth of a margin (and a
+                        // floor, for a shape that is a single point) shows it in its setting.
+                        let pad = ((maxx - minx).max(maxy - miny) * 0.1).max(1.0);
+                        Some((
+                            minx - ox - pad,
+                            miny - oy - pad,
+                            (maxx - minx) + pad * 2.0,
+                            (maxy - miny) + pad * 2.0,
+                        ))
+                    }
+                    None => None,
+                },
+            };
+            (svg, region)
+        };
         let target = p.width.unwrap_or(512.0).clamp(128.0, 1024.0) as f32;
-        let png = render_png(&svg, target).map_err(|e| bad(format!("render failed: {e}")))?;
+        let region = region.map(|(x, y, w, h)| (x as f32, y as f32, w as f32, h as f32));
+        let png = render_png_region(&svg, target, region)
+            .map_err(|e| bad(format!("render failed: {e}")))?;
         let b64 = BASE64_STANDARD.encode(&png);
         Ok(CallToolResult::success(vec![Content::image(
             b64,
@@ -933,7 +1253,7 @@ impl NibMcp {
     }
 
     #[tool(
-        description = "Add a shape by bounding box. shape ∈ {ellipse, rect, line, polygon, star}; x/y/w/h in viewBox units; optional fill/stroke colours. Pass `name` to give it a descriptive id (do this — see the workflow). Returns the new path's #index."
+        description = "Add a shape by bounding box. shape ∈ {ellipse, rect, line, polygon, star}; x/y/w/h in viewBox units; optional fill/stroke colours. For a `line`, pass x2/y2 for the far endpoint — by bounding box alone a line can only be the ↘ diagonal. Pass `name` to give it a descriptive id (do this — see the workflow). For anything curved or irregular, use draw_path instead. Returns the new path's #index."
     )]
     async fn add_shape(
         &self,
@@ -942,8 +1262,16 @@ impl NibMcp {
     ) -> Result<String, ErrorData> {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
-        let spec = shape_spec(&p.shape, p.x, p.y, p.w, p.h, p.radius.unwrap_or(0.0))
+        let mut spec = shape_spec(&p.shape, p.x, p.y, p.w, p.h, p.radius.unwrap_or(0.0))
             .ok_or_else(|| bad(format!("unknown shape: {}", p.shape)))?;
+        // A line given real endpoints runs (x,y) → (x2,y2); the bounding box can only ever draw
+        // its ↘ diagonal, so "/" was unreachable without adding-then-flipping.
+        if spec["shape"] == "line"
+            && let (Some(x2), Some(y2)) = (p.x2, p.y2)
+        {
+            spec["x1"] = json!(x2);
+            spec["y1"] = json!(y2);
+        }
         let mut attrs = serde_json::Map::new();
         if let Some(f) = &p.fill {
             attrs.insert("fill".into(), json!(f));
@@ -965,6 +1293,198 @@ impl NibMcp {
         Ok(format!(
             "added #{idx} \"{rid}\" · {} paths",
             count_paths(&s)
+        ))
+    }
+
+    #[tool(
+        description = "Draw a path from SVG path data — the `d` attribute. THE tool for anything curved or irregular: a shell, a wave, a leaf, a silhouette. Absolute or relative, any of M/L/H/V/C/S/Q/T/A/Z, multiple subpaths fine; it normalises to cubic anchors exactly like an imported file, so the human can then drag its points. Prefer add_shape only for true rectangles/ellipses/stars. Returns the new path's #index."
+    )]
+    async fn draw_path(
+        &self,
+        Parameters(p): Parameters<DrawPathParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let subpaths = parse_path_d(&p.d);
+        if subpaths.is_empty() {
+            return Err(bad(
+                "could not parse `d` as SVG path data (it must start with a moveto — e.g. \"M 10 10 C …\")",
+            ));
+        }
+        let mut attrs = serde_json::Map::new();
+        // A path with neither fill nor stroke renders nothing at all, which reads as the tool
+        // having failed. Default to a visible fill, as `<path>` itself does.
+        attrs.insert(
+            "fill".into(),
+            json!(p.fill.clone().unwrap_or_else(|| "#000000".into())),
+        );
+        if let Some(st) = &p.stroke {
+            attrs.insert("stroke".into(), json!(st));
+        }
+        if let Some(w) = p.stroke_width {
+            attrs.insert("stroke-width".into(), json!(w.to_string()));
+        }
+        let id = p
+            .name
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| self.gen_id("path"));
+        let op = json!({ "type": "addPath", "id": id, "subpaths": subpaths, "attributes": attrs });
+        session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
+        let s = sess.lock().unwrap();
+        let (idx, rid) = tail(&s);
+        let nodes: usize = subpaths.iter().map(|sp| sp.nodes.len()).sum();
+        Ok(format!(
+            "drew #{idx} \"{rid}\" · {nodes} nodes · {} paths",
+            count_paths(&s)
+        ))
+    }
+
+    #[tool(
+        description = "Copy one shape (`index`), several (`indices`), or a whole group (`name`), optionally offset by dx/dy. The copies land on top, in order. Pair it with flip's cx/cy to build a symmetric half: duplicate, then mirror the copy about the centreline — fewer calls than authoring mirrored coordinates, and exactly symmetric. Renumbers nothing (copies append), but call get_document for the new #indices."
+    )]
+    async fn duplicate(
+        &self,
+        Parameters(p): Parameters<DuplicateParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let (dx, dy) = (p.dx.unwrap_or(0.0), p.dy.unwrap_or(0.0));
+        if !dx.is_finite() || !dy.is_finite() {
+            return Err(bad("dx/dy must be finite"));
+        }
+        let ops = {
+            let s = sess.lock().unwrap();
+            let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+            let targets = resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?;
+            let many = targets.len() > 1;
+            let mut ops = Vec::new();
+            for (n, i) in targets.iter().enumerate() {
+                let src = &doc.paths[*i];
+                let mut subpaths = src.subpaths.clone();
+                for sp in &mut subpaths {
+                    for node in &mut sp.nodes {
+                        node.point.x += dx;
+                        node.point.y += dy;
+                        for hv in [node.handle_in.as_mut(), node.handle_out.as_mut()]
+                            .into_iter()
+                            .flatten()
+                        {
+                            hv.x += dx;
+                            hv.y += dy;
+                        }
+                    }
+                }
+                // The copy carries the style it looked like, not the source's raw attrs: an
+                // imported shape keeps its edits in `style_override`, and a copy that dropped
+                // them would come out a different colour from the thing it copied.
+                let mut attrs = src.attributes.clone().unwrap_or_default();
+                if let Some(over) = &src.style_override {
+                    for (k, v) in over {
+                        attrs.insert(k.clone(), v.clone());
+                    }
+                }
+                let base = p
+                    .new_name
+                    .clone()
+                    .unwrap_or_else(|| format!("{}-copy", src.id));
+                let id = if many {
+                    format!("{base}-{}", n + 1)
+                } else {
+                    base
+                };
+                ops.push(
+                    json!({ "type": "addPath", "id": id, "subpaths": subpaths, "attributes": attrs }),
+                );
+            }
+            ops
+        };
+        let made = ops.len();
+        let n = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
+        if n == 0 {
+            return Err(bad("nothing was copied"));
+        }
+        let s = sess.lock().unwrap();
+        let (idx, _) = tail(&s);
+        Ok(format!(
+            "copied {made} shape(s) → #{}…#{idx} · {} paths · call get_document",
+            idx + 1 - made,
+            count_paths(&s)
+        ))
+    }
+
+    #[tool(
+        description = "Fill one shape (`index`), several (`indices`), or a group (`name`) with a LINEAR or RADIAL gradient — a sky, a sea, a metal sheen. `stops` is 2+ {offset,color,opacity?} in order; `angle` aims a linear one (0 = left→right, 90 = top→bottom), cx/cy/r place a radial one within each shape's own box. The gradient becomes a real `<defs>` entry the human can then drag stops on."
+    )]
+    async fn set_gradient(
+        &self,
+        Parameters(p): Parameters<SetGradientParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        if p.stops.len() < 2 {
+            return Err(bad("a gradient needs at least 2 stops"));
+        }
+        let mut stops = Vec::with_capacity(p.stops.len());
+        for (i, st) in p.stops.iter().enumerate() {
+            let offset = st
+                .get("offset")
+                .and_then(|v| v.as_f64())
+                .ok_or_else(|| bad(format!("stop {i} has no numeric `offset` (0..1)")))?;
+            let color = st
+                .get("color")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| bad(format!("stop {i} has no `color`")))?;
+            let mut o = json!({ "offset": offset.clamp(0.0, 1.0), "color": color });
+            if let Some(a) = st.get("opacity").and_then(|v| v.as_f64()) {
+                o["opacity"] = json!(a.clamp(0.0, 1.0));
+            }
+            stops.push(o);
+        }
+        let kind = p.kind.as_deref().unwrap_or("linear").to_lowercase();
+        if kind != "linear" && kind != "radial" {
+            return Err(bad("kind must be \"linear\" or \"radial\""));
+        }
+        // Direction as a vector across the shape's own box, centred — the same parameterisation
+        // the browser's angle slider writes, so the human can pick it up and turn it.
+        let t = p.angle.unwrap_or(90.0).to_radians();
+        let (hx, hy) = (t.cos() / 2.0, t.sin() / 2.0);
+        // cos(90°) is 6e-17, not 0 — rounded, or the exported def reads "0.49999999999999994".
+        let q = |v: f64| (v * 10_000.0).round() / 10_000.0;
+        let id = self.gen_id("grad");
+        let gradient = json!({
+            "id": id, "kind": kind, "stops": stops,
+            "x1": q(0.5 - hx), "y1": q(0.5 - hy), "x2": q(0.5 + hx), "y2": q(0.5 + hy),
+            "cx": p.cx.unwrap_or(0.5), "cy": p.cy.unwrap_or(0.5), "r": p.r.unwrap_or(0.5),
+        });
+        let targets = {
+            let s = sess.lock().unwrap();
+            let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+            resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?
+        };
+        let key = if p.stroke.unwrap_or(false) {
+            "stroke"
+        } else {
+            "fill"
+        };
+        let mut ops = vec![json!({ "type": "setGradient", "gradient": gradient })];
+        for i in &targets {
+            ops.push(
+                json!({ "type": "setStyle", "path": i, "key": key, "value": format!("url(#{id})") }),
+            );
+        }
+        let n = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
+        if n == 0 {
+            return Err(bad("the gradient did not apply"));
+        }
+        Ok(format!(
+            "{kind} gradient \"{id}\" → {key} of {}",
+            listed(&targets)
         ))
     }
 
@@ -1068,7 +1588,7 @@ impl NibMcp {
     }
 
     #[tool(
-        description = "Set paint/stroke on a path (by #index): any of fill, stroke, strokeWidth, opacity."
+        description = "Set paint/stroke on one shape (`index`), several (`indices`), or every shape in a group (`name`): any of fill, stroke, strokeWidth, opacity."
     )]
     async fn set_style(
         &self,
@@ -1077,32 +1597,42 @@ impl NibMcp {
     ) -> Result<String, ErrorData> {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
-        let mut ops = Vec::new();
-        let mut push = |key: &str, val: String| {
-            ops.push(json!({ "type": "setStyle", "path": p.index, "key": key, "value": val }));
+        let targets = {
+            let s = sess.lock().unwrap();
+            let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+            resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?
         };
+        let mut pairs: Vec<(&str, String)> = Vec::new();
         if let Some(f) = &p.fill {
-            push("fill", f.clone());
+            pairs.push(("fill", f.clone()));
         }
-        if let Some(s) = &p.stroke {
-            push("stroke", s.clone());
+        if let Some(st) = &p.stroke {
+            pairs.push(("stroke", st.clone()));
         }
         if let Some(w) = p.stroke_width {
-            push("stroke-width", w.to_string());
+            pairs.push(("stroke-width", w.to_string()));
         }
         if let Some(o) = p.opacity {
-            push("opacity", o.to_string());
+            pairs.push(("opacity", o.to_string()));
         }
-        if ops.is_empty() {
+        if pairs.is_empty() {
             return Err(bad(
                 "nothing to set — pass at least one of fill/stroke/strokeWidth/opacity",
             ));
         }
+        let ops: Vec<_> = targets
+            .iter()
+            .flat_map(|i| {
+                pairs.iter().map(
+                    move |(k, v)| json!({ "type": "setStyle", "path": i, "key": k, "value": v }),
+                )
+            })
+            .collect();
         let n = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
         if n == 0 {
             return Err(bad("no style applied (bad #index?)"));
         }
-        Ok(format!("styled #{}", p.index))
+        Ok(format!("styled {}", listed(&targets)))
     }
 
     #[tool(
@@ -1330,7 +1860,7 @@ impl NibMcp {
     }
 
     #[tool(
-        description = "Rotate a shape (by #index) `degrees` clockwise about its own centre — or an explicit cx/cy pivot (pass the same pivot to several shapes to rotate them as one). Use it to tilt, tumble, or orient a shape."
+        description = "Rotate `degrees` clockwise: one shape (`index`), several (`indices`), or a whole group (`name`). Turns about each shape's own centre unless you pass a cx/cy pivot — a group with a shared pivot turns as one rigid body, which is how you tilt a whole scene in one call."
     )]
     async fn rotate(
         &self,
@@ -1339,18 +1869,53 @@ impl NibMcp {
     ) -> Result<String, ErrorData> {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
-        let op = json!({ "type": "rotatePath", "path": p.index, "degrees": p.degrees, "cx": p.cx, "cy": p.cy });
-        let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
+        let targets = {
+            let s = sess.lock().unwrap();
+            let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+            resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?
+        };
+        // Several shapes with no explicit pivot would each spin in place, which is never what
+        // "rotate the crab" means — default a multi-target turn to the selection's shared centre.
+        let (cx, cy) = match (p.cx, p.cy) {
+            (Some(x), Some(y)) => (Some(x), Some(y)),
+            _ if targets.len() > 1 => {
+                let s = sess.lock().unwrap();
+                let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+                let (mut minx, mut miny, mut maxx, mut maxy) =
+                    (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+                for i in &targets {
+                    if let Some((x, y, w, h)) = path_bounds(&doc.paths[*i].subpaths, 0.0) {
+                        minx = minx.min(x);
+                        miny = miny.min(y);
+                        maxx = maxx.max(x + w);
+                        maxy = maxy.max(y + h);
+                    }
+                }
+                if minx <= maxx {
+                    (Some((minx + maxx) / 2.0), Some((miny + maxy) / 2.0))
+                } else {
+                    (None, None)
+                }
+            }
+            _ => (p.cx, p.cy),
+        };
+        let ops: Vec<_> = targets
+            .iter()
+            .map(|i| {
+                json!({ "type": "rotatePath", "path": i, "degrees": p.degrees, "cx": cx, "cy": cy })
+            })
+            .collect();
+        let n = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
         if n == 0 {
             return Err(bad(
-                "rotate did not apply (bad #index, deleted path, or non-finite degrees)",
+                "rotate did not apply (deleted path, or non-finite degrees)",
             ));
         }
-        Ok(format!("rotated #{} by {}°", p.index, p.degrees))
+        Ok(format!("rotated {} by {}°", listed(&targets), p.degrees))
     }
 
     #[tool(
-        description = "Flip a shape (by #index) — axis \"horizontal\" (left↔right) or \"vertical\" (top↕bottom) — mirroring it about its own centre."
+        description = "Mirror one shape (`index`), several (`indices`), or a group (`name`) — axis \"horizontal\" (left↔right) or \"vertical\" (top↕bottom). About each shape's own centre by default; pass cx/cy to mirror about a line instead, which is how you make a symmetric pair: duplicate, then flip the copy about the drawing's centreline."
     )]
     async fn flip(
         &self,
@@ -1359,16 +1924,44 @@ impl NibMcp {
     ) -> Result<String, ErrorData> {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
+        let targets = {
+            let s = sess.lock().unwrap();
+            let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+            resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?
+        };
         let a = p.axis.to_lowercase();
         let horizontal = a.starts_with('h') || a == "x";
-        let op = json!({ "type": "flipPath", "path": p.index, "horizontal": horizontal });
-        let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
+        // A horizontal flip only needs `cx` and a vertical one only `cy`, but the op takes the
+        // pivot as a pair and falls back to the shape's own centre unless BOTH are given — so a
+        // caller passing just `cx` would get a silent mirror-in-place instead of the mirror they
+        // asked for. Fill the axis they left out from each shape's own centre.
+        let ops: Vec<_> = {
+            let s = sess.lock().unwrap();
+            let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+            targets
+                .iter()
+                .map(|i| {
+                    let own = path_bounds(&doc.paths[*i].subpaths, 0.0);
+                    let (cx, cy) = match (p.cx, p.cy) {
+                        (None, None) => (None, None),
+                        (cx, cy) => own.map_or((None, None), |(x, y, w, h)| {
+                            (
+                                Some(cx.unwrap_or(x + w / 2.0)),
+                                Some(cy.unwrap_or(y + h / 2.0)),
+                            )
+                        }),
+                    };
+                    json!({ "type": "flipPath", "path": i, "horizontal": horizontal, "cx": cx, "cy": cy })
+                })
+                .collect()
+        };
+        let n = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
         if n == 0 {
-            return Err(bad("flip did not apply (bad #index or deleted path)"));
+            return Err(bad("flip did not apply (deleted path?)"));
         }
         Ok(format!(
-            "flipped #{} {}",
-            p.index,
+            "flipped {} {}",
+            listed(&targets),
             if horizontal { "horizontal" } else { "vertical" }
         ))
     }
@@ -1383,33 +1976,68 @@ impl NibMcp {
     ) -> Result<String, ErrorData> {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
-        let uid = {
+        // A group is reordered as the group NODE, not its members — moving thirteen crab parts to
+        // the front one by one would interleave them with whatever they passed.
+        let (uids, label) = {
             let s = sess.lock().unwrap();
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
-            let pe = doc
-                .paths
-                .get(p.index)
-                .ok_or_else(|| bad(format!("no path at #{}", p.index)))?;
-            if pe.uid.is_empty() {
-                return Err(bad("that shape has no tree uid (can't reorder)"));
+            match p.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                Some(n) => {
+                    // A group moves as its own node (its children keep their order); a plain
+                    // shape has no such node, so fall back to the paths the name resolves to.
+                    let mut uids = uids_by_id(doc, n);
+                    if uids.is_empty() {
+                        uids = resolve_targets(doc, None, None, Some(n))?
+                            .iter()
+                            .map(|i| doc.paths[*i].uid.clone())
+                            .filter(|u| !u.is_empty())
+                            .collect();
+                    }
+                    if uids.is_empty() {
+                        return Err(bad(format!("no shape or group named \"{n}\"")));
+                    }
+                    (uids, format!("\"{n}\""))
+                }
+                None => {
+                    let targets = resolve_targets(doc, p.index, p.indices.as_deref(), None)?;
+                    let mut uids = Vec::new();
+                    for i in &targets {
+                        let pe = &doc.paths[*i];
+                        if pe.uid.is_empty() {
+                            return Err(bad(format!("#{i} has no tree uid (can't reorder)")));
+                        }
+                        uids.push(pe.uid.clone());
+                    }
+                    (uids, listed(&targets))
+                }
             }
-            pe.uid.clone()
         };
         let w = p.r#where.to_lowercase();
-        let op = match w.as_str() {
-            "front" => json!({ "type": "reorderNodeExtreme", "uid": uid, "front": true }),
-            "back" => json!({ "type": "reorderNodeExtreme", "uid": uid, "front": false }),
-            "forward" | "up" => json!({ "type": "reorderNode", "uid": uid, "forward": true }),
-            "backward" | "down" => json!({ "type": "reorderNode", "uid": uid, "forward": false }),
-            _ => return Err(bad("where must be front | back | forward | backward")),
+        // Send-to-back reverses: the last one moved ends up outermost, so walk the list backwards
+        // to preserve the group's internal order at the destination.
+        let ordered: Vec<&String> = if w == "back" || w == "backward" || w == "down" {
+            uids.iter().rev().collect()
+        } else {
+            uids.iter().collect()
         };
-        let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
+        let mut ops = Vec::new();
+        for uid in ordered {
+            ops.push(match w.as_str() {
+                "front" => json!({ "type": "reorderNodeExtreme", "uid": uid, "front": true }),
+                "back" => json!({ "type": "reorderNodeExtreme", "uid": uid, "front": false }),
+                "forward" | "up" => json!({ "type": "reorderNode", "uid": uid, "forward": true }),
+                "backward" | "down" => {
+                    json!({ "type": "reorderNode", "uid": uid, "forward": false })
+                }
+                _ => return Err(bad("where must be front | back | forward | backward")),
+            });
+        }
+        let n = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
         if n == 0 {
             return Err(bad("reorder was a no-op (already at that edge?)"));
         }
         Ok(format!(
-            "moved #{} {w} → #indices renumbered, call get_document",
-            p.index
+            "moved {label} {w} → #indices renumbered, call get_document"
         ))
     }
 
@@ -1456,7 +2084,10 @@ impl ServerHandler for NibMcp {
 
 #[cfg(test)]
 mod tests {
-    use super::{component_info, find_by_name, pick_label, render_png};
+    use super::{
+        component_info, find_by_name, node_path_indices, path_bounds, pick_label,
+        render_png_region, resolve_targets, uids_by_id,
+    };
 
     #[test]
     fn component_info_lists_components_and_labels_parts() {
@@ -1504,10 +2135,230 @@ mod tests {
         assert_eq!(find_by_name(doc, "LEFT-HAND").len(), 1);
     }
 
+    /// A scene with a `<g>` in it — the shape of document these tools are for.
+    const SCENE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect id="frame" x="5" y="5" width="90" height="90" fill="none" stroke="#000"/>
+  <g id="crab">
+    <ellipse id="crab-body" cx="50" cy="60" rx="10" ry="6" fill="#d63a2c"/>
+    <ellipse id="crab-claw" cx="32" cy="55" rx="4" ry="3" fill="#d63a2c"/>
+  </g>
+</svg>"##;
+
+    fn scene() -> nib_core::Editor {
+        let mut ed = nib_core::Editor::new();
+        ed.load_source(SCENE).unwrap();
+        ed
+    }
+
+    #[test]
+    fn a_group_name_resolves_to_every_shape_inside_it() {
+        let ed = scene();
+        let doc = ed.doc().unwrap();
+
+        // The whole point: "crab" is a <g>, and naming it reaches both its shapes — one call
+        // instead of one per limb.
+        let crab = resolve_targets(doc, None, None, Some("crab")).unwrap();
+        assert_eq!(crab.len(), 2, "both crab parts: {crab:?}");
+
+        // A leaf shape's name resolves to just itself.
+        let body = resolve_targets(doc, None, None, Some("crab-body")).unwrap();
+        assert_eq!(body.len(), 1);
+        assert!(crab.contains(&body[0]));
+
+        // Explicit indices and a single index still work, and are validated.
+        assert_eq!(
+            resolve_targets(doc, None, Some(&[0, 1]), None).unwrap(),
+            vec![0, 1]
+        );
+        assert_eq!(resolve_targets(doc, Some(1), None, None).unwrap(), vec![1]);
+        assert!(resolve_targets(doc, Some(99), None, None).is_err());
+        assert!(resolve_targets(doc, None, None, Some("seahorse")).is_err());
+        // No target at all is a clear error, not a silent no-op over everything.
+        assert!(resolve_targets(doc, None, None, None).is_err());
+    }
+
+    #[test]
+    fn a_group_uid_expands_to_its_shapes_but_a_shape_uid_is_itself() {
+        let ed = scene();
+        let doc = ed.doc().unwrap();
+        let group = uids_by_id(doc, "crab");
+        assert_eq!(group.len(), 1, "one <g> named crab");
+        assert_eq!(node_path_indices(doc, &group[0]).len(), 2);
+
+        let leaf = uids_by_id(doc, "crab-claw");
+        assert_eq!(node_path_indices(doc, &leaf[0]).len(), 1);
+
+        // An unknown uid reaches nothing rather than panicking or matching everything.
+        assert!(node_path_indices(doc, "no-such-uid").is_empty());
+    }
+
+    #[test]
+    fn a_drawn_shapes_name_resolves_even_though_it_has_no_tree_id() {
+        // Regression: a shape you just drew keeps its name on the PathElement, and only an
+        // imported or renamed node carries an `id` attribute in the tree. Resolving names through
+        // tree attributes alone made every freshly drawn shape unaddressable by the name the tool
+        // had just acknowledged — "drew #0 \"wave\"" followed by "no shape named wave".
+        let mut ed = nib_core::Editor::new();
+        ed.load_source(r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"></svg>"##)
+            .unwrap();
+        assert!(ed.apply(&nib_core::ops::Op::AddPath {
+            id: "wave".into(),
+            subpaths: super::parse_path_d("M 10 80 C 20 10, 60 10, 70 80"),
+            attributes: Default::default(),
+            uid: Some("u-wave".into()),
+        }));
+        let doc = ed.doc().unwrap();
+        assert!(
+            uids_by_id(doc, "wave").is_empty(),
+            "it genuinely has no tree id — that's the trap"
+        );
+        assert_eq!(
+            resolve_targets(doc, None, None, Some("wave")).unwrap(),
+            vec![0],
+            "...and the name still resolves"
+        );
+        // Case-insensitively, like find.
+        assert_eq!(
+            resolve_targets(doc, None, None, Some("WAVE")).unwrap(),
+            vec![0]
+        );
+    }
+
+    #[test]
+    fn a_flip_pivot_needs_both_axes_which_is_why_the_tool_fills_one_in() {
+        // The op takes its pivot as a pair and falls back to the shape's own centre unless BOTH
+        // are given, so `flip { cx }` alone would silently mirror in place. Pinning that here
+        // because it's the reason `flip` computes the axis the caller left out.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect id="mark" x="10" y="10" width="20" height="10"/>
+</svg>"##;
+        let left = |ed: &nib_core::Editor| {
+            path_bounds(&ed.doc().unwrap().paths[0].subpaths, 0.0)
+                .unwrap()
+                .0
+        };
+
+        let mut half = nib_core::Editor::new();
+        half.load_source(svg).unwrap();
+        assert!(half.apply(&nib_core::ops::Op::FlipPath {
+            path: 0,
+            horizontal: true,
+            cx: Some(50.0),
+            cy: None,
+        }));
+        assert!(
+            (left(&half) - 10.0).abs() < 1e-6,
+            "cx alone was ignored — mirrored in place at {}",
+            left(&half)
+        );
+
+        let mut both = nib_core::Editor::new();
+        both.load_source(svg).unwrap();
+        assert!(both.apply(&nib_core::ops::Op::FlipPath {
+            path: 0,
+            horizontal: true,
+            cx: Some(50.0),
+            cy: Some(15.0),
+        }));
+        // Mirrored about x=50: [10,30] → [70,90].
+        assert!(
+            (left(&both) - 70.0).abs() < 1e-6,
+            "mirrored across the line: {}",
+            left(&both)
+        );
+    }
+
+    #[test]
+    fn oriented_bounds_report_a_turned_shape_own_size() {
+        // A 40×20 rect turned 30°: its document-axis box grows, its own box must not.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect id="board" x="30" y="40" width="40" height="20"/>
+</svg>"##;
+        let mut ed = nib_core::Editor::new();
+        ed.load_source(svg).unwrap();
+        let angle = 30f64.to_radians();
+        assert!(ed.apply(&nib_core::ops::Op::RotatePath {
+            path: 0,
+            degrees: 30.0,
+            cx: None,
+            cy: None,
+        }));
+        let doc = ed.doc().unwrap();
+        let sub = &doc.paths[0].subpaths;
+
+        let (_, _, aw, ah) = path_bounds(sub, 0.0).unwrap();
+        assert!(aw > 44.0 && ah > 27.0, "axis box grew: {aw}×{ah}");
+
+        let (_, _, ow, oh) = path_bounds(sub, angle).unwrap();
+        assert!(
+            (ow - 40.0).abs() < 0.01 && (oh - 20.0).abs() < 0.01,
+            "own box is still 40×20: {ow}×{oh}"
+        );
+        // And the model remembered the angle, which is what the outline reports.
+        assert!((doc.paths[0].box_angle - angle).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bounds_cover_a_curve_not_just_its_anchors() {
+        // Both anchors of this arc sit on y=80; the bulge lives entirely in the handles. Anchor-only
+        // bounds called it 60×0 — a flat line — which is a lie to anyone planning around it.
+        let arc = super::parse_path_d("M 10 80 C 20 10, 60 10, 70 80");
+        let (_, y, w, h) = path_bounds(&arc, 0.0).unwrap();
+        assert!((w - 60.0).abs() < 1e-6, "width: {w}");
+        assert!(h > 60.0, "the arc has real height: {h}");
+        assert!(y < 20.0, "and it reaches up: {y}");
+    }
+
+    #[test]
+    fn draw_path_data_becomes_editable_anchors() {
+        // The reason draw_path exists: a curve is not expressible as a bounding box, and what
+        // lands has to be ordinary editable geometry, not an opaque blob.
+        let curve = super::parse_path_d("M 10 80 C 20 10, 60 10, 70 80 Z");
+        assert_eq!(curve.len(), 1);
+        assert!(curve[0].closed, "Z closed it");
+        assert!(
+            curve[0].nodes.len() >= 2,
+            "anchors: {}",
+            curve[0].nodes.len()
+        );
+        assert!(
+            curve[0].nodes.iter().any(|n| n.handle_out.is_some()),
+            "the C carried real bezier handles through"
+        );
+        // Relative commands and multiple subpaths fold in the same way.
+        assert_eq!(
+            super::parse_path_d("M0 0 l10 0 l0 10 z M20 20 l5 0").len(),
+            2
+        );
+        // Garbage yields nothing, so the tool can refuse rather than add an invisible path.
+        assert!(super::parse_path_d("not path data").is_empty());
+    }
+
+    #[test]
+    fn a_region_render_crops_without_scaling_the_whole_document() {
+        // Two far-apart marks; cropping to one must show ink, and to empty space must not.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <rect x="0" y="0" width="20" height="20" fill="#000"/>
+  <rect x="180" y="180" width="20" height="20" fill="#000"/>
+</svg>"##;
+        // Count dark pixels straight off the pixmap — no image decoder needed beyond the one
+        // tiny_skia already ships for encode_png.
+        let ink = |png: Vec<u8>| {
+            let pm = super::tiny_skia::Pixmap::decode_png(&png).unwrap();
+            pm.pixels().iter().filter(|p| p.red() < 128).count()
+        };
+        let corner = render_png_region(svg, 64.0, Some((0.0, 0.0, 40.0, 40.0))).unwrap();
+        let middle = render_png_region(svg, 64.0, Some((80.0, 80.0, 40.0, 40.0))).unwrap();
+        assert!(ink(corner) > 100, "the crop framed the mark");
+        assert_eq!(ink(middle), 0, "empty space renders empty");
+        // A zero-sized region is refused rather than allocating a degenerate pixmap.
+        assert!(render_png_region(svg, 64.0, Some((0.0, 0.0, 0.0, 10.0))).is_err());
+    }
+
     #[test]
     fn renders_svg_to_png() {
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#3f86d4"/><circle cx="50" cy="50" r="30" fill="#ffd85e"/></svg>"##;
-        let png = render_png(svg, 640.0).expect("render");
+        let png = render_png_region(svg, 640.0, None).expect("render");
         assert_eq!(&png[..4], b"\x89PNG", "PNG magic bytes");
         let pm = resvg::tiny_skia::Pixmap::decode_png(&png).expect("decode");
         // viewBox 100×100 scaled so the longest side is 640.
@@ -1528,7 +2379,7 @@ mod tests {
     #[test]
     fn render_resolves_use_of_a_component_def_for_every_instance() {
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><defs><g id="die"><rect x="0" y="0" width="40" height="40" fill="#3f86d4"/></g></defs><use href="#die" x="10" y="30"/><use href="#die" x="120" y="30"/></svg>"##;
-        let png = render_png(svg, 200.0).expect("render");
+        let png = render_png_region(svg, 200.0, None).expect("render");
         let pm = resvg::tiny_skia::Pixmap::decode_png(&png).expect("decode");
         assert_eq!((pm.width(), pm.height()), (200, 100));
         let px = |x: u32, y: u32| {
@@ -1603,7 +2454,7 @@ mod tests {
         assert!(!svg_out.contains("<text"), "label converted: {svg_out}");
         assert!(svg_out.contains("<path"), "…into a path: {svg_out}");
         // And it renders without any font loaded, which is the whole point.
-        let png = render_png(&svg_out, 200.0).expect("render");
+        let png = render_png_region(&svg_out, 200.0, None).expect("render");
         let pm = resvg::tiny_skia::Pixmap::decode_png(&png).expect("decode");
         assert!(
             pm.data().as_chunks::<4>().0.iter().any(|p| p[0] < 235),

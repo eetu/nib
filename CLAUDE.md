@@ -529,12 +529,31 @@ client-side pro pillars, all running on the core):
     **`find`** (resolve a co-author's *name* — "the hand" — to candidate objects with #index +
     bounds so the LLM disambiguates "left or right?" instead of guessing), `get_svg`,
     **`render_document`** (rasterize to a PNG via `resvg` + return it as an **image** so the LLM can
-    *see*/verify its work; opt-in `width` cost knob — labels render with the host's system fonts via
+    *see*/verify its work; opt-in `width` cost knob, plus `around` a name / an explicit `x,y,w,h`
+    to **crop** — rendered through a translate into a region-sized pixmap, never by scaling the
+    whole document and cutting it up — labels render with the host's system fonts via
     fontdb, so a `scratch` image still draws none), **`apply_op`** (full op vocabulary), + ergonomic
-    wrappers `add_shape` (optional `name`)/`set_style`/`boolean_op`/**`group`** (indices→`GroupNodes`
+    wrappers `add_shape` (optional `name`; a `line` takes `x2,y2` for its far endpoint, since a
+    bounding box can only draw the ↘ diagonal)/`set_style`/`boolean_op`/**`group`** (indices→`GroupNodes`
     by tree uid)/**`rename`**/**`outline_text`** (one label by id-or-words, or all of them → editable
     glyph outlines; ambiguity is an error listing candidates, since outlining is destructive — and
-    `get_document` now lists labels, which have no `#index`, so the LLM can see the words at all). The surface is **shaped to coach the model** (mirrors the sibling
+    `get_document` now lists labels, which have no `#index`, so the LLM can see the words at all).
+    **Drawing tools (what makes it an editor rather than a shape-assembler):** **`draw_path {d}`**
+    takes SVG path data straight into `parse_path_d` — the same road an import takes — so anything
+    curved is expressible and lands as ordinary editable anchors; **`duplicate`** and
+    **`set_gradient`** (a real `<defs>` entry with the browser's own angle parameterisation, so the
+    human can pick up its stops). **Every transform takes `index` OR `indices` OR a `name`**, and a
+    name that resolves to a **`<g>` expands to every shape inside it** — tilting a 19-shape scene is
+    one call, not nineteen; a multi-target `rotate` with no pivot defaults to the *shared* centre,
+    since spinning each shape in place is never what "rotate the crab" means. Name resolution
+    matches **`PathElement.id` as well as tree `id` attrs**: a shape you just drew carries its name
+    on the path and has no tree id, so an attrs-only lookup made every fresh shape unaddressable by
+    the name the ack had just printed. `flip` fills in whichever pivot axis the caller omits,
+    because the op falls back to the shape's own centre unless *both* are given — `flip {cx}` alone
+    would otherwise mirror in place, silently. `get_document` appends a turned shape's **own size +
+    angle** (from `box_angle`) beside its document-axis box, which for a 57×74 frame tilted 26°
+    reads 84×92 and is nobody's idea of its size; its bounds also **include control handles**, or an
+    arc drawn from two anchors reports height 0. The surface is **shaped to coach the model** (mirrors the sibling
     `../maquette`): a workflow playbook in the server `instructions`, per-tool descriptions that say
     when *not* to spend an expensive call, and mutations that return a **one-line ack** (never the
     whole doc) — so the LLM names + groups shapes into a labeled hierarchy and spends few tokens per
