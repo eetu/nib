@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Pipette from "@lucide/svelte/icons/pipette";
+
   type Props = {
     /** Names the field — shown in the label column, and the accessible name of every control in
      *  it. A caller that draws the label itself passes `showLabel: false`; the name is still
@@ -10,6 +12,13 @@
     onchange: (value: string) => void;
     /** Live updates while the native picker / alpha slider is dragged (before commit). */
     oninput?: (value: string) => void;
+    /** Arms the eyedropper for this paint, when there's one to arm. Rendered as a button in the
+     *  row, because "what colour?" is answered by pointing at one — next to the field it fills
+     *  in, not across the window in the tool rail. */
+    onsample?: () => void;
+    /** The eyedropper is armed for THIS paint — the next canvas click lands here. Lighting the
+     *  button is what says which of fill/stroke is waiting, with two of them on screen. */
+    armed?: boolean;
     /**
      * The SVG paint keywords this field offers besides a colour — values that aren't a colour at
      * all and so can't be reached through the swatch.
@@ -28,6 +37,8 @@
     editable,
     onchange,
     oninput,
+    onsample,
+    armed = false,
     keywords = ["none", "currentColor"],
   }: Props = $props();
 
@@ -102,9 +113,11 @@
 </script>
 
 <div class="field">
-  <!-- Always reserve the label column (drawn empty when the caller shows the label itself) so
-       the swatch/hex align with the panel's other control rows. -->
-  <span class="lbl">{showLabel ? label : ""}</span>
+  <!-- The label column is drawn only when this field owns its label. A caller that draws its own
+       (PaintInput, which puts it on the mode row above) used to get an empty 50px column for
+       alignment — 56px of a 232px panel spent on nothing, which is why the row had no space for
+       the eyedropper that belongs in it. -->
+  {#if showLabel}<span class="lbl">{label}</span>{/if}
   <span class="swatch" class:none={isNone} style:background={swatchBg}>
     {#if editable}
       <input
@@ -124,6 +137,17 @@
     disabled={!editable}
     spellcheck="false"
   />
+  {#if editable && onsample}
+    <button
+      class="sample"
+      class:on={armed}
+      title="eyedropper — click a shape to take its colour"
+      aria-label="{label} eyedropper"
+      onclick={onsample}
+    >
+      <Pipette size={13} />
+    </button>
+  {/if}
   {#if editable && keywords.length}
     <!-- A native <select> under a caret, the same overlay trick the swatch uses for its colour
          input: the keyboard, dismissal and placement come free, and the row keeps the footprint of
@@ -211,6 +235,31 @@
     flex: 1;
     min-width: 0;
     font-size: 12px;
+  }
+
+  .sample {
+    display: grid;
+    width: 22px;
+    height: 22px;
+    flex: none;
+    place-items: center;
+    padding: 0;
+    border: 1px solid var(--halo-border);
+    border-radius: var(--halo-radius-pill);
+    background: var(--halo-bg-main);
+    color: var(--halo-text-muted);
+  }
+
+  .sample:hover {
+    border-color: var(--halo-accent);
+    color: var(--halo-accent);
+  }
+
+  /* armed: the next canvas click takes a colour into this field */
+  .sample.on {
+    border-color: var(--halo-accent);
+    background: var(--halo-accent-soft);
+    color: var(--halo-accent);
   }
 
   .kw {

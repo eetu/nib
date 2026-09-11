@@ -1367,17 +1367,17 @@ class DocumentStore {
     if (this.#apply({ type: "setStyle", path: pathIndex, key, value })) this.commit();
   }
 
-  /** Apply an eyedropper-sampled fill to the current selection (all selected paths, one undo step),
+  /** Apply an eyedropper-sampled colour to the current selection (all selected paths, one undo step),
    *  or to the new-shape default when nothing is selected (so the next drawn shape uses it). */
-  applySampledFill(color: string): void {
+  applySampledPaint(color: string, key: "fill" | "stroke" = "fill"): void {
     const sel = this.selectedPaths;
     if (sel.length) {
       let ok = false;
       for (const i of sel)
-        if (this.#apply({ type: "setStyle", path: i, key: "fill", value: color })) ok = true;
+        if (this.#apply({ type: "setStyle", path: i, key, value: color })) ok = true;
       if (ok) this.commit();
     } else {
-      tools.setNewStyle("fill", color);
+      tools.setNewStyle(key, color);
     }
   }
 

@@ -2,6 +2,7 @@
   import type { Gradient, GradientStop, ImportedGradient } from "$lib/model/types";
   import { editor } from "$lib/stores/document.svelte";
   import { settings } from "$lib/stores/settings.svelte";
+  import { tools } from "$lib/stores/tool.svelte";
 
   import ColorInput from "./ColorInput.svelte";
 
@@ -104,6 +105,15 @@
         : `linear-gradient(90deg, ${stopsCss})`
       : "",
   );
+
+  /** Arm the eyedropper for THIS paint: the next canvas click takes the colour it samples into
+   *  fill or stroke depending on which row's button you pressed. */
+  const paintKey = $derived<"fill" | "stroke">(label === "stroke" ? "stroke" : "fill");
+
+  function armEyedropper(): void {
+    tools.eyedropperTarget = paintKey;
+    tools.set("eyedropper");
+  }
 
   function setMode(m: "none" | "solid" | "linear" | "radial") {
     if (m === "none") return setPaint("none");
@@ -285,6 +295,8 @@
       {value}
       editable
       keywords={["currentColor"]}
+      onsample={armEyedropper}
+      armed={tools.active === "eyedropper" && tools.eyedropperTarget === paintKey}
       oninput={(v) => previewPaint(v)}
       onchange={(v) => setPaint(v)}
     />

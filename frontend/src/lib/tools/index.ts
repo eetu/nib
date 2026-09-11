@@ -38,6 +38,9 @@ export type ToolDef = {
   /** Single-key shortcut (lowercased), if any. */
   shortcut?: string;
   icon: Component;
+  /** Set false for a tool whose button lives somewhere better than the rail. It stays fully
+   *  registered — `getTool`, its shortcut, its cursor — the rail just doesn't draw it. */
+  inRail?: boolean;
 };
 
 /** A rail section. `flyout` groups collapse into one rail slot with a popup once they hold
@@ -70,11 +73,16 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { id: "pen", tool: penTool, label: "pen", shortcut: "p", icon: PenTool },
       { id: "text", tool: textTool, label: "text", shortcut: "t", icon: Type },
       {
+        // Registered here (so it has a cursor, a shortcut, and a place in the vocabulary) but
+        // NOT drawn in the rail: an eyedropper answers "what colour?", so its button belongs
+        // beside the colour it fills in, not next to pen and text. STYLE's paint rows host it —
+        // one per paint, which also says *which* paint you're sampling into.
         id: "eyedropper",
         tool: eyedropperTool,
         label: "eyedropper (sample colour)",
         shortcut: "i",
         icon: Pipette,
+        inRail: false,
       },
     ],
   },

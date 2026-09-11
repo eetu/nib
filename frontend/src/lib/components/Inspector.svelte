@@ -9,6 +9,7 @@
   import AlignVerticalDistributeCenter from "@lucide/svelte/icons/align-vertical-distribute-center";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import Copy from "@lucide/svelte/icons/copy";
   import Eye from "@lucide/svelte/icons/eye";
   import EyeOff from "@lucide/svelte/icons/eye-off";
   import FlipHorizontal2 from "@lucide/svelte/icons/flip-horizontal-2";
@@ -17,7 +18,6 @@
   import Lock from "@lucide/svelte/icons/lock";
   import LockOpen from "@lucide/svelte/icons/lock-open";
   import PaintBucket from "@lucide/svelte/icons/paint-bucket";
-  import Pipette from "@lucide/svelte/icons/pipette";
   import Trash2 from "@lucide/svelte/icons/trash-2";
 
   import { type MenuItem, openMenu } from "$lib/menu.svelte";
@@ -702,7 +702,7 @@
               class:ok={styleCopied}
               title={styleCopied ? "copied" : "copy style"}
               aria-label="copy style"
-              onclick={copyStyleWithFeedback}><Pipette size={13} /></button
+              onclick={copyStyleWithFeedback}><Copy size={13} /></button
             >
             <button
               class="ghost-btn"

@@ -70,6 +70,15 @@ class ToolState {
    */
   pivot = $state<Point | null>(null);
 
+  /**
+   * Which paint the eyedropper fills in — set by whichever button armed it.
+   *
+   * The button beside `stroke` has to sample a stroke colour, or there are two eyedroppers doing
+   * the same thing in different places. Not persisted: it belongs to the click that armed it, and
+   * the keyboard shortcut deliberately resets it to `fill` — the answer to a bare "eyedropper".
+   */
+  eyedropperTarget = $state<"fill" | "stroke">("fill");
+
   constructor() {
     const p = loadState<Prefs>(PREFS_KEY);
     if (p) {
