@@ -1,6 +1,8 @@
 <script lang="ts">
   import { BACKEND } from "$lib/backend/flag";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
+  import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
+  import ContextMenu from "$lib/components/ContextMenu.svelte";
   import EditorCanvas from "$lib/components/EditorCanvas.svelte";
   import FileList from "$lib/components/FileList.svelte";
   import ImportDialog from "$lib/components/ImportDialog.svelte";
@@ -156,6 +158,22 @@
     if (e.key === "0") fitToView();
   }
 
+  /**
+   * The browser own menu never appears over nib surfaces — a drawing tool invites right-click
+   * constantly, and Back/Reload/Save-image-as is never the answer to "what can I do with this
+   * shape?". Half-suppression is worse than none: a user who sometimes gets nib menu and
+   * sometimes the browser one stops trying.
+   *
+   * Text fields are the exception, and the exception has to actually win — a number input inside a
+   * row that carries its own menu must keep paste and spellcheck. This runs at the window, so it
+   * sees the real target rather than whatever ancestor handled the event.
+   */
+  function onContextMenu(e: MouseEvent) {
+    const el = e.target as HTMLElement | null;
+    if (el?.closest("input, textarea, [contenteditable]")) return;
+    e.preventDefault();
+  }
+
   function isSvgFile(file: File): boolean {
     return file.type === "image/svg+xml" || file.name.toLowerCase().endsWith(".svg");
   }
@@ -192,7 +210,7 @@
   }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydown={onKeydown} oncontextmenu={onContextMenu} />
 
 <!-- Drop-to-load is a progressive enhancement; the keyboard-accessible "open
      file" button covers the same action, so the shell needs no ARIA role. -->
@@ -299,6 +317,12 @@
 <ImportDialog open={pasteOpen} onClose={() => (pasteOpen = false)} />
 <SettingsDialog open={settingsOpen} onClose={() => (settingsOpen = false)} />
 <CommandPalette bind:open={paletteOpen} />
+
+<!-- The app one context menu: mounted at the root so no panel can clip it. -->
+<ContextMenu />
+
+<!-- The app's one "are you sure?", for the few things undo can't undo. -->
+<ConfirmDialog />
 
 <input
   class="hidden-file"

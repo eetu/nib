@@ -1,3 +1,5 @@
+import { askConfirm } from "$lib/confirm.svelte";
+import { loadState, saveState } from "$lib/persistence";
 import {
   downloadSvg,
   listSvgFiles,
@@ -18,6 +20,8 @@ import { tools } from "./tool.svelte";
 
 const ACTIVE_FILE = "activeFile";
 const ACTIVE_DIR = "dir";
+/** The document as it last stood on disk — the baseline Revert restores. */
+const BASELINE_KEY = "baseline";
 
 function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -38,6 +42,15 @@ class Workspace {
   savesInPlace = $state(false);
   busy = $state(false);
   error = $state<string | null>(null);
+
+  /**
+   * The document as it was last read from — or written to — disk.
+   *
+   * Undo lives in memory, so without this a reload is the one gesture that makes every unsaved
+   * change permanent: the working draft is restored, the history that could walk it back is not.
+   * Keeping the on-disk text alongside the draft turns that into a question the user can answer.
+   */
+  savedSvg = $state<string | null>(null);
   /** Something worth saying that isn't a failure — e.g. which font a label was outlined with when
    *  it wasn't the one the document asked for. Same bar as `error`, different voice. */
   notice = $state<string | null>(null);
@@ -52,6 +65,7 @@ class Workspace {
   }
 
   async #hydrate(): Promise<void> {
+    this.savedSvg = loadState<string | null>(BASELINE_KEY) ?? null;
     const file = await loadHandle<FileSystemFileHandle>(ACTIVE_FILE);
     if (file && (await ensurePermission(file, false))) {
       this.#activeHandle = file;
@@ -65,6 +79,43 @@ class Workspace {
       } catch {
         // folder gone / no access — leave the list empty
       }
+    }
+  }
+
+  /** Is there a saved state to go back to, and would going back change anything? */
+  get canRevert(): boolean {
+    return this.savedSvg !== null && editor.dirty;
+  }
+
+  /** Remember what's on disk now, and survive a reload knowing it. */
+  #setBaseline(svg: string | null): void {
+    this.savedSvg = svg;
+    saveState(BASELINE_KEY, svg);
+  }
+
+  /**
+   * Throw away the edits made since the last save and go back to the file on disk.
+   *
+   * The one action here undo can't take back, so it's the one that asks first — and it says how
+   * much is at stake rather than "are you sure?".
+   */
+  async revert(): Promise<void> {
+    const baseline = this.savedSvg;
+    if (baseline === null) return;
+    const ok = await askConfirm({
+      title: "revert to the saved file?",
+      body: "every change since the last save is discarded — undo can't bring them back.",
+      confirmLabel: "revert",
+      danger: true,
+    });
+    if (!ok) return;
+    this.error = null;
+    try {
+      editor.load(baseline, editor.fileName);
+      editor.markSaved();
+      this.notice = `reverted to ${editor.fileName ?? "the saved file"}`;
+    } catch (e) {
+      this.error = errMessage(e);
     }
   }
 
@@ -124,6 +175,7 @@ class Workspace {
     try {
       const source = await file.text();
       editor.importDocument(source, file.name);
+      this.#setBaseline(source);
       this.#clearHandle();
     } catch (e) {
       this.error = errMessage(e);
@@ -132,10 +184,19 @@ class Workspace {
 
   /** Start a fresh blank document (New) + ready the pen to draw. Confirms first if there are
    *  unsaved changes. */
-  newDocument(): void {
-    if (editor.dirty && !confirm("Discard unsaved changes and start a new drawing?")) return;
+  async newDocument(): Promise<void> {
+    if (editor.dirty) {
+      const ok = await askConfirm({
+        title: "start a new drawing?",
+        body: "the unsaved changes in this one are discarded.",
+        confirmLabel: "discard",
+        danger: true,
+      });
+      if (!ok) return;
+    }
     this.error = null;
     editor.newDocument();
+    this.#setBaseline(null);
     this.#clearHandle();
     tools.set("pen");
   }
@@ -157,6 +218,7 @@ class Workspace {
         this.savesInPlace = true;
         editor.fileName = handle.name;
         void saveHandle(ACTIVE_FILE, handle);
+        this.#setBaseline(svg);
         editor.markSaved();
       } catch (e) {
         this.error = errMessage(e);
@@ -167,6 +229,7 @@ class Workspace {
       const input = prompt("Save as (filename):", name);
       if (input == null) return;
       downloadSvg(input, svg);
+      this.#setBaseline(svg);
       editor.markSaved();
     }
   }
@@ -176,6 +239,7 @@ class Workspace {
     this.error = null;
     try {
       editor.importDocument(source, name);
+      this.#setBaseline(source);
       this.#clearHandle();
     } catch (e) {
       this.error = errMessage(e);
@@ -194,7 +258,9 @@ class Workspace {
       } else {
         downloadSvg(editor.fileName ?? "nib.svg", svg);
       }
+      this.#setBaseline(svg);
       editor.markSaved();
+      this.notice = `saved ${editor.fileName ?? "nib.svg"}`;
     } catch (e) {
       this.error = errMessage(e);
     } finally {
@@ -212,6 +278,7 @@ class Workspace {
     try {
       const source = await readFile(handle);
       editor.importDocument(source, name);
+      this.#setBaseline(source);
       this.#activeHandle = handle;
       this.savesInPlace = savesInPlace;
       void saveHandle(ACTIVE_FILE, handle);

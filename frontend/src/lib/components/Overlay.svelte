@@ -288,13 +288,14 @@
     opacity: 0.5;
   }
 
-  /* selection bounding box around the selected path */
+  /* Selection: a solid accent border. Dashed is reserved for *borrowed* things (a live-boolean
+     operand), so the box that says "this is yours to edit" must not wear the same coat. No fill —
+     the box sits over artwork, and tinting what you are trying to judge is worse than useless. */
   .sel-box {
     fill: none;
     stroke: var(--halo-accent);
     stroke-width: 1;
-    stroke-dasharray: 4 3;
-    opacity: 0.7;
+    opacity: 0.85;
   }
 
   /* resize handles on the bounding box */
@@ -304,12 +305,27 @@
     stroke-width: 1.5;
   }
 
-  /* rubber-band marquee (drag over empty canvas to select) */
+  /* Marquee: marching ants over a barely-there wash — the family's cue for "what operations will
+     apply to", distinct from both the solid selection border and the dashed borrowed outline. */
   .marquee {
     fill: var(--halo-accent-soft);
-    stroke: var(--halo-accent);
+    stroke: var(--halo-text-main);
     stroke-width: 1;
-    opacity: 0.5;
+    stroke-dasharray: 4 4;
+    opacity: 0.6;
+    animation: ants 0.6s linear infinite;
+  }
+
+  @keyframes ants {
+    to {
+      stroke-dashoffset: -8;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .marquee {
+      animation: none;
+    }
   }
 
   /* smart alignment guides while dragging */
@@ -376,6 +392,8 @@
     opacity: 0.9;
   }
 
+  /* The pen's rubber band: a live aid that exists only under the hand, not a state anything is
+     in. Dashed reads fine here because it is gone the moment the pointer stops. */
   .pen-rubber {
     stroke: var(--halo-accent);
     stroke-width: 1.5;

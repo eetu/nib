@@ -5,119 +5,79 @@
   import Moon from "@lucide/svelte/icons/moon";
   import Sun from "@lucide/svelte/icons/sun";
 
-  import { focusTrap } from "$lib/actions/focusTrap";
   import { BACKEND } from "$lib/backend/flag";
   import { setCanvasBg, setThemeMode, settings, setUiLevel } from "$lib/stores/settings.svelte";
 
+  import Modal from "./Modal.svelte";
+
   let { open, onClose }: { open: boolean; onClose: () => void } = $props();
-
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") onClose();
-  }
-
-  // Focus the dialog on open so its Escape handler fires (the +page window handler is inert while
-  // the dialog is up) — mirrors ImportDialog focusing its field.
-  function autofocus(node: HTMLElement) {
-    node.focus();
-  }
 </script>
 
-{#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="scrim" onclick={(e) => e.target === e.currentTarget && onClose()}>
-    <div
-      class="dialog halo-card"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Settings"
-      tabindex="-1"
-      use:autofocus
-      use:focusTrap
-      onkeydown={onKeydown}
-    >
-      <h2>settings</h2>
+<Modal {open} {onClose} title="Settings" labelledBy="settings-title">
+  <h2 id="settings-title">settings</h2>
 
-      <div class="setting">
-        <span class="setting-label">interface</span>
-        <div class="seg">
-          <button class:on={settings.uiLevel === "basic"} onclick={() => setUiLevel("basic")}>
-            basic
-          </button>
-          <button class:on={settings.uiLevel === "advanced"} onclick={() => setUiLevel("advanced")}>
-            advanced
-          </button>
-        </div>
-        <span class="setting-hint">
-          basic shows just touch-up tools; advanced adds shapes, path craft, booleans, gradients +
-          groups.
-        </span>
-      </div>
+  <div class="setting">
+    <span class="setting-label">interface</span>
+    <div class="seg">
+      <button class:on={settings.uiLevel === "basic"} onclick={() => setUiLevel("basic")}>
+        basic
+      </button>
+      <button class:on={settings.uiLevel === "advanced"} onclick={() => setUiLevel("advanced")}>
+        advanced
+      </button>
+    </div>
+    <span class="setting-hint">
+      basic shows just touch-up tools; advanced adds shapes, path craft, booleans, gradients +
+      groups.
+    </span>
+  </div>
 
-      <div class="setting">
-        <span class="setting-label">theme</span>
-        <div class="seg">
-          <button class:on={settings.themeMode === "light"} onclick={() => setThemeMode("light")}>
-            <Sun size={15} /> light
-          </button>
-          <button class:on={settings.themeMode === "dark"} onclick={() => setThemeMode("dark")}>
-            <Moon size={15} /> dark
-          </button>
-          <button class:on={settings.themeMode === "auto"} onclick={() => setThemeMode("auto")}>
-            <Monitor size={15} /> auto
-          </button>
-        </div>
-      </div>
-
-      <div class="setting">
-        <span class="setting-label">canvas background</span>
-        <div class="seg">
-          <button class:on={settings.canvasBg === "checker"} onclick={() => setCanvasBg("checker")}>
-            <span class="swatch checker"></span> checker
-          </button>
-          <button class:on={settings.canvasBg === "light"} onclick={() => setCanvasBg("light")}>
-            <span class="swatch light"></span> light
-          </button>
-          <button class:on={settings.canvasBg === "dark"} onclick={() => setCanvasBg("dark")}>
-            <span class="swatch dark"></span> dark
-          </button>
-        </div>
-        <span class="setting-hint">
-          the surface your svg previews against — independent of the ui theme.
-        </span>
-      </div>
-
-      <!-- Dynamically imported so the standalone build never bundles the backend client. -->
-      {#if BACKEND}
-        {#await import("$lib/components/AccountSettings.svelte") then M}
-          <M.default />
-        {/await}
-      {/if}
-
-      <div class="actions">
-        <button class="primary" onclick={onClose}>done</button>
-      </div>
+  <div class="setting">
+    <span class="setting-label">theme</span>
+    <div class="seg">
+      <button class:on={settings.themeMode === "light"} onclick={() => setThemeMode("light")}>
+        <Sun size={15} /> light
+      </button>
+      <button class:on={settings.themeMode === "dark"} onclick={() => setThemeMode("dark")}>
+        <Moon size={15} /> dark
+      </button>
+      <button class:on={settings.themeMode === "auto"} onclick={() => setThemeMode("auto")}>
+        <Monitor size={15} /> auto
+      </button>
     </div>
   </div>
-{/if}
+
+  <div class="setting">
+    <span class="setting-label">canvas background</span>
+    <div class="seg">
+      <button class:on={settings.canvasBg === "checker"} onclick={() => setCanvasBg("checker")}>
+        <span class="swatch checker"></span> checker
+      </button>
+      <button class:on={settings.canvasBg === "light"} onclick={() => setCanvasBg("light")}>
+        <span class="swatch light"></span> light
+      </button>
+      <button class:on={settings.canvasBg === "dark"} onclick={() => setCanvasBg("dark")}>
+        <span class="swatch dark"></span> dark
+      </button>
+    </div>
+    <span class="setting-hint">
+      the surface your svg previews against — independent of the ui theme.
+    </span>
+  </div>
+
+  <!-- Dynamically imported so the standalone build never bundles the backend client. -->
+  {#if BACKEND}
+    {#await import("$lib/components/AccountSettings.svelte") then M}
+      <M.default />
+    {/await}
+  {/if}
+
+  <div class="actions">
+    <button class="primary" onclick={onClose}>done</button>
+  </div>
+</Modal>
 
 <style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 20;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.4);
-  }
-
-  .dialog {
-    width: min(440px, 92vw);
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-  }
-
   h2 {
     margin: 0;
     font-family: var(--halo-font-heading);

@@ -2811,3 +2811,169 @@ test("a label's box turns as it rotates, and stays turned", async ({ page }) => 
     });
   expect(Math.hypot(seHandle.x - corner.x, seHandle.y - corner.y)).toBeLessThan(1.5);
 });
+
+// The context-menu policy, which the interaction skill calls the 1.0 gate: one menu, every
+// surface, and the browser's never appears except in a text field. A drawing surface invites
+// right-click constantly — answering it with Back/Reload is the loudest inconsistency an app can
+// ship, and "sometimes ours, sometimes theirs" is worse than either alone.
+test("right-click answers with nib's menu everywhere but text fields", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="brick" x="30" y="30" width="40" height="40" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await expect(page.locator("svg.canvas g.artwork path")).toBeAttached();
+
+  const menu = page.locator("[role='menu']");
+  const shape = (await page.locator("svg.canvas g.artwork path").boundingBox())!;
+
+  // 1. The canvas — the surface that used to give the browser's menu and nothing else.
+  await page.mouse.click(shape.x + shape.width / 2, shape.y + shape.height / 2, {
+    button: "right",
+  });
+  await expect(menu).toBeVisible();
+  // It names its subject and carries the shape's verbs.
+  await expect(menu).toContainText("brick");
+  await expect(menu.getByRole("menuitem", { name: "duplicate" })).toBeVisible();
+  // A verb that doesn't apply is greyed with a reason, not missing.
+  const pasteStyle = menu.getByRole("menuitem", { name: "paste style" });
+  await expect(pasteStyle).toBeDisabled();
+  await expect(pasteStyle).toHaveAttribute("title", /copy a style first/);
+
+  // Escape closes the menu — and only the menu, the outermost rung of the ladder.
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(page.locator("svg.canvas g.overlay polygon.sel-box")).toBeAttached();
+
+  // 2. Empty canvas gets the document's verbs rather than nothing.
+  await page.mouse.click(shape.x - 80, shape.y - 40, { button: "right" });
+  await expect(menu).toContainText("canvas");
+  await expect(menu.getByRole("menuitem", { name: "select all" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // 3. A LAYERS row answers with the same component.
+  const row = page.locator("aside .layers li").first();
+  await row.click({ button: "right" });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "rename" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // 4. Only one menu exists at a time, wherever it was opened from.
+  await page.mouse.click(shape.x + shape.width / 2, shape.y + shape.height / 2, {
+    button: "right",
+  });
+  await row.click({ button: "right" });
+  await expect(menu).toHaveCount(1);
+  await page.keyboard.press("Escape");
+
+  // 5. Text fields keep the browser's menu: nib must not swallow paste and spellcheck. The
+  //    handler runs at the window, so this asserts the exception survives every ancestor.
+  const defaultPrevented = await page.evaluate(() => {
+    const input = document.querySelector("aside input") as HTMLInputElement | null;
+    if (!input) return null;
+    const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    input.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  });
+  expect(defaultPrevented).toBe(false);
+
+  // …while anywhere else it is suppressed.
+  const suppressed = await page.evaluate(() => {
+    const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    document.querySelector("svg.canvas")!.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  });
+  expect(suppressed).toBe(true);
+});
+
+// A node is a thing with verbs of its own — right-clicking one shouldn't answer about the shape
+// it belongs to, any more than right-clicking a word should answer about the paragraph.
+test("a node's own verbs live on its right-click", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M20 20 H80 V80 H20 Z" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // Double-click into node editing, where anchors exist to be right-clicked. A filled shape and
+  // its centre: this test is about the menu, not about hitting a hairline stroke.
+  const shape = (await page.locator("svg.canvas g.artwork path").boundingBox())!;
+  await page.mouse.dblclick(shape.x + shape.width / 2, shape.y + shape.height / 2);
+  const anchor = page.locator("svg.canvas g.overlay .anchor").first();
+  await expect(anchor).toBeAttached();
+
+  const at = await anchor.evaluate((el) => {
+    const b = (el as SVGGraphicsElement).getBoundingClientRect();
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  });
+  await page.mouse.click(at.x, at.y, { button: "right" });
+
+  const menu = page.locator("[role='menu']");
+  await expect(menu).toContainText("node");
+  // The state it is already in is shown, greyed — not hidden, and not offered as a no-op.
+  await expect(menu.getByRole("menuitem", { name: "corner" })).toBeDisabled();
+
+  const before = await page.locator("svg.canvas g.artwork path").getAttribute("d");
+  await menu.getByRole("menuitem", { name: "smooth" }).click();
+  await expect(menu).toHaveCount(0);
+  // Smoothing synthesises tangent handles, so the geometry really changed.
+  expect(await page.locator("svg.canvas g.artwork path").getAttribute("d")).not.toBe(before);
+});
+
+// Undo lives in memory, so without a baseline a reload is the one gesture that makes every
+// unsaved change permanent. Revert is the way back — and the one action here that asks first,
+// because it's the one undo can't take back.
+test("revert goes back to the saved file, after asking", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="30" y="30" width="20" height="20" fill="#3b82f6"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  const shape = page.locator("svg.canvas g.artwork path");
+  await expect(shape).toBeAttached();
+  const saved = await shape.getAttribute("d");
+
+  // Change it: select and nudge.
+  await page.keyboard.press("v");
+  const box = (await shape.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowRight");
+  expect(await shape.getAttribute("d")).not.toBe(saved);
+
+  // Revert asks before discarding, and cancelling keeps the edits.
+  await page.keyboard.press("Meta+k");
+  await page.locator(".palette .q").fill("revert");
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("revert to the saved file?");
+  await dialog.getByRole("button", { name: "cancel" }).click();
+  expect(await shape.getAttribute("d")).not.toBe(saved);
+
+  // Confirming puts the file back as it was.
+  await page.keyboard.press("Meta+k");
+  await page.locator(".palette .q").fill("revert");
+  await page.keyboard.press("Enter");
+  await page.getByRole("dialog").getByRole("button", { name: "revert" }).click();
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveAttribute("d", saved ?? "");
+});

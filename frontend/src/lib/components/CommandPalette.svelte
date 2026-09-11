@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { focusTrap } from "$lib/actions/focusTrap";
   import { editor } from "$lib/stores/document.svelte";
   import { tools } from "$lib/stores/tool.svelte";
   import { workspace } from "$lib/stores/workspace.svelte";
   import { canOutlineText, outlineAllText, outlineText } from "$lib/text/outline";
   import { TOOL_GROUPS } from "$lib/tools";
   import { fitToView } from "$lib/view";
+
+  import Modal from "./Modal.svelte";
 
   // ⌘/Ctrl+K quick actions — a searchable list over the tool + editor action registry (the
   // same op surface the MCP server will expose). Keyboard-first: type, arrow, enter.
@@ -140,8 +141,13 @@
     { label: "toggle snap to grid", run: () => (tools.gridEnabled = !tools.gridEnabled) },
     { label: "toggle snap to points", run: () => (tools.snapEnabled = !tools.snapEnabled) },
     { label: "toggle smart guides", run: () => (tools.guidesEnabled = !tools.guidesEnabled) },
-    { label: "new drawing", run: () => workspace.newDocument() },
+    { label: "new drawing", run: () => void workspace.newDocument() },
     { label: "save", run: () => void workspace.save(), enabled: () => editor.hasDocument },
+    {
+      label: "revert to saved",
+      run: () => void workspace.revert(),
+      enabled: () => workspace.canRevert,
+    },
     { label: "save as…", run: () => void workspace.saveAs(), enabled: () => editor.hasDocument },
     {
       label: "copy svg",
@@ -171,10 +177,7 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      close();
-      e.preventDefault();
-    } else if (e.key === "ArrowDown") {
+    if (e.key === "ArrowDown") {
       index = Math.min(index + 1, filtered.length - 1);
       e.preventDefault();
     } else if (e.key === "ArrowUp") {
@@ -192,10 +195,8 @@
   }
 </script>
 
-{#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="scrim" onclick={close}></div>
-  <div class="palette" role="dialog" aria-label="Command palette" use:focusTrap>
+<Modal {open} onClose={close} title="Command palette" align="top">
+  <div class="palette">
     <input
       class="q"
       placeholder="run a command…"
@@ -223,22 +224,10 @@
       {#if filtered.length === 0}<li class="none">no matches</li>{/if}
     </ul>
   </div>
-{/if}
+</Modal>
 
 <style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 40;
-    background: rgb(0 0 0 / 0.25);
-  }
-
   .palette {
-    position: fixed;
-    z-index: 41;
-    top: 15%;
-    left: 50%;
-    transform: translateX(-50%);
     width: min(460px, 90vw);
     max-height: 60vh;
     display: flex;

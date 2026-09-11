@@ -3,8 +3,9 @@
   // level); after either choice it never returns — the same toggle then lives in Settings.
   // Basic declutters to touch-up tools; advanced is the full pro surface (and the default, so
   // Escape / scrim-click just keeps it). Voice: terse, lowercase, geometry-forward.
-  import { focusTrap } from "$lib/actions/focusTrap";
   import { settings, setUiLevel, type UiLevel } from "$lib/stores/settings.svelte";
+
+  import Modal from "./Modal.svelte";
 
   let { open }: { open: boolean } = $props();
 
@@ -17,70 +18,31 @@
   function dismiss() {
     setUiLevel(settings.uiLevel);
   }
-
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") dismiss();
-  }
-
-  function autofocus(node: HTMLElement) {
-    node.focus();
-  }
 </script>
 
-{#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="scrim" onclick={(e) => e.target === e.currentTarget && dismiss()}>
-    <div
-      class="dialog halo-card"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Choose your workspace"
-      tabindex="-1"
-      use:autofocus
-      use:focusTrap
-      onkeydown={onKeydown}
-    >
-      <div class="head">
-        <span class="brand">nib<span class="period">.</span></span>
-        <h2>choose your workspace</h2>
-        <p class="sub">you can switch anytime in settings.</p>
-      </div>
-
-      <div class="choices">
-        <button class="choice" onclick={() => choose("basic")}>
-          <span class="name">basic</span>
-          <span class="desc">touch-up essentials</span>
-          <span class="tools">select · node-edit · style · save</span>
-        </button>
-        <button class="choice reco" onclick={() => choose("advanced")}>
-          <span class="badge">recommended</span>
-          <span class="name">advanced</span>
-          <span class="desc">the full toolset</span>
-          <span class="tools">shapes · path craft · booleans · gradients · groups</span>
-        </button>
-      </div>
-    </div>
+<Modal {open} onClose={dismiss} title="Choose your workspace" labelledBy="welcome-title">
+  <div class="head">
+    <span class="brand">nib<span class="period">.</span></span>
+    <h2 id="welcome-title">choose your workspace</h2>
+    <p class="sub">you can switch anytime in settings.</p>
   </div>
-{/if}
+
+  <div class="choices">
+    <button class="choice" onclick={() => choose("basic")}>
+      <span class="name">basic</span>
+      <span class="desc">touch-up essentials</span>
+      <span class="tools">select · node-edit · style · save</span>
+    </button>
+    <button class="choice reco" onclick={() => choose("advanced")}>
+      <span class="badge">recommended</span>
+      <span class="name">advanced</span>
+      <span class="desc">the full toolset</span>
+      <span class="tools">shapes · path craft · booleans · gradients · groups</span>
+    </button>
+  </div>
+</Modal>
 
 <style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 30;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.4);
-  }
-
-  .dialog {
-    width: min(520px, 94vw);
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-  }
-
   .head {
     display: flex;
     flex-direction: column;
