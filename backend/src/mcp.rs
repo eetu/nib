@@ -148,9 +148,30 @@ impl NibMcp {
             .map_err(bad)
     }
 
+    /// A readable generated **name** — "ellipse-3". Names are human-facing and may collide;
+    /// `find` exists precisely to disambiguate them. Never use this for a uid or an SVG id.
     fn gen_id(&self, prefix: &str) -> String {
         format!("{prefix}-{}", self.next_id.fetch_add(1, Ordering::Relaxed))
     }
+}
+
+/// A fresh globally-unique node uid.
+///
+/// **Never `gen_id`.** That counter restarts with the process, so a second session mints "grp-1"
+/// again and collides with a group the first one persisted — two nodes with one uid. Every
+/// uid-addressed op (group, ungroup, reorder, move, name-targeting) then finds whichever comes
+/// first in the tree, silently acting on the wrong object. uids are the identity substrate that
+/// makes ops replay correctly across clients; they have to be globally unique, not merely fresh.
+fn fresh_uid() -> String {
+    nib_core::model::tree::new_id()
+}
+
+/// A generated **document-scoped SVG id** — what `url(#…)` and `filter="url(#…)"` point at. Also
+/// can't be a session counter: a second session's "grad-1" would silently repaint every shape the
+/// first session's "grad-1" fills. Short random suffix, matching what the browser editor mints.
+fn doc_id(prefix: &str) -> String {
+    let uid = fresh_uid();
+    format!("{prefix}-{}", &uid[..uid.len().min(8)])
 }
 
 fn bad(msg: impl Into<String>) -> ErrorData {
@@ -1456,7 +1477,7 @@ impl NibMcp {
         let (hx, hy) = (t.cos() / 2.0, t.sin() / 2.0);
         // cos(90°) is 6e-17, not 0 — rounded, or the exported def reads "0.49999999999999994".
         let q = |v: f64| (v * 10_000.0).round() / 10_000.0;
-        let id = self.gen_id("grad");
+        let id = doc_id("grad");
         let gradient = json!({
             "id": id, "kind": kind, "stops": stops,
             "x1": q(0.5 - hx), "y1": q(0.5 - hy), "x2": q(0.5 + hx), "y2": q(0.5 + hy),
@@ -1696,7 +1717,7 @@ impl NibMcp {
             return Err(bad("group needs at least 2 path indices"));
         }
         let k = uids.len();
-        let op = json!({ "type": "groupNodes", "uids": uids, "uid": self.gen_id("grp"), "name": p.name });
+        let op = json!({ "type": "groupNodes", "uids": uids, "uid": fresh_uid(), "name": p.name });
         let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
         if n == 0 {
             return Err(bad(
@@ -1742,7 +1763,7 @@ impl NibMcp {
             return Err(bad("group_named needs at least 2 names"));
         }
         let k = uids.len();
-        let op = json!({ "type": "groupNodes", "uids": uids, "uid": self.gen_id("grp"), "name": p.name });
+        let op = json!({ "type": "groupNodes", "uids": uids, "uid": fresh_uid(), "name": p.name });
         let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
         if n == 0 {
             return Err(bad(
@@ -2059,7 +2080,7 @@ impl NibMcp {
             "blur": p.blur.unwrap_or(2.0),
             "color": p.color.clone().unwrap_or_else(|| "#000000".to_string()),
             "opacity": p.opacity.unwrap_or(0.4),
-            "id": self.gen_id("shadow"),
+            "id": doc_id("shadow"),
         });
         let n = session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
         if n == 0 {
@@ -2190,6 +2211,27 @@ mod tests {
 
         // An unknown uid reaches nothing rather than panicking or matching everything.
         assert!(node_path_indices(doc, "no-such-uid").is_empty());
+    }
+
+    #[test]
+    fn generated_uids_and_document_ids_are_unique_across_processes() {
+        // Regression, and a nasty one: `group` minted the new <g>'s uid with the per-process
+        // counter, so reopening a project and grouping again produced "grp-1" a second time — a
+        // duplicate uid, after which every uid-addressed op found the OLDER node. Observed as
+        // rotating a freshly-made group turning a different group entirely.
+        let a: Vec<String> = (0..64).map(|_| super::fresh_uid()).collect();
+        let unique: std::collections::HashSet<&String> = a.iter().collect();
+        assert_eq!(unique.len(), a.len(), "uids collide");
+        assert!(
+            a[0].len() > 16 && a[0].contains('-'),
+            "uuid-shaped, not a counter: {}",
+            a[0]
+        );
+
+        let ids: Vec<String> = (0..64).map(|_| super::doc_id("grad")).collect();
+        let unique: std::collections::HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "document ids collide");
+        assert!(ids[0].starts_with("grad-"), "still readable: {}", ids[0]);
     }
 
     #[test]
