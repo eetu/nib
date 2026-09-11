@@ -1,5 +1,5 @@
 import { distance } from "$lib/model/geometry";
-import type { Point } from "$lib/model/types";
+import type { Point, Subpath } from "$lib/model/types";
 import { collectAnchors, findSnap, snapToGrid } from "$lib/snap";
 import { editor } from "$lib/stores/document.svelte";
 import { tools } from "$lib/stores/tool.svelte";
@@ -7,6 +7,36 @@ import { viewport } from "$lib/stores/viewport.svelte";
 
 /** A drag shorter than this (doc units) is treated as a stray click, not a shape. */
 export const MIN_SHAPE = 0.5;
+
+/** One shape a transform drag is working on: its index, the geometry it transforms *from*, and
+ *  the tilt of its box when the drag began. */
+export type XfTarget = { pi: number; ref: Subpath[]; angle: number };
+
+/**
+ * Deep-clone the geometry of every selected path — the reference a scale/rotate drag transforms
+ * from, so the gesture stays absolute and a slow circle doesn't accumulate rounding. One shape or
+ * a whole group; both transform about the selection box, so a multi-selection moves as one
+ * (Pixelmator-style).
+ *
+ * Each target carries its *own* starting box tilt: a rotation adds the same delta to every member,
+ * so a group whose shapes were already turned differently stays that way.
+ */
+export function snapshotTargets(): XfTarget[] {
+  const doc = editor.doc;
+  if (!doc) return [];
+  return editor.selectedPaths
+    .map((pi) => {
+      const p = doc.paths[pi];
+      return p && !p.deleted
+        ? {
+            pi,
+            ref: JSON.parse(JSON.stringify(p.subpaths)) as Subpath[],
+            angle: p.boxAngle ?? 0,
+          }
+        : null;
+    })
+    .filter((t): t is XfTarget => t !== null);
+}
 
 /** True when the pointer event asks to momentarily bypass snapping — ⌘ (Mac) / Ctrl (Win) held,
  *  the cross-editor convention (Figma/Sketch/Affinity/XD). Suspends BOTH anchor + grid snapping for

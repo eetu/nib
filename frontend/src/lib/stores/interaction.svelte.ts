@@ -28,6 +28,11 @@ class Interaction {
   /** Rubber-band marquee rectangle (document coords) while selecting over empty canvas. */
   marquee = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
 
+  // (A rotation in flight used to be carried here, so the overlay could draw the box the drag
+  // started with rather than re-deriving an axis-aligned one from mid-rotation geometry. It isn't
+  // needed now that a shape's tilt is *stored* — `PathElement.boxAngle`, turned live alongside the
+  // geometry — because bounds measured in the turning frame keep their size on their own.)
+
   clearDrag(): void {
     this.snapPoint = null;
     this.closing = false;

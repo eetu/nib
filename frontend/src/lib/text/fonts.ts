@@ -153,6 +153,23 @@ async function fromInstalledFonts(info: TextInfo): Promise<LoadedFont | null> {
   return null;
 }
 
+/**
+ * The installed families, by name, for a font field to suggest. Nothing is loaded — this asks the
+ * API what exists and keeps the names — so it's cheap next to resolving a face. Empty where the
+ * API is absent or the permission is declined, which includes every browser but Chromium; the
+ * field it feeds still takes typing, because a family is a name in the document rather than a
+ * choice from a list.
+ */
+export async function installedFamilyNames(): Promise<string[]> {
+  if (!canReadInstalledFonts()) return [];
+  try {
+    const faces = await window.queryLocalFonts!();
+    return [...new Set(faces.map((f) => f.family))].sort((a, b) => a.localeCompare(b));
+  } catch {
+    return []; // declined or dismissed — the field is still typeable
+  }
+}
+
 /** What the picker came back with: a usable face, a file that can't be one, or a cancelled dialog. */
 export type PickedFont = { font: LoadedFont } | { error: string } | null;
 

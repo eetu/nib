@@ -26,8 +26,10 @@
   import { editor } from "$lib/stores/document.svelte";
   import { settings } from "$lib/stores/settings.svelte";
   import { tools } from "$lib/stores/tool.svelte";
+  import { canReadInstalledFonts, installedFamilyNames } from "$lib/text/fonts";
   import { outlineText, warmFontFor } from "$lib/text/outline";
-  import { scaleSubpaths, shearSubpaths } from "$lib/tools/transform";
+  import { activePivot } from "$lib/tools/rotate";
+  import { boxCenter, scaleSubpaths, shearSubpaths } from "$lib/tools/transform";
 
   import ColorInput from "./ColorInput.svelte";
   import PaintInput from "./PaintInput.svelte";
@@ -68,6 +70,26 @@
     if (elementSel?.kind === "element")
       editor.setNodeText(elementSel.uid, (e.currentTarget as HTMLInputElement).value);
   }
+
+  /**
+   * Families to suggest in the font field.
+   *
+   * A `font-family` is just text in the document — anything can be typed, and a name the machine
+   * lacks still renders wherever the font exists. Chromium can *list* what's installed
+   * (permission-gated), so where it will, the field offers those names; everywhere else the same
+   * field takes typing, with the generic families as the floor.
+   */
+  const GENERIC_FAMILIES = ["sans-serif", "serif", "monospace"];
+  let installedFamilies = $state<string[]>([]);
+  let askedForFamilies = false;
+
+  async function suggestFamilies(): Promise<void> {
+    if (askedForFamilies || !canReadInstalledFonts()) return;
+    askedForFamilies = true; // one prompt per session, whatever the answer
+    installedFamilies = await installedFamilyNames();
+  }
+
+  const fontSuggestions = $derived([...GENERIC_FAMILIES, ...installedFamilies]);
 
   // Effective style being edited: a selected path (drawn = attributes, imported
   // = attributes + override), else the new-shape defaults when a create tool is
@@ -186,6 +208,13 @@
   }
 
   // The selected path's bounding box, for the numeric transform panel.
+  //
+  // Deliberately the **document-space** box, not the shape's own tilted one (`boxAngle`), even
+  // once the canvas box is turned: X/Y here are the bbox corner, a place you can point at in the
+  // document, whereas the same corner measured in a tilted frame is a coordinate in a space
+  // nothing else in the panel uses. So the numbers and the field below scale along the same axes
+  // they're quoted in. (Pixelmator's own-size-plus-angle panel is a further step, and would want
+  // all four fields moved into the shape's frame together.)
   const bounds = $derived(path ? tightBounds(path.subpaths) : null);
 
   // Edit a bbox field: x/y translate the whole path; w/h scale it about its top-left corner.
@@ -212,10 +241,9 @@
     const deg = evalNum(input.value);
     input.value = "0";
     if (deg === null || deg === 0 || !path || pathIndex === null || !bounds) return;
-    const center = tools.pivot ?? {
-      x: (bounds.minX + bounds.maxX) / 2,
-      y: (bounds.minY + bounds.maxY) / 2,
-    };
+    // The same point the rotate tool would turn about — the box's centre as drawn, so a typed
+    // angle and a dragged one agree even when the box is turned.
+    const center = activePivot() ?? boxCenter(bounds);
     const k = Math.tan((deg * Math.PI) / 180);
     editor.setSubpaths(
       pathIndex,
@@ -227,17 +255,18 @@
   // Rotate the selected path a one-shot angle (deg, clockwise) — the input resets to 0 so each
   // entry applies once. Routes through the semantic `rotatePath` op.
   //
-  // About the rotate tool's pivot when one is placed, else the bbox centre: with the pivot marker
-  // on screen, typing an angle has to mean the same thing as dragging one.
+  // About the rotate tool's pivot when one is placed, else the centre of the box as drawn: with the
+  // pivot marker on screen, typing an angle has to mean the same thing as dragging one — and on a
+  // turned selection the drawn centre isn't the centre of its document-axis bounds.
   function rotateBy(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
     const deg = evalNum(input.value);
     input.value = "0";
     if (deg !== null && deg !== 0 && pathIndex !== null)
-      editor.rotatePath(pathIndex, deg, tools.pivot ?? undefined);
+      editor.rotatePath(pathIndex, deg, activePivot() ?? undefined);
   }
   function rotateQuick(deg: number) {
-    if (pathIndex !== null) editor.rotatePath(pathIndex, deg, tools.pivot ?? undefined);
+    if (pathIndex !== null) editor.rotatePath(pathIndex, deg, activePivot() ?? undefined);
   }
 
   let collapsed = $state<string[]>([]);
@@ -280,7 +309,21 @@
     return hasKids ? "group" : "leaf";
   }
   function treeName(n: RenderNode): string {
-    return n.kind === "element" ? n.attrs.id || n.tag : "";
+    if (n.kind !== "element") return "";
+    // A label's own words name it better than "text" or a generated id ever could — it's how
+    // anyone refers to it out loud ("the title", "Rotate me"). An explicit id still wins, since
+    // someone typed it on purpose.
+    if (n.tag === "text" && !n.attrs.id) {
+      const words = nodeText(n).trim();
+      if (words) return words;
+    }
+    return n.attrs.id || n.tag;
+  }
+
+  /** The words inside an element, its `<tspan>`s included. */
+  function nodeText(n: RenderNode): string {
+    if (n.kind === "text") return n.text;
+    return n.kind === "element" ? n.children.map(nodeText).join("") : "";
   }
 
   // Group context menu: reorder (z), toggle/flip the live-boolean op, ungroup. Works on any tree
@@ -576,15 +619,62 @@
       {/if}
       {#if elTag === "text"}
         <label class="row">
-          <span class="rlbl">size</span>
+          <span class="rlbl">font</span>
+          <!-- Free text with suggestions, not a closed picker: the family is a name in the
+               document, and a font this machine lacks is still the right answer for a file that
+               will be opened somewhere else. -->
           <input
-            type="number"
-            min="0"
-            step="1"
-            value={elAttr("font-size") || "16"}
-            onchange={(e) => setElAttr("font-size", e)}
+            class="dash"
+            type="text"
+            list="nib-font-families"
+            placeholder="sans-serif"
+            spellcheck="false"
+            value={elAttr("font-family")}
+            onfocus={suggestFamilies}
+            onchange={(e) => setElAttr("font-family", e)}
           />
         </label>
+        <datalist id="nib-font-families">
+          {#each fontSuggestions as family (family)}
+            <option value={family}></option>
+          {/each}
+        </datalist>
+        <div class="coords">
+          <label
+            >size <input
+              type="number"
+              min="0"
+              step="1"
+              value={elAttr("font-size") || "16"}
+              onchange={(e) => setElAttr("font-size", e)}
+            /></label
+          >
+          <label
+            >weight <input
+              type="text"
+              placeholder="normal"
+              spellcheck="false"
+              value={elAttr("font-weight")}
+              onchange={(e) => setElAttr("font-weight", e)}
+            /></label
+          >
+        </div>
+        <!-- Slant is two-state, so it's a toggle rather than another text field — lit when on,
+             which is what an accent border means everywhere else in this panel. -->
+        <button
+          class="ghost-btn slant-toggle"
+          class:on={elAttr("font-style") === "italic"}
+          title="italic"
+          onclick={() =>
+            elementSel?.kind === "element" &&
+            editor.setNodeAttr(
+              elementSel.uid,
+              "font-style",
+              elAttr("font-style") === "italic" ? null : "italic",
+            )}
+        >
+          italic
+        </button>
         <ColorInput
           label="fill"
           value={elAttr("fill") || "#000000"}
@@ -996,7 +1086,13 @@
           ondrop={onRowDrop}
           ondragend={onRowDragEnd}
         >
-          <span class="thumb empty"></span>
+          <!-- A label has no geometry to draw a thumbnail from, so it gets the sign for text
+               instead of a blank square: the slot still says what kind of thing the row is. -->
+          {#if n.tag === "text"}
+            <span class="thumb glyph" aria-hidden="true">T</span>
+          {:else}
+            <span class="thumb empty"></span>
+          {/if}
           <button
             class="row-btn"
             class:active={editor.selectedElementUid === n.uid}
@@ -1524,6 +1620,17 @@
     color: var(--halo-accent);
   }
 
+  .slant-toggle {
+    width: 100%;
+    margin-top: 6px;
+    font-style: italic;
+  }
+
+  .slant-toggle.on {
+    border-color: var(--halo-accent);
+    color: var(--halo-accent);
+  }
+
   .comprow .disclosure {
     flex: none;
     display: flex;
@@ -1660,6 +1767,16 @@
 
   .layerlist .eye.on {
     color: var(--halo-accent);
+  }
+
+  /* the text sign in a label row's thumbnail slot */
+  .layerlist .thumb.glyph {
+    display: grid;
+    place-items: center;
+    color: var(--halo-text-muted);
+    font-family: var(--halo-font-heading);
+    font-size: 13px;
+    line-height: 1;
   }
 
   /* a locked row reads as inert (it isn't selectable on the canvas) */
