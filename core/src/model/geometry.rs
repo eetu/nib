@@ -114,6 +114,30 @@ pub fn rotate_subpaths(subpaths: &[Subpath], cx: f64, cy: f64, radians: f64) -> 
         .collect()
 }
 
+/// Scale subpaths (each node's point + both handles) about `(cx, cy)` by `(sx, sy)`, returning
+/// fresh subpaths; the input is untouched. A negative factor mirrors — which is `flip_subpaths` by
+/// another name, and both exist because a flip is the gesture people ask for while a scale is the
+/// number they type. The `ScalePath` kernel.
+pub fn scale_subpaths(subpaths: &[Subpath], cx: f64, cy: f64, sx: f64, sy: f64) -> Vec<Subpath> {
+    let at = |p: Point| -> Point { Point::new(cx + (p.x - cx) * sx, cy + (p.y - cy) * sy) };
+    subpaths
+        .iter()
+        .map(|sp| Subpath {
+            closed: sp.closed,
+            nodes: sp
+                .nodes
+                .iter()
+                .map(|n| PathNode {
+                    point: at(n.point),
+                    handle_in: n.handle_in.map(at),
+                    handle_out: n.handle_out.map(at),
+                    node_type: n.node_type,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 /// Mirror subpaths (each node's point + both handles) across a vertical axis at `cx` (a
 /// *horizontal* flip, left↔right) or a horizontal axis at `cy` (a *vertical* flip, top↕bottom).
 /// Returns fresh subpaths; the input is untouched. The `FlipPath` kernel.

@@ -538,6 +538,16 @@ client-side pro pillars, all running on the core):
     by tree uid)/**`rename`**/**`outline_text`** (one label by id-or-words, or all of them → editable
     glyph outlines; ambiguity is an error listing candidates, since outlining is destructive — and
     `get_document` now lists labels, which have no `#index`, so the LLM can see the words at all).
+    **Transform + history:** **`scale`** (a real `ScalePath` core op, so the browser gets numeric
+    resize too — uniform `factor`, per-axis, or just `toWidth`/`toHeight`), **`move`** (dx/dy or
+    `toX`/`toY` to place the centre), **`mirror`** (copy + flip about a line in one call, renaming
+    left↔right — the symmetric-half move), **`measure`** (a shape's *own* box: width, height, tilt,
+    centre and four corners — and it reads the tilt back out of **rectangle geometry** when
+    `box_angle` is absent, which it is on anything rotated before nib recorded it, so placing work
+    inside an imported tilted frame stops being hand-trig), **`apply_ops`** (a batch, so a scene is
+    one call not thirty), and **`undo`/`redo`** — which can't broadcast as ops (a peer can't replay
+    "undo"), so they ride the `reload` channel the same way a whole-document import does, and their
+    history is the *document's*, shared with the human.
     **Drawing tools (what makes it an editor rather than a shape-assembler):** **`draw_path {d}`**
     takes SVG path data straight into `parse_path_d` — the same road an import takes — so anything
     curved is expressible and lands as ordinary editable anchors; **`duplicate`** and

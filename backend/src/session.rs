@@ -218,6 +218,53 @@ pub fn spawn_evictor(sessions: Sessions, pool: SqlitePool) {
 /// Apply a batch of JSON ops to a project session: mutate the editor (one undo step), broadcast the
 /// ops to the other subscribers, and persist the native model (+ cached SVG) to SQLite. Returns how
 /// many ops applied. Sync (so the MCP tools can call it directly); the DB write is spawned.
+/// Step the document's undo history, then tell every client to reload.
+///
+/// Undo cannot be broadcast as an op. Peers replay ops against their own copy, and "undo" is a
+/// statement about *this* document's history rather than a change anyone else can replay — so the
+/// sync message carries `reload` and clients re-read the model, the same door a wholesale document
+/// replacement goes through. Note the history is the DOCUMENT's, shared with whoever else is
+/// editing: this can take back their step, not only the caller's.
+pub fn step_history(
+    session: &Arc<Mutex<ProjectSession>>,
+    pool: &SqlitePool,
+    steps: usize,
+    undo: bool,
+) -> Result<usize, String> {
+    let (model, svg, id, done) = {
+        let mut s = session.lock().unwrap();
+        let mut done = 0usize;
+        for _ in 0..steps.clamp(1, 100) {
+            let stepped = if undo {
+                s.editor.undo()
+            } else {
+                s.editor.redo()
+            };
+            if !stepped {
+                break; // ran out of history — report how far it got
+            }
+            done += 1;
+        }
+        if done == 0 {
+            return Ok(0);
+        }
+        s.last_touched = Instant::now();
+        let model = s.editor.to_model_json().unwrap_or_default();
+        let svg = s.editor.to_svg();
+        let _ = s.tx.send(SyncMsg {
+            client_id: "mcp".to_string(),
+            ops: Vec::new(),
+            reload: true,
+        });
+        (model, svg, s.project_id, done)
+    };
+    let pool = pool.clone();
+    tokio::spawn(async move {
+        let _ = db::update_project(&pool, id, &model, &svg).await;
+    });
+    Ok(done)
+}
+
 pub fn apply_ops(
     session: &Arc<Mutex<ProjectSession>>,
     pool: &SqlitePool,

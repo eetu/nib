@@ -52,10 +52,15 @@ silhouette; use add_shape only for true rectangles/ellipses/lines/polygons/stars
 set_gradient, boolean_op, group, rename, rotate, flip, duplicate, reorder, apply_op (the full op \
 vocabulary). Mutations return a ONE-LINE ack, not the document — that's deliberate; call \
 get_document when you need the current #indices.\n\
-3a. WORK IN BULK. rotate/flip/set_style/set_gradient/duplicate/reorder each take `index`, or \
-`indices`, or a `name` — and a name that's a GROUP acts on every shape inside it. Tilting a \
-nineteen-shape scene is ONE call naming the group, not nineteen. For a symmetric pair, duplicate \
-then flip the copy about a cx/cy line rather than authoring mirrored coordinates by hand.\n\
+3a. WORK IN BULK. rotate/scale/move/flip/mirror/set_style/set_gradient/duplicate/reorder each \
+take `index`, or `indices`, or a `name` — and a name that's a GROUP acts on every shape inside it. \
+Tilting a nineteen-shape scene is ONE call naming the group, not nineteen. Build a symmetric half \
+with `mirror` (copy + flip about a cx/cy line, renaming left↔right) rather than authoring mirrored \
+coordinates. Laying down many shapes at once? `apply_ops` takes a whole batch in one call.\n\
+3b. SIZE AND PLACE with `scale` (factor, or just say toWidth/toHeight) and `move` (dx/dy, or toX/toY \
+to place the centre) — don't redraw a shape at new coordinates to resize or reposition it.\n\
+3c. Made a mistake? `undo`. But the history is the DOCUMENT's, shared with the human in the \
+browser, so it can take back their step too — use it to reverse what you just did, not to explore.\n\
 4. NAME every shape by its role (add_shape's `name`, or rename afterwards) and GROUP related shapes \
 (group) so the result is a labeled, editable hierarchy a human can navigate — e.g. a 'face' group of \
 'left-eye'/'right-eye'/'mouth' — not an anonymous pile of paths. get_document echoes names back, so \
@@ -75,7 +80,9 @@ you address paths by index again. Targeting by `name` is immune to this — one 
 6a. A ROTATED shape's document-axis bounds are not its size: get_document appends its own size and \
 angle ('own 57.34×74.39 turned -25.69°') when it has been turned. Plan against those, and reuse the \
 angle — tilting new work by the same amount about the same pivot is what makes it sit inside a \
-tilted thing.\n\
+tilted thing. For anything rotated before nib recorded that (an imported or long-ago-turned frame) \
+call `measure`: it reads the tilt back out of the geometry and hands you the centre and the four \
+corners, which is where 'inside' actually is.\n\
 7. TEXT is not a path: a label has no anchors, no #index, and no geometry to boolean or reshape — \
 get_document lists labels separately. add_text places one; outline_text converts one (or all) into \
 editable glyph outlines, after which it behaves like any other shape and renders identically \
@@ -431,6 +438,112 @@ fn resolve_targets(
         }
     }
     Ok(listed)
+}
+
+/// A mirrored shape's name: `crab-claw-left` → `crab-claw-right`. Falls back to a suffix, because
+/// a name that doesn't say a side has no opposite to swap to.
+fn mirrored_name(id: &str) -> String {
+    for (a, b) in [("left", "right"), ("right", "left")] {
+        if id.contains(a) {
+            return id.replace(a, b);
+        }
+    }
+    if id.is_empty() {
+        return "mirrored".into();
+    }
+    format!("{id}-mirrored")
+}
+
+/// The tilt to measure a selection in, and where that tilt came from.
+///
+/// `box_angle` is authoritative when it's there, but it only exists on shapes turned since nib
+/// started recording it — the frame someone rotated last week reports 0. So fall back to reading
+/// the geometry: four corners with square angles IS a rectangle, and its edge direction is the
+/// orientation of whatever it frames. Anything else is honestly axis-aligned.
+fn own_angle(doc: &SvgDocument, targets: &[usize]) -> (f64, &'static str) {
+    let mut shared: Option<f64> = None;
+    for i in targets {
+        let a = doc.paths.get(*i).map_or(0.0, |p| p.box_angle);
+        match shared {
+            None => shared = Some(a),
+            Some(s) if (s - a).abs() < 1e-9 => {}
+            _ => return (0.0, "mixed (shapes disagree)"),
+        }
+    }
+    if let Some(a) = shared.filter(|a| *a != 0.0) {
+        return (a, "boxAngle");
+    }
+    if targets.len() == 1
+        && let Some(p) = doc.paths.get(targets[0])
+        && let Some(angle) = rectangle_angle(&p.subpaths)
+    {
+        return (angle, "rectangle geometry");
+    }
+    (0.0, "axis-aligned")
+}
+
+/// The edge angle of a 4-corner right-angled quad (a rotated rectangle), if that's what this is.
+fn rectangle_angle(subpaths: &[Subpath]) -> Option<f64> {
+    let [sp] = subpaths else { return None };
+    if !sp.closed || sp.nodes.len() != 4 {
+        return None;
+    }
+    let pts: Vec<_> = sp.nodes.iter().map(|n| n.point).collect();
+    // Straight sides only: a corner with handles is a curve, not a rectangle's corner.
+    if sp
+        .nodes
+        .iter()
+        .any(|n| n.handle_in.is_some() || n.handle_out.is_some())
+    {
+        return None;
+    }
+    let edge = |i: usize| (pts[(i + 1) % 4].x - pts[i].x, pts[(i + 1) % 4].y - pts[i].y);
+    let mut longest = (0usize, 0.0f64);
+    for i in 0..4 {
+        let (dx, dy) = edge(i);
+        let (nx, ny) = edge((i + 1) % 4);
+        let (len, nlen) = (dx.hypot(dy), nx.hypot(ny));
+        if len < 1e-9 || nlen < 1e-9 {
+            return None; // a degenerate side isn't a corner
+        }
+        // Squareness as a COSINE, not as a raw dot product: a dot of 0.03 is exact for a 74×57
+        // box whose corners are stored to three decimals, and a tolerance in unscaled units
+        // rejects every real rectangle in a real file.
+        if ((dx * nx + dy * ny) / (len * nlen)).abs() > 1e-3 {
+            return None;
+        }
+        if len > longest.1 {
+            longest = (i, len);
+        }
+    }
+    let (dx, dy) = edge(longest.0);
+    // Report the tilt as the smallest turn that gets there: a rectangle standing on its long side
+    // and the same one on its short side describe the same box, and ±90° apart reads as a bug.
+    let mut a = dy.atan2(dx);
+    while a > std::f64::consts::FRAC_PI_4 {
+        a -= std::f64::consts::FRAC_PI_2;
+    }
+    while a < -std::f64::consts::FRAC_PI_4 {
+        a += std::f64::consts::FRAC_PI_2;
+    }
+    Some(a)
+}
+
+/// The union of several paths' bounds — `(min_x, min_y, w, h)`, measured in a frame tilted by
+/// `angle`. The selection box a multi-target transform pivots about.
+fn union_bounds(doc: &SvgDocument, targets: &[usize], angle: f64) -> Option<(f64, f64, f64, f64)> {
+    let (mut minx, mut miny, mut maxx, mut maxy) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for i in targets {
+        if let Some(p) = doc.paths.get(*i)
+            && let Some((x, y, w, h)) = path_bounds(&p.subpaths, angle)
+        {
+            minx = minx.min(x);
+            miny = miny.min(y);
+            maxx = maxx.max(x + w);
+            maxy = maxy.max(y + h);
+        }
+    }
+    (minx <= maxx).then_some((minx, miny, maxx - minx, maxy - miny))
 }
 
 /// "#3" / "#3, #7 and 2 more" — an ack that names what was touched without echoing the document.
@@ -970,6 +1083,117 @@ pub struct RenderParams {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct ScaleParams {
+    /// The path's #index (from get_document). One of index / indices / name is required.
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// Several #indices, acted on in one call.
+    #[serde(default)]
+    pub indices: Option<Vec<usize>>,
+    /// A shape's or GROUP's name — a group expands to every shape inside it, so one call moves
+    /// the whole thing. Prefer this: it's what your co-author says out loud.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Uniform factor — 1.2 grows by a fifth, 0.5 halves. Use this unless you mean to distort.
+    #[serde(default)]
+    pub factor: Option<f64>,
+    /// Per-axis factors, when you do. Override `factor`.
+    #[serde(default)]
+    pub sx: Option<f64>,
+    #[serde(default)]
+    pub sy: Option<f64>,
+    /// Or say the size you want and let it work out the factor: fit the selection's bounds to
+    /// this width and/or height (viewBox units). Uniform unless you give both.
+    #[serde(rename = "toWidth", default)]
+    pub to_width: Option<f64>,
+    #[serde(rename = "toHeight", default)]
+    pub to_height: Option<f64>,
+    /// Fixed point (viewBox units). Default: the selection's own centre, so it grows in place.
+    #[serde(default)]
+    pub cx: Option<f64>,
+    #[serde(default)]
+    pub cy: Option<f64>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct MoveParams {
+    /// The path's #index (from get_document). One of index / indices / name is required.
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// Several #indices, acted on in one call.
+    #[serde(default)]
+    pub indices: Option<Vec<usize>>,
+    /// A shape's or GROUP's name — a group expands to every shape inside it, so one call moves
+    /// the whole thing. Prefer this: it's what your co-author says out loud.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Relative move (viewBox units).
+    #[serde(default)]
+    pub dx: Option<f64>,
+    #[serde(default)]
+    pub dy: Option<f64>,
+    /// Or place it absolutely: move so the selection's bounds CENTRE lands here. Overrides dx/dy.
+    #[serde(rename = "toX", default)]
+    pub to_x: Option<f64>,
+    #[serde(rename = "toY", default)]
+    pub to_y: Option<f64>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct MirrorParams {
+    /// The path's #index (from get_document). One of index / indices / name is required.
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// Several #indices, acted on in one call.
+    #[serde(default)]
+    pub indices: Option<Vec<usize>>,
+    /// A shape's or GROUP's name — a group expands to every shape inside it, so one call moves
+    /// the whole thing. Prefer this: it's what your co-author says out loud.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// "horizontal" (left↔right, the usual) or "vertical" (top↕bottom).
+    #[serde(default)]
+    pub axis: Option<String>,
+    /// The line to mirror across (viewBox units): `cx` for a horizontal mirror, `cy` for a
+    /// vertical one. Defaults to the selection's own centre, which just makes a flipped copy on
+    /// top of the original — pass the drawing's centreline to build the other half of a body.
+    #[serde(default)]
+    pub cx: Option<f64>,
+    #[serde(default)]
+    pub cy: Option<f64>,
+    /// Name for the copies. Defaults to swapping "left"↔"right" in each source name, else
+    /// appending "-mirrored" — so a mirrored `crab-claw-left` is called `crab-claw-right`.
+    #[serde(rename = "newName", default)]
+    pub new_name: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ApplyOpsParams {
+    /// The operations, in order — each a JSON object tagged by `type`, exactly as `apply_op` takes
+    /// one. They apply as a batch, so a scene costs one call instead of thirty.
+    pub ops: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct HistoryParams {
+    /// How many steps (default 1).
+    #[serde(default)]
+    pub steps: Option<usize>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct MeasureParams {
+    /// The path's #index. One of index / indices / name is required.
+    #[serde(default)]
+    pub index: Option<usize>,
+    #[serde(default)]
+    pub indices: Option<Vec<usize>>,
+    /// A shape's or GROUP's name — a group measures as the union of its shapes.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct DrawPathParams {
     /// SVG path data — the `d` attribute. Absolute or relative, any of M/L/H/V/C/S/Q/T/A/Z; it is
     /// normalised to cubic anchors on the way in, exactly like an imported file.
@@ -1360,6 +1584,276 @@ impl NibMcp {
         let nodes: usize = subpaths.iter().map(|sp| sp.nodes.len()).sum();
         Ok(format!(
             "drew #{idx} \"{rid}\" · {nodes} nodes · {} paths",
+            count_paths(&s)
+        ))
+    }
+
+    #[tool(
+        description = "Resize one shape (`index`), several (`indices`), or a group (`name`). Give a uniform `factor`, per-axis `sx`/`sy`, or just say `toWidth`/`toHeight` and let it work out the factor. Scales about the selection's own centre unless you pass a cx/cy pivot — so a group scales as one body, keeping its internal spacing. The counterpart to rotate and flip; use it instead of redrawing a shape at a different size."
+    )]
+    async fn scale(
+        &self,
+        Parameters(p): Parameters<ScaleParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let (ops, sx, sy, n) = {
+            let s = sess.lock().unwrap();
+            let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+            let targets = resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?;
+            let (bx, by, bw, bh) =
+                union_bounds(doc, &targets, 0.0).ok_or_else(|| bad("nothing there to measure"))?;
+            // "Make it 40 wide" is the way a person says it; turn that into the factor.
+            let fit = |to: Option<f64>, have: f64| to.filter(|_| have > 1e-9).map(|t| t / have);
+            let (fw, fh) = (fit(p.to_width, bw), fit(p.to_height, bh));
+            let (sx, sy) = match (p.sx, p.sy, fw, fh) {
+                (Some(x), Some(y), _, _) => (x, y),
+                (Some(x), None, _, _) => (x, x),
+                (None, Some(y), _, _) => (y, y),
+                // Only one of toWidth/toHeight given → stay uniform, or the shape distorts when
+                // the caller only meant to set its width.
+                (_, _, Some(w), Some(h)) => (w, h),
+                (_, _, Some(w), None) => (w, w),
+                (_, _, None, Some(h)) => (h, h),
+                _ => {
+                    let f = p
+                        .factor
+                        .ok_or_else(|| bad("pass factor, or sx/sy, or toWidth/toHeight"))?;
+                    (f, f)
+                }
+            };
+            if !sx.is_finite() || !sy.is_finite() || sx == 0.0 || sy == 0.0 {
+                return Err(bad("scale factors must be finite and non-zero"));
+            }
+            let (cx, cy) = (p.cx.unwrap_or(bx + bw / 2.0), p.cy.unwrap_or(by + bh / 2.0));
+            let ops: Vec<_> = targets
+                .iter()
+                .map(|i| {
+                    json!({ "type": "scalePath", "path": i, "sx": sx, "sy": sy, "cx": cx, "cy": cy })
+                })
+                .collect();
+            (ops, sx, sy, targets)
+        };
+        let applied = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
+        if applied == 0 {
+            return Err(bad("scale did not apply"));
+        }
+        Ok(if (sx - sy).abs() < 1e-9 {
+            format!("scaled {} by {}×", listed(&n), r(sx))
+        } else {
+            format!("scaled {} by {}× × {}×", listed(&n), r(sx), r(sy))
+        })
+    }
+
+    #[tool(
+        name = "move",
+        description = "Move one shape (`index`), several (`indices`), or a group (`name`) by dx/dy — or pass toX/toY to place the selection's CENTRE at a point. A group moves as one, keeping its internal spacing."
+    )]
+    // Named explicitly: `move` is a Rust keyword, and the raw identifier `r#move` is what the
+    // macro would otherwise publish — a tool nobody can call by the name it obviously has.
+    async fn move_shapes(
+        &self,
+        Parameters(p): Parameters<MoveParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let (ops, dx, dy, n) = {
+            let s = sess.lock().unwrap();
+            let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+            let targets = resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?;
+            let (bx, by, bw, bh) =
+                union_bounds(doc, &targets, 0.0).ok_or_else(|| bad("nothing there to measure"))?;
+            let dx = match p.to_x {
+                Some(x) => x - (bx + bw / 2.0),
+                None => p.dx.unwrap_or(0.0),
+            };
+            let dy = match p.to_y {
+                Some(y) => y - (by + bh / 2.0),
+                None => p.dy.unwrap_or(0.0),
+            };
+            if !dx.is_finite() || !dy.is_finite() {
+                return Err(bad("dx/dy must be finite"));
+            }
+            if dx == 0.0 && dy == 0.0 {
+                return Err(bad("that move is zero — pass dx/dy or toX/toY"));
+            }
+            let ops: Vec<_> = targets
+                .iter()
+                .map(|i| json!({ "type": "movePathBy", "path": i, "dx": dx, "dy": dy }))
+                .collect();
+            (ops, dx, dy, targets)
+        };
+        let applied = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
+        if applied == 0 {
+            return Err(bad("move did not apply"));
+        }
+        Ok(format!("moved {} by {}, {}", listed(&n), r(dx), r(dy)))
+    }
+
+    #[tool(
+        description = "Copy and mirror in one call — the symmetric-half move. Duplicates the target(s), then flips the copies about a cx/cy line, so a left claw becomes a right one that matches exactly. Copies are renamed by swapping left↔right in the source name where it says so. Building the second half by authoring mirrored coordinates is what this replaces."
+    )]
+    async fn mirror(
+        &self,
+        Parameters(p): Parameters<MirrorParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let a = p.axis.as_deref().unwrap_or("horizontal").to_lowercase();
+        let horizontal = !(a.starts_with('v') || a == "y");
+        let (ops, count, first) = {
+            let s = sess.lock().unwrap();
+            let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+            let targets = resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?;
+            let (bx, by, bw, bh) =
+                union_bounds(doc, &targets, 0.0).ok_or_else(|| bad("nothing there to measure"))?;
+            let cx = p.cx.unwrap_or(bx + bw / 2.0);
+            let cy = p.cy.unwrap_or(by + bh / 2.0);
+            let first = doc.paths.len();
+            let mut ops = Vec::new();
+            for (n, i) in targets.iter().enumerate() {
+                let src = &doc.paths[*i];
+                // Mirror the geometry as it is copied — one op per shape instead of a copy
+                // followed by a flip, so an interrupted call can't leave a stack of unflipped
+                // duplicates sitting exactly on top of the originals.
+                let subpaths = if horizontal {
+                    nib_core::model::geometry::flip_subpaths(&src.subpaths, cx, cy, true)
+                } else {
+                    nib_core::model::geometry::flip_subpaths(&src.subpaths, cx, cy, false)
+                };
+                let mut attrs = src.attributes.clone().unwrap_or_default();
+                if let Some(over) = &src.style_override {
+                    for (k, v) in over {
+                        attrs.insert(k.clone(), v.clone());
+                    }
+                }
+                let id = match &p.new_name {
+                    Some(base) if targets.len() > 1 => format!("{base}-{}", n + 1),
+                    Some(base) => base.clone(),
+                    None => mirrored_name(&src.id),
+                };
+                ops.push(
+                    json!({ "type": "addPath", "id": id, "subpaths": subpaths, "attributes": attrs }),
+                );
+            }
+            (ops, targets.len(), first)
+        };
+        let applied = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
+        if applied == 0 {
+            return Err(bad("nothing was mirrored"));
+        }
+        let s = sess.lock().unwrap();
+        Ok(format!(
+            "mirrored {count} shape(s) {} → #{first}…#{} · {} paths · call get_document",
+            if horizontal {
+                "left↔right"
+            } else {
+                "top↕bottom"
+            },
+            tail(&s).0,
+            count_paths(&s)
+        ))
+    }
+
+    #[tool(
+        description = "Measure a shape or group: its document-axis bounds AND its own box — width, height, tilt, centre, and four corners in document coordinates. Use it before placing anything inside a rotated container: a 57×74 frame tilted 26° measures 84×92 on the page, and its corners are the only way to know where 'inside' is. Cheap text, no image."
+    )]
+    async fn measure(
+        &self,
+        Parameters(p): Parameters<MeasureParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let s = sess.lock().unwrap();
+        let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+        let targets = resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?;
+        let (angle, source) = own_angle(doc, &targets);
+        let (ax, ay, aw, ah) =
+            union_bounds(doc, &targets, 0.0).ok_or_else(|| bad("nothing there to measure"))?;
+        let (ox, oy, ow, oh) =
+            union_bounds(doc, &targets, angle).ok_or_else(|| bad("nothing there to measure"))?;
+        // Corners of the own-box, rotated back out of its frame into document coordinates.
+        let (cos, sin) = (angle.cos(), angle.sin());
+        let out = |x: f64, y: f64| json!({"x": r(x * cos - y * sin), "y": r(x * sin + y * cos)});
+        let centre = (ox + ow / 2.0, oy + oh / 2.0);
+        Ok(json!({
+            "shapes": targets.len(),
+            "bounds": {"x": r(ax), "y": r(ay), "w": r(aw), "h": r(ah)},
+            "own": {"w": r(ow), "h": r(oh), "angleDeg": r(angle.to_degrees())},
+            "center": out(centre.0, centre.1),
+            "corners": [
+                out(ox, oy), out(ox + ow, oy), out(ox + ow, oy + oh), out(ox, oy + oh)
+            ],
+            "angleFrom": source,
+        })
+        .to_string())
+    }
+
+    #[tool(
+        description = "Undo the last committed change to this project, or `steps` of them (redo reverses it). NOTE: the history is the DOCUMENT's, shared with the human editing it in the browser — undo can take back their change, not just yours. Use it to reverse a mistake you just made; don't use it to explore."
+    )]
+    async fn undo(
+        &self,
+        Parameters(p): Parameters<HistoryParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let n =
+            session::step_history(&sess, &self.pool, p.steps.unwrap_or(1), true).map_err(bad)?;
+        if n == 0 {
+            return Err(bad("nothing to undo"));
+        }
+        Ok(format!(
+            "undid {n} step(s) → #indices may have changed, call get_document"
+        ))
+    }
+
+    #[tool(
+        description = "Redo what undo took back, or `steps` of them. Shares the document's history with the human — see undo."
+    )]
+    async fn redo(
+        &self,
+        Parameters(p): Parameters<HistoryParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let n =
+            session::step_history(&sess, &self.pool, p.steps.unwrap_or(1), false).map_err(bad)?;
+        if n == 0 {
+            return Err(bad("nothing to redo"));
+        }
+        Ok(format!(
+            "redid {n} step(s) → #indices may have changed, call get_document"
+        ))
+    }
+
+    #[tool(
+        description = "Apply SEVERAL operations in order, as one call — same `type`-tagged objects as apply_op. Use it to lay down a whole scene or a whole shape at once: a drawing that costs thirty round trips one at a time costs one here. Returns a one-line ack; structural ops still renumber #indices, so call get_document after."
+    )]
+    async fn apply_ops(
+        &self,
+        Parameters(p): Parameters<ApplyOpsParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        if p.ops.is_empty() {
+            return Err(bad("no ops given"));
+        }
+        let asked = p.ops.len();
+        let applied = session::apply_ops(&sess, &self.pool, p.ops, "mcp").map_err(bad)?;
+        if applied == 0 {
+            return Err(bad("none of the ops applied (missing targets / no-ops)"));
+        }
+        let s = sess.lock().unwrap();
+        Ok(format!(
+            "applied {applied}/{asked} ops · {} paths · call get_document",
             count_paths(&s)
         ))
     }
@@ -2106,8 +2600,8 @@ impl ServerHandler for NibMcp {
 #[cfg(test)]
 mod tests {
     use super::{
-        component_info, find_by_name, node_path_indices, path_bounds, pick_label,
-        render_png_region, resolve_targets, uids_by_id,
+        component_info, find_by_name, mirrored_name, node_path_indices, own_angle, path_bounds,
+        pick_label, rectangle_angle, render_png_region, resolve_targets, uids_by_id, union_bounds,
     };
 
     #[test]
@@ -2211,6 +2705,72 @@ mod tests {
 
         // An unknown uid reaches nothing rather than panicking or matching everything.
         assert!(node_path_indices(doc, "no-such-uid").is_empty());
+    }
+
+    #[test]
+    fn a_rotated_rectangles_own_frame_is_read_from_its_geometry() {
+        // The case that cost hand-trig twice: a frame rotated before nib recorded box_angle, so
+        // the model has nothing to report. Its four square corners say it anyway.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 190">
+  <path id="frame" fill="none" stroke="#000" d="M 68.718 184.308 L 36.474 117.273 L 88.149 92.417 L 120.394 159.451 Z"/>
+</svg>"##;
+        let mut ed = nib_core::Editor::new();
+        ed.load_source(svg).unwrap();
+        let doc = ed.doc().unwrap();
+        assert_eq!(
+            doc.paths[0].box_angle, 0.0,
+            "nothing stored — that's the point"
+        );
+
+        let (angle, source) = own_angle(doc, &[0]);
+        assert_eq!(source, "rectangle geometry");
+        assert!(
+            (angle.to_degrees() + 25.69).abs() < 0.05,
+            "reads its tilt: {}°",
+            angle.to_degrees()
+        );
+        // And in that frame it measures its true size, not the 84×92 the page sees.
+        let (_, _, ow, oh) = union_bounds(doc, &[0], angle).unwrap();
+        assert!(
+            (ow - 57.34).abs() < 0.05 && (oh - 74.39).abs() < 0.05,
+            "{ow}×{oh}"
+        );
+        let (_, _, aw, ah) = union_bounds(doc, &[0], 0.0).unwrap();
+        assert!(
+            aw > 83.0 && ah > 91.0,
+            "document-axis box is bigger: {aw}×{ah}"
+        );
+
+        // A stored angle wins when there is one, and disagreeing shapes report no shared frame.
+        ed.apply(&nib_core::ops::Op::SetPathBoxAngle {
+            path: 0,
+            angle: 0.25,
+        });
+        assert_eq!(own_angle(ed.doc().unwrap(), &[0]), (0.25, "boxAngle"));
+    }
+
+    #[test]
+    fn a_curve_has_no_rectangle_frame_to_report() {
+        // Only a real rectangle gets the geometric reading — a blob must not be given a confident
+        // angle it doesn't have.
+        let arc = super::parse_path_d("M 10 80 C 20 10, 60 10, 70 80 Z");
+        assert!(rectangle_angle(&arc).is_none(), "curved sides");
+        assert!(
+            rectangle_angle(&super::parse_path_d("M 0 0 L 10 0 L 10 5 Z")).is_none(),
+            "three corners"
+        );
+        // An upright rectangle reads as 0, not 90: the tilt is the smallest turn that gets there.
+        let up = super::parse_path_d("M 0 0 L 10 0 L 10 40 L 0 40 Z");
+        assert!(rectangle_angle(&up).is_some_and(|a| a.abs() < 1e-9));
+    }
+
+    #[test]
+    fn a_mirrored_copy_takes_the_other_sides_name() {
+        assert_eq!(mirrored_name("crab-claw-left"), "crab-claw-right");
+        assert_eq!(mirrored_name("right-eye"), "left-eye");
+        // Nothing to swap: say it's a mirror rather than silently colliding with the original.
+        assert_eq!(mirrored_name("shell"), "shell-mirrored");
+        assert_eq!(mirrored_name(""), "mirrored");
     }
 
     #[test]
