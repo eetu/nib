@@ -436,7 +436,7 @@ fn drawn_path(
         hidden: false,
         locked: false,
         box_angle: 0.0,
-            }
+    }
 }
 
 /// The single funnel for adding a drawn path: use the caller-supplied `uid` (so all clients agree

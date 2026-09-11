@@ -210,7 +210,7 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
                 hidden: false,
                 locked: false,
                 box_angle: 0.0,
-                            }
+            }
         })
         .collect();
 
