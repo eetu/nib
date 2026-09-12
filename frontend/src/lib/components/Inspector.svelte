@@ -27,7 +27,6 @@
   import { boxCenter, scaleSubpaths, shearSubpaths } from "$lib/tools/transform";
 
   import ColorInput from "./ColorInput.svelte";
-  import Layers from "./Layers.svelte";
   import PaintInput from "./PaintInput.svelte";
 
   // Basic (touch-up) mode hides pro sections (arrange/align, path craft, booleans, skew,
@@ -782,8 +781,6 @@
       {/if}
     </section>
   {/if}
-
-  <Layers />
 </aside>
 
 <style>

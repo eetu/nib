@@ -14,30 +14,10 @@
   } from "$lib/backend/client";
   import { sync } from "$lib/backend/sync.svelte";
   import { openMenu } from "$lib/menu.svelte";
-  import { loadState, saveState } from "$lib/persistence";
   import { editor } from "$lib/stores/document.svelte";
 
   let projects = $state<ProjectMeta[]>([]);
   let error = $state<string | null>(null);
-
-  /**
-   * Open/closed, remembered.
-   *
-   * You pick a project at the start of a session and then draw for an hour, so a permanent 200px
-   * column costs canvas for a list nobody is reading. Closed it becomes a rail rather than
-   * disappearing: the way back is where the panel was, and the sync status stays visible, which
-   * is the one thing here that changes on its own.
-   *
-   * Kept local rather than in `settings` — this panel only exists behind the backend flag, and
-   * the standalone build has no projects to show or hide.
-   */
-  const OPEN_KEY = "nib:projectsOpen";
-  let open = $state(loadState<boolean>(OPEN_KEY) ?? true);
-
-  function setOpen(next: boolean) {
-    open = next;
-    saveState(OPEN_KEY, next);
-  }
 
   async function refresh() {
     error = null;
@@ -141,162 +121,65 @@
   }
 </script>
 
-{#if !open}
-  <!-- Closed: a rail, not nothing. The button sits where the panel was, and carries the sync
-       state as a dot so a dropped connection is still visible with the list put away. -->
-  <aside class="rail">
-    <button
-      class="reopen"
-      aria-label="show projects"
-      aria-expanded="false"
-      title="show projects{sync.status === 'connected' ? ' · live sync connected' : ''}"
-      onclick={() => setOpen(true)}
-    >
-      <span class="dot {sync.status}" class:bad={!!error || !!sync.error}></span>
-      <span class="vtitle">projects</span>
-    </button>
-  </aside>
-{:else}
-  <aside class="backend">
-    <div class="head">
-      <span class="title">projects</span>
-      <span class="status {sync.status}" title="live sync">{sync.status}</span>
-      <button
-        class="collapse"
-        aria-label="hide projects"
-        aria-expanded="true"
-        title="hide projects"
-        onclick={() => setOpen(false)}>‹</button
-      >
-    </div>
-    {#if error}<p class="err">{error}</p>{/if}
-    {#if sync.error}<p class="err">{sync.error}</p>{/if}
-    <ul class="list">
-      {#each projects as p (p.id)}
-        <li>
-          {#if renaming === p.id}
-            <input
-              class="rename"
-              bind:value={renameValue}
-              use:autofocus
-              onblur={() => commitRename(p.id)}
-              onkeydown={(e) => {
-                if (e.key === "Enter") commitRename(p.id);
-                else if (e.key === "Escape") renaming = null;
-              }}
-            />
-          {:else}
-            <button
-              class="row"
-              class:active={sync.projectId === p.id}
-              onclick={() => openProject(p.id)}
-              ondblclick={() => startRename(p)}
-              oncontextmenu={(e) => projectMenu(e, p)}
-              title="click to open · double-click to rename · right-click for more"
-            >
-              {p.name}
-            </button>
-          {/if}
-        </li>
-      {/each}
-      {#if projects.length === 0 && !error}<li class="empty">no projects yet</li>{/if}
-    </ul>
-    <div class="actions">
-      <button onclick={create}>new</button>
-      <button onclick={refresh}>refresh</button>
-    </div>
-  </aside>
-{/if}
+<aside class="backend">
+  <!-- No title: the tab says "projects". The sync state stays, because it's the one thing here
+       that changes without anyone touching it. -->
+  <div class="head">
+    <span class="status {sync.status}" title="live sync">{sync.status}</span>
+  </div>
+  {#if error}<p class="err">{error}</p>{/if}
+  {#if sync.error}<p class="err">{sync.error}</p>{/if}
+  <ul class="list">
+    {#each projects as p (p.id)}
+      <li>
+        {#if renaming === p.id}
+          <input
+            class="rename"
+            bind:value={renameValue}
+            use:autofocus
+            onblur={() => commitRename(p.id)}
+            onkeydown={(e) => {
+              if (e.key === "Enter") commitRename(p.id);
+              else if (e.key === "Escape") renaming = null;
+            }}
+          />
+        {:else}
+          <button
+            class="row"
+            class:active={sync.projectId === p.id}
+            onclick={() => openProject(p.id)}
+            ondblclick={() => startRename(p)}
+            oncontextmenu={(e) => projectMenu(e, p)}
+            title="click to open · double-click to rename · right-click for more"
+          >
+            {p.name}
+          </button>
+        {/if}
+      </li>
+    {/each}
+    {#if projects.length === 0 && !error}<li class="empty">no projects yet</li>{/if}
+  </ul>
+  <div class="actions">
+    <button onclick={create}>new</button>
+    <button onclick={refresh}>refresh</button>
+  </div>
+</aside>
 
 <style>
+  /* Tab content now — the panel around it owns the column, the background and the border. */
   .backend {
     display: flex;
+    flex: 1;
+    min-height: 0;
     flex-direction: column;
-    width: 200px;
-    flex: none;
     padding: 8px;
     gap: 6px;
-    background: var(--halo-bg-light);
-    border-right: 1px solid var(--halo-border);
-    overflow-y: auto;
   }
 
   .head {
     display: flex;
     align-items: center;
     gap: 6px;
-  }
-
-  .head .status {
-    margin-left: auto;
-  }
-
-  .collapse {
-    width: 18px;
-    height: 18px;
-    flex: none;
-    padding: 0;
-    border: none;
-    border-radius: var(--halo-radius);
-    background: transparent;
-    color: var(--halo-text-muted);
-    line-height: 1;
-  }
-
-  .collapse:hover {
-    background: var(--halo-bg-main);
-    color: var(--halo-accent);
-  }
-
-  /* --- closed: the rail --- */
-  .rail {
-    display: flex;
-    width: 26px;
-    flex: none;
-    justify-content: center;
-    padding: 8px 0;
-    background: var(--halo-bg-light);
-    border-right: 1px solid var(--halo-border);
-  }
-
-  .reopen {
-    display: flex;
-    width: 100%;
-    align-items: center;
-    flex-direction: column;
-    gap: 8px;
-    padding: 6px 0;
-    border: none;
-    background: transparent;
-    color: var(--halo-text-muted);
-  }
-
-  .reopen:hover {
-    color: var(--halo-accent);
-  }
-
-  .vtitle {
-    writing-mode: vertical-rl;
-    font-family: var(--halo-font-heading);
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  }
-
-  .dot {
-    width: 6px;
-    height: 6px;
-    flex: none;
-    border-radius: 50%;
-    background: var(--halo-border);
-  }
-
-  .dot.connected {
-    background: var(--halo-connected, #2a9d3a);
-  }
-
-  .dot.bad {
-    background: var(--halo-error);
   }
 
   .title {

@@ -426,9 +426,8 @@
   {/if}
 {/snippet}
 <section class="layers">
-  <div class="lhead">
-    <h2>layers</h2>
-    {#if editor.selectedPaths.length > 1 && advanced}
+  {#if editor.selectedPaths.length > 1 && advanced}
+    <div class="lhead">
       <button
         class="ghost-btn"
         title="group selection"
@@ -437,8 +436,8 @@
       >
         <Group size={13} /> group
       </button>
-    {/if}
-  </div>
+    </div>
+  {/if}
   {#if panelTree.length}
     <ul class="layerlist">
       <!-- the whole document — imported + drawn, nested groups + booleans — as one tree;
@@ -554,10 +553,14 @@
     white-space: nowrap;
   }
 
+  /* Standing on its own in the navigator, it carries the padding the Inspector's `section`
+     rhythm used to give it. */
   section.layers {
+    display: flex;
     flex: 1;
     min-height: 0;
-    border-bottom: none;
+    flex-direction: column;
+    padding: 10px 12px;
   }
 
   .bool-badge {

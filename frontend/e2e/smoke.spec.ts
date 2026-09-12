@@ -2381,6 +2381,53 @@ test("a label's typeface is editable and its layer row reads its words", async (
 // A paint answers two questions — *is there one* and *what kind* — and they used to share one row
 // of four chips, which is how "no fill" ended up with two controls and the panel ended up busy.
 // A switch owns the first, a short list owns the second, and only the chosen kind's controls show.
+// The navigator — the left region, answering "what exists?". Layers, projects and files are all
+// lists you go to, pick from and leave; stacked they competed for one column, so they're tabs.
+// Layers is the default: it's the one tied to the document in front of you.
+test("the navigator tabs the lists that answer 'what exists'", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="sea" x="4" y="70" width="92" height="26" fill="#2f7fb2"/><ellipse id="shell" cx="50" cy="50" rx="20" ry="12" fill="#d63a2c"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // The tree lives on the LEFT now, under a tab that names it and counts it.
+  const layersTab = page.getByRole("tab", { name: /layers/i });
+  await expect(layersTab).toHaveAttribute("aria-selected", "true");
+  await expect(layersTab).toContainText("2");
+  await expect(page.locator(".layerlist .row-btn")).toHaveCount(2);
+
+  // It's left of the canvas, and the Inspector is right of it — the family's region map.
+  const navX = (await page.locator("aside.nav").boundingBox())!.x;
+  const canvasX = (await page.locator("svg.canvas").boundingBox())!.x;
+  const inspX = (await page.locator("aside.inspector").boundingBox())!.x;
+  expect(navX).toBeLessThan(canvasX);
+  expect(canvasX).toBeLessThan(inspX);
+
+  // The region folds, and folding leaves a way back rather than nothing.
+  await page.getByRole("button", { name: "hide panel" }).click();
+  await expect(page.locator("aside.nav")).toHaveCount(0);
+  await expect(page.locator(".layerlist")).toHaveCount(0);
+  await page.getByRole("button", { name: "show panel" }).click();
+  await expect(page.locator(".layerlist .row-btn")).toHaveCount(2);
+
+  // Chrome layout is a global pref — it survives a reload, and the document doesn't set it.
+  await page.getByRole("button", { name: "hide panel" }).click();
+  await page.waitForTimeout(50);
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await expect(page.getByRole("button", { name: "show panel" })).toBeVisible();
+});
+
 test("a paint is a switch plus a kind, and off collapses the block", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {

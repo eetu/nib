@@ -360,6 +360,14 @@ Per-area detail in `frontend/CLAUDE.md`.
   selection (shift ×10), ⌘C/V/X/D copy/paste/cut/duplicate (an internal
   `#clipboard`; pastes are `added` paths offset +10,+10), Delete removes the
   selected node or path, Esc returns to the select tool.
+- **The shell has three regions, by role** (halo-interaction's layout): **navigate** on the left
+  (`SidePanel` — layers · projects · files as *tabs*; they're all lists you go to, pick from and
+  leave, and stacked they competed for one column), the **surface** in the middle, and the
+  **subject** on the right (`Inspector` — properties of what's selected, or the defaults a create
+  tool is about to use). Layers is the navigator's default tab: it's the list tied to the document
+  in front of you rather than the session around it. Each region folds, and the fold is a *global*
+  pref — chrome layout doesn't belong to a document. *(Still to come: the tool rail moves beside
+  the subject panel, which is the half of the map nib hasn't adopted yet.)*
 - **Shared state = rune stores** (`frontend/src/lib/stores/*.svelte.ts`), read
   directly, never prop-drilled: `document` (doc + selection + mutations +
   history), `viewport`, `tool` (+ snap/grid settings), `workspace`, `interaction`

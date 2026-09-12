@@ -11,9 +11,9 @@
 </script>
 
 <nav class="filelist">
+  <!-- The folder's name still earns its line: the tab says "files", this says which folder. -->
   <div class="head">
     <span class="dir" title={workspace.dirName ?? ""}>{workspace.dirName}</span>
-    <span class="count">{workspace.files.length}</span>
   </div>
   <ul>
     {#each workspace.files as file (file.name)}
@@ -55,10 +55,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .count {
-    margin-left: auto;
   }
 
   ul {
