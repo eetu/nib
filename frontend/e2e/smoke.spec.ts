@@ -392,8 +392,10 @@ test("gradients: convert a shape's fill to a linear gradient", async ({ page }) 
   await page.keyboard.press("v");
   await expect(page.locator("svg.canvas g.overlay polygon.sel-box")).toBeAttached();
 
-  // Fill → linear gradient: a <linearGradient> def appears and the shape references it.
-  await page.locator(".paint").filter({ hasText: "fill" }).getByRole("button", { name: "linear" }).click();
+  // Fill → linear gradient. A paint with no fill has no kind to change, so it's switched on
+  // first — the kind list only exists for a paint that exists (Pixelmator's split).
+  await page.getByLabel("fill on").click();
+  await page.getByLabel("fill kind").selectOption("linear");
   await expect(page.locator("svg.canvas defs linearGradient")).toHaveCount(1);
   await expect(page.locator("svg.canvas g.artwork path")).toHaveAttribute("fill", /url\(#grad-/);
 
@@ -1605,10 +1607,10 @@ test("a source-defined gradient fill is editable in place (adopts on edit, keeps
   await page.keyboard.press("v");
   await page.locator(".layerlist .row-btn").first().click();
 
-  // A plain objectBoundingBox gradient is now editable in place: "linear" mode active + the
-  // editable bar with its two stops (not a read-only preview of the raw url string).
+  // A plain objectBoundingBox gradient is now editable in place: the kind reads "linear" and the
+  // editable bar shows its two stops (not a read-only preview of the raw url string).
   const fill = page.locator(".paint").filter({ hasText: "fill" });
-  await expect(fill.getByRole("button", { name: "linear", exact: true })).toHaveClass(/active/);
+  await expect(page.getByLabel("fill kind")).toHaveValue("linear");
   const bar = fill.locator(".bar.editable");
   await expect(bar).toBeVisible();
   await expect(fill.locator(".marker")).toHaveCount(2);
@@ -1799,11 +1801,7 @@ test("clicking a filled shape's interior selects it (fill hit-test)", async ({ p
   await expect(page.locator("svg.canvas g.artwork path")).not.toHaveAttribute("d", beforeD ?? "");
 
   // Give it a stroke first — cap/width/dash are inert (disabled) without one.
-  await page
-    .locator(".paint")
-    .filter({ hasText: "stroke" })
-    .getByRole("button", { name: "solid", exact: true })
-    .click();
+  await page.getByLabel("stroke on").click();
 
   // Styling round-trips through the core: set the stroke cap and see it on the element.
   await page
@@ -2154,7 +2152,10 @@ test("a label's typeface is editable and its layer row reads its words", async (
 // The paint field's keyword picker. `none` used to sit twice in the fill block — once as a mode
 // chip, once as a `—` button on the row below — which reads as a mistake even though both worked.
 // The button is now a picker for the values a swatch can't reach, and it leaves `none` to the chip.
-test("a paint's SVG keywords are reachable without duplicating the none chip", async ({ page }) => {
+// A paint answers two questions — *is there one* and *what kind* — and they used to share one row
+// of four chips, which is how "no fill" ended up with two controls and the panel ended up busy.
+// A switch owns the first, a short list owns the second, and only the chosen kind's controls show.
+test("a paint is a switch plus a kind, and off collapses the block", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 30_000,
@@ -2171,24 +2172,29 @@ test("a paint's SVG keywords are reachable without duplicating the none chip", a
   await page.locator(".layerlist .row-btn").first().click();
 
   const shape = page.locator("svg.canvas g.artwork path");
-  const fill = page.locator(".paint").filter({ hasText: "fill" }).first();
-  const kinds = fill.getByLabel("fill value");
+  const fillOn = page.getByLabel("fill on");
+  const fillKind = page.getByLabel("fill kind");
 
-  // Exactly one control in the fill block sets `none`: the mode chip.
-  await expect(fill.getByRole("button", { name: "—", exact: true })).toHaveCount(1);
-  await expect(kinds.locator("option")).toHaveText(["colour", "currentColor"]);
+  // On, and a colour. The old four-chip row is gone entirely.
+  await expect(fillOn).toHaveAttribute("aria-checked", "true");
+  await expect(fillKind).toHaveValue("color");
+  await expect(page.locator(".paint").filter({ hasText: "fill" }).locator(".pmode")).toHaveCount(0);
 
-  // The keyword the swatch can't express is now reachable.
-  await kinds.selectOption("currentColor");
+  // `currentColor` is a KIND, not a separate keyword picker beside the field.
+  await fillKind.selectOption("currentColor");
   await expect(shape).toHaveAttribute("fill", "currentColor");
+  await fillKind.selectOption("color");
+  await expect(shape).toHaveAttribute("fill", "#3b82f6"); // and the colour came back
 
-  // Coming back hands the colour back, rather than resetting to black.
-  await kinds.selectOption("color");
-  await expect(shape).toHaveAttribute("fill", "#3b82f6");
-
-  // And the chip still owns `none`.
-  await fill.getByRole("button", { name: "—", exact: true }).click();
+  // The switch owns "none" — one control, and turning it off takes the whole block with it.
+  await fillOn.click();
   await expect(shape).toHaveAttribute("fill", "none");
+  await expect(fillKind).toHaveCount(0);
+  await expect(page.getByLabel("fill eyedropper")).toHaveCount(0);
+
+  // Back on restores the colour rather than dumping you at black.
+  await fillOn.click();
+  await expect(shape).toHaveAttribute("fill", "#3b82f6");
 });
 
 test("double-click a text label edits it in place", async ({ page }) => {
