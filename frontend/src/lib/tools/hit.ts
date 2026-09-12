@@ -202,22 +202,50 @@ function resolveSampled(paint: string): string | null {
   return v;
 }
 
-/** The colour under `docPoint` for the eyedropper — the front-most shape whose body contains the
- *  point, resolved to its fill (or stroke if fill is `none`); fully-transparent shapes fall through
- *  to the one below. Includes locked shapes (sampling is read-only). `null` = nothing there. */
+/** Distance from `docPoint` to a path's outline, in document units. `Infinity` if it has none. */
+function distanceToOutline(subpaths: Subpath[], docPoint: Point): number {
+  let best = Infinity;
+  for (const sp of subpaths) {
+    const hit = nearestOnSubpath(sp, docPoint);
+    if (hit && hit.distance < best) best = hit.distance;
+  }
+  return best;
+}
+
+/**
+ * The colour under `docPoint` for the eyedropper — what is actually *rendered* there, taken from
+ * the front-most shape that paints the point. Includes locked shapes (sampling is read-only).
+ * `null` = nothing there.
+ *
+ * The subtlety is unfilled shapes. `pointInPath` is a winding test on geometry and knows nothing
+ * about paint, so a `fill="none"` shape "contains" every point inside its outline even though you
+ * can see straight through it. A picture frame drawn as an unfilled rect and brought to the front
+ * therefore answered for the entire scene: every click landed on the frame, fell past its `none`
+ * fill, and returned its stroke — the same colour everywhere, whatever you pointed at.
+ *
+ * So a shape only answers where it paints: its fill anywhere inside, its stroke only within the
+ * stroke's own width of the outline. Otherwise the point is see-through here and the shape below
+ * gets asked.
+ */
 export function sampleFillAt(docPoint: Point): string | null {
   const doc = editor.doc;
   if (!doc) return null;
   const defUids = editor.defPathUids;
+  // A couple of screen pixels of forgiveness, so a thin stroke is still pickable when zoomed out.
+  const slack = viewport.toDocLength(2);
   for (let i = doc.paths.length - 1; i >= 0; i--) {
     const p = doc.paths[i];
     if (p.deleted || defUids.has(p.uid ?? "")) continue;
-    if (!pointInPath(p.subpaths, docPoint)) continue;
-    const fill = p.styleOverride?.fill ?? p.attributes?.fill ?? "#000000";
-    if (fill !== "none") return resolveSampled(fill);
-    const stroke = p.styleOverride?.stroke ?? p.attributes?.stroke;
-    if (stroke && stroke !== "none") return resolveSampled(stroke);
-    // both none → see-through here; keep looking at the shape below.
+    const style = (k: string) => p.styleOverride?.[k] ?? p.attributes?.[k];
+    const fill = style("fill") ?? "#000000";
+    if (fill !== "none" && pointInPath(p.subpaths, docPoint)) return resolveSampled(fill);
+    const stroke = style("stroke");
+    if (stroke && stroke !== "none") {
+      const width = Number(style("stroke-width") ?? "1");
+      const reach = (Number.isFinite(width) ? width : 1) / 2 + slack;
+      if (distanceToOutline(p.subpaths, docPoint) <= reach) return resolveSampled(stroke);
+    }
+    // see-through here; keep looking at the shape below.
   }
   return null;
 }

@@ -1083,6 +1083,58 @@ test("a drawn shape gets a real colour, not currentColor", async ({ page }) => {
   ).toHaveValue(stroke!);
 });
 
+// An UNFILLED shape is see-through, and the eyedropper has to agree. `pointInPath` is a winding
+// test on geometry that knows nothing about paint, so a `fill="none"` frame brought to the front
+// "contained" the whole scene: every click landed on the frame, fell past its none-fill, and
+// returned its stroke — the same colour everywhere, whatever you pointed at.
+test("an unfilled shape on top doesn't answer for the scene underneath", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  // A picture-frame document, like the one this came from: coloured bands, and an unfilled
+  // rectangle over the lot (last = on top).
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="sky" x="4" y="4" width="92" height="44" fill="#a9d9f0"/><rect id="sea" x="4" y="48" width="92" height="48" fill="#2f7fb2"/><rect id="target" x="0" y="0" width="10" height="10" fill="#ffffff"/><rect id="frame" x="2" y="2" width="96" height="96" fill="none" stroke="#111111" stroke-width="2"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  const at = (fx: number, fy: number) => ({
+    x: box.x + box.width * fx,
+    y: box.y + box.height * fy,
+  });
+
+  // Select the little white target, then sample the sky *through* the frame's interior.
+  await page.locator(".layerlist .row-btn").filter({ hasText: "target" }).click();
+  const fillHex = page.locator(".paint").filter({ hasText: "fill" }).locator("input.hex");
+
+  await page.getByLabel("fill eyedropper").click();
+  const sky = at(0.5, 0.25);
+  await page.mouse.click(sky.x, sky.y);
+  await expect(fillHex).toHaveValue("#a9d9f0");
+
+  // The sea too — different point, different colour. That's the part that was broken: every
+  // point gave the same answer.
+  await page.getByLabel("fill eyedropper").click();
+  const sea = at(0.5, 0.75);
+  await page.mouse.click(sea.x, sea.y);
+  await expect(fillHex).toHaveValue("#2f7fb2");
+
+  // And the frame's stroke is still sampleable where it actually paints — on the line itself.
+  const frameRect = await page
+    .locator('svg.canvas g.artwork path[stroke="#111111"]')
+    .evaluate((el) => (el as SVGGraphicsElement).getBoundingClientRect().toJSON());
+  await page.getByLabel("fill eyedropper").click();
+  await page.mouse.click(frameRect.x + 1, frameRect.y + frameRect.height / 2);
+  await expect(fillHex).toHaveValue("#111111");
+});
+
 test("the eyedropper resolves currentColor and gradients to an actual colour", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
