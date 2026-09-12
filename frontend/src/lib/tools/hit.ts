@@ -162,6 +162,46 @@ export function hitTest(screen: Point): Hit {
   return { kind: "empty" };
 }
 
+/** "rgb(59, 130, 246)" → "#3b82f6". `null` for anything that isn't an rgb triple. */
+function rgbToHex(css: string): string | null {
+  const m = css.match(/rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i);
+  if (!m) return null;
+  const hex = m
+    .slice(1, 4)
+    .map((n) => Math.round(Number(n)).toString(16).padStart(2, "0"))
+    .join("");
+  return `#${hex}`;
+}
+
+/**
+ * A sampled paint, resolved to an actual colour.
+ *
+ * An eyedropper's job is "give me *that* colour", so handing back a paint that only *refers* to one
+ * defeats it. `currentColor` is the case that bites: it's the default stroke every pen-drawn path
+ * carries, so sampling your own strokes used to fill the field with the literal word — a value that
+ * looks like whatever the theme's text colour is and changes when the theme does.
+ *
+ * `currentColor` resolves to what it actually renders as, read off the artwork it inherits from; a
+ * gradient resolves to its first stop, which is the honest single answer to "what colour is that";
+ * a plain colour (hex, or a named one like `red`) is already an answer.
+ */
+function resolveSampled(paint: string): string | null {
+  const v = paint.trim();
+  if (!v || v === "none") return null;
+  if (v.startsWith("url(")) {
+    const id = v.slice(v.indexOf("#") + 1, v.lastIndexOf(")"));
+    const stop =
+      editor.gradientById(id)?.stops[0]?.color ?? editor.importedGradients.get(id)?.stops[0]?.color;
+    return stop ?? null;
+  }
+  if (v === "currentColor" || v === "inherit") {
+    const el = typeof document === "undefined" ? null : document.querySelector("svg.canvas");
+    const computed = el ? getComputedStyle(el).color : "";
+    return rgbToHex(computed);
+  }
+  return v;
+}
+
 /** The colour under `docPoint` for the eyedropper — the front-most shape whose body contains the
  *  point, resolved to its fill (or stroke if fill is `none`); fully-transparent shapes fall through
  *  to the one below. Includes locked shapes (sampling is read-only). `null` = nothing there. */
@@ -174,9 +214,9 @@ export function sampleFillAt(docPoint: Point): string | null {
     if (p.deleted || defUids.has(p.uid ?? "")) continue;
     if (!pointInPath(p.subpaths, docPoint)) continue;
     const fill = p.styleOverride?.fill ?? p.attributes?.fill ?? "#000000";
-    if (fill !== "none") return fill;
+    if (fill !== "none") return resolveSampled(fill);
     const stroke = p.styleOverride?.stroke ?? p.attributes?.stroke;
-    if (stroke && stroke !== "none") return stroke;
+    if (stroke && stroke !== "none") return resolveSampled(stroke);
     // both none → see-through here; keep looking at the shape below.
   }
   return null;

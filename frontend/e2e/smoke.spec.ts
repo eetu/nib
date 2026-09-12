@@ -1041,6 +1041,41 @@ test("eyedropper samples one shape's fill onto the selection", async ({ page }) 
 // Arming the eyedropper BORROWS the current tool; it doesn't switch away from it. Switching runs
 // the outgoing tool's cleanup — and the pen's cleanup is "finish the path" — so picking a colour
 // for the pen used to end the path you were drawing and leave you on the select tool.
+// An eyedropper's job is "give me THAT colour", so a paint that only *refers* to one defeats it.
+// `currentColor` is the case that bit: it's the default stroke every pen-drawn path carries, so
+// sampling your own strokes filled the field with the literal word instead of a colour.
+test("the eyedropper resolves currentColor and gradients to an actual colour", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  // A big filled rect whose fill is `currentColor` — what a pen-drawn shape looks like.
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="a" x="0" y="0" width="10" height="10" fill="#ff0000"/><rect id="b" x="12" y="12" width="76" height="76" fill="currentColor"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+
+  // Select the small red rect (row 1 — top-of-stack shows first), then sample the big one.
+  await page.locator(".layerlist .row-btn").nth(1).click();
+  await page.getByLabel("fill eyedropper").click();
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+
+  // A real colour, not the word — and the field shows one, so the picker has something to open on.
+  const fill = await page.locator("svg.canvas g.artwork path").first().getAttribute("fill");
+  expect(fill).not.toBe("currentColor");
+  expect(fill).toMatch(/^#[0-9a-f]{6}$/i);
+  await expect(page.locator(".paint").filter({ hasText: "fill" }).locator("input.hex")).toHaveValue(
+    /^#[0-9a-f]{6}$/i,
+  );
+});
+
 test("the eyedropper borrows the current tool and hands it back", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
