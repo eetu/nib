@@ -484,7 +484,15 @@ client-side pro pillars, all running on the core):
      shape's own edges. Shapes needed the tilt *stored* (`PathElement::box_angle`, a nib annotation
      like `locked`); a text/image/use element already stored it as a node `transform`, so its box
      is measured from `getBBox` × `getScreenCTM` instead. Both draw through one `BoxFrame` of
-     screen-space points. See the two conventions above. **Next: freeze the editor UI (1.0 RC).**
+     screen-space points. See the two conventions above.
+  8. **The editor is frozen; the MCP surface is what's still moving.** Every drawing tool added to
+     `/mcp` (`draw_path`, bulk targeting, `scale`/`move`/`mirror`/`measure`, `apply_ops`,
+     `undo`) came out of *actually drawing something through it* and noticing where it fought back
+     — and each session has found real bugs the unit tests didn't (a uid minted from a per-process
+     counter, a flip pivot silently ignored, a name that couldn't find a shape just drawn). That
+     loop hasn't converged, so **1.0 waits on more pair-drawing and fine-tuning of the tool
+     surface**, not on more editor features. Drive the tools against a live server when changing
+     them; compiling and unit tests have missed every one of those bugs.
 - **Editor track = A → B → E → finalize; Phase C rides alongside.** Phase E is the
   *editor's capstone* — once it lands the editor is feature-complete and the remaining work
   is **finalization** (coverage/fidelity on a real-SVG corpus, robustness + large-doc perf,
@@ -529,12 +537,41 @@ client-side pro pillars, all running on the core):
     **`find`** (resolve a co-author's *name* — "the hand" — to candidate objects with #index +
     bounds so the LLM disambiguates "left or right?" instead of guessing), `get_svg`,
     **`render_document`** (rasterize to a PNG via `resvg` + return it as an **image** so the LLM can
-    *see*/verify its work; opt-in `width` cost knob — labels render with the host's system fonts via
+    *see*/verify its work; opt-in `width` cost knob, plus `around` a name / an explicit `x,y,w,h`
+    to **crop** — rendered through a translate into a region-sized pixmap, never by scaling the
+    whole document and cutting it up — labels render with the host's system fonts via
     fontdb, so a `scratch` image still draws none), **`apply_op`** (full op vocabulary), + ergonomic
-    wrappers `add_shape` (optional `name`)/`set_style`/`boolean_op`/**`group`** (indices→`GroupNodes`
+    wrappers `add_shape` (optional `name`; a `line` takes `x2,y2` for its far endpoint, since a
+    bounding box can only draw the ↘ diagonal)/`set_style`/`boolean_op`/**`group`** (indices→`GroupNodes`
     by tree uid)/**`rename`**/**`outline_text`** (one label by id-or-words, or all of them → editable
     glyph outlines; ambiguity is an error listing candidates, since outlining is destructive — and
-    `get_document` now lists labels, which have no `#index`, so the LLM can see the words at all). The surface is **shaped to coach the model** (mirrors the sibling
+    `get_document` now lists labels, which have no `#index`, so the LLM can see the words at all).
+    **Transform + history:** **`scale`** (a real `ScalePath` core op, so the browser gets numeric
+    resize too — uniform `factor`, per-axis, or just `toWidth`/`toHeight`), **`move`** (dx/dy or
+    `toX`/`toY` to place the centre), **`mirror`** (copy + flip about a line in one call, renaming
+    left↔right — the symmetric-half move), **`measure`** (a shape's *own* box: width, height, tilt,
+    centre and four corners — and it reads the tilt back out of **rectangle geometry** when
+    `box_angle` is absent, which it is on anything rotated before nib recorded it, so placing work
+    inside an imported tilted frame stops being hand-trig), **`apply_ops`** (a batch, so a scene is
+    one call not thirty), and **`undo`/`redo`** — which can't broadcast as ops (a peer can't replay
+    "undo"), so they ride the `reload` channel the same way a whole-document import does, and their
+    history is the *document's*, shared with the human.
+    **Drawing tools (what makes it an editor rather than a shape-assembler):** **`draw_path {d}`**
+    takes SVG path data straight into `parse_path_d` — the same road an import takes — so anything
+    curved is expressible and lands as ordinary editable anchors; **`duplicate`** and
+    **`set_gradient`** (a real `<defs>` entry with the browser's own angle parameterisation, so the
+    human can pick up its stops). **Every transform takes `index` OR `indices` OR a `name`**, and a
+    name that resolves to a **`<g>` expands to every shape inside it** — tilting a 19-shape scene is
+    one call, not nineteen; a multi-target `rotate` with no pivot defaults to the *shared* centre,
+    since spinning each shape in place is never what "rotate the crab" means. Name resolution
+    matches **`PathElement.id` as well as tree `id` attrs**: a shape you just drew carries its name
+    on the path and has no tree id, so an attrs-only lookup made every fresh shape unaddressable by
+    the name the ack had just printed. `flip` fills in whichever pivot axis the caller omits,
+    because the op falls back to the shape's own centre unless *both* are given — `flip {cx}` alone
+    would otherwise mirror in place, silently. `get_document` appends a turned shape's **own size +
+    angle** (from `box_angle`) beside its document-axis box, which for a 57×74 frame tilted 26°
+    reads 84×92 and is nobody's idea of its size; its bounds also **include control handles**, or an
+    arc drawn from two anchors reports height 0. The surface is **shaped to coach the model** (mirrors the sibling
     `../maquette`): a workflow playbook in the server `instructions`, per-tool descriptions that say
     when *not* to spend an expensive call, and mutations that return a **one-line ack** (never the
     whole doc) — so the LLM names + groups shapes into a labeled hierarchy and spends few tokens per

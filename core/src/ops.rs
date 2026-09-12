@@ -157,6 +157,19 @@ pub enum Op {
         cy: Option<f64>,
     },
 
+    /// Scale a path's geometry by `sx`/`sy` about a pivot — default pivot is the path's
+    /// bounding-box centre; `cx`/`cy` override it (a shared pivot scales a multi-selection as one).
+    /// The semantic resize a numeric field and the MCP `scale` tool funnel through, so growing a
+    /// shape is an op like rotating one rather than a wholesale geometry rewrite.
+    ScalePath {
+        path: usize,
+        sx: f64,
+        sy: f64,
+        #[serde(default)]
+        cx: Option<f64>,
+        #[serde(default)]
+        cy: Option<f64>,
+    },
     /// Set the orientation of a path's selection box, in radians clockwise (see
     /// `PathElement::box_angle`). The interactive rotate drag writes geometry live and sets this
     /// alongside it; `RotatePath` accumulates it on its own, so numeric rotation and MCP agree
@@ -610,6 +623,12 @@ fn op_is_finite(op: &Op) -> bool {
             cx.is_none_or(f64::is_finite) && cy.is_none_or(f64::is_finite)
         }
         Op::SetPathBoxAngle { angle, .. } => angle.is_finite(),
+        Op::ScalePath { sx, sy, cx, cy, .. } => {
+            sx.is_finite()
+                && sy.is_finite()
+                && cx.is_none_or(f64::is_finite)
+                && cy.is_none_or(f64::is_finite)
+        }
         Op::SetDropShadow {
             dx,
             dy,
@@ -775,6 +794,38 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             doc.paths[*path].subpaths = rot;
             // The box turns with the shape, so a resize afterwards still pulls along its own axes.
             doc.paths[*path].box_angle += degrees.to_radians();
+            doc.paths[*path].edited = true;
+            true
+        }
+        Op::ScalePath {
+            path,
+            sx,
+            sy,
+            cx,
+            cy,
+        } => {
+            // A zero factor collapses the shape to a line or a point, which no undo-less caller
+            // means and no drag can produce; refuse it rather than destroy the geometry.
+            if *sx == 0.0 || *sy == 0.0 {
+                return false;
+            }
+            let scaled = {
+                let Some(p) = doc.paths.get(*path) else {
+                    return false;
+                };
+                if p.deleted {
+                    return false;
+                }
+                let (px, py) = match (cx, cy) {
+                    (Some(x), Some(y)) => (*x, *y),
+                    _ => match crate::model::geometry::subpaths_bounds(&p.subpaths) {
+                        Some(b) => ((b.min_x + b.max_x) / 2.0, (b.min_y + b.max_y) / 2.0),
+                        None => return false,
+                    },
+                };
+                crate::model::geometry::scale_subpaths(&p.subpaths, px, py, *sx, *sy)
+            };
+            doc.paths[*path].subpaths = scaled;
             doc.paths[*path].edited = true;
             true
         }
@@ -1613,6 +1664,81 @@ mod tests {
             }
         ));
         assert_eq!(doc3.paths[0].subpaths[0].nodes[1].point, before);
+    }
+
+    #[test]
+    fn scale_resizes_about_a_pivot_and_refuses_to_collapse() {
+        let mut doc = doc_from("M 0 0 L 2 0 L 2 1", true);
+        let bounds = |d: &crate::model::types::SvgDocument| {
+            crate::model::geometry::subpaths_bounds(&d.paths[0].subpaths).unwrap()
+        };
+
+        // About an explicit pivot: the pivot stays put and everything else moves away from it.
+        assert!(apply(
+            &mut doc,
+            &Op::ScalePath {
+                path: 0,
+                sx: 2.0,
+                sy: 3.0,
+                cx: Some(0.0),
+                cy: Some(0.0),
+            }
+        ));
+        let b = bounds(&doc);
+        assert!(b.min_x.abs() < 1e-9 && b.min_y.abs() < 1e-9, "pivot held");
+        assert!((b.max_x - 4.0).abs() < 1e-9, "x doubled: {}", b.max_x);
+        assert!((b.max_y - 3.0).abs() < 1e-9, "y tripled: {}", b.max_y);
+
+        // Default pivot is the shape's own centre, so it grows in place.
+        let before = bounds(&doc);
+        let centre = (
+            (before.min_x + before.max_x) / 2.0,
+            (before.min_y + before.max_y) / 2.0,
+        );
+        assert!(apply(
+            &mut doc,
+            &Op::ScalePath {
+                path: 0,
+                sx: 2.0,
+                sy: 2.0,
+                cx: None,
+                cy: None,
+            }
+        ));
+        let after = bounds(&doc);
+        assert!(
+            (((after.min_x + after.max_x) / 2.0) - centre.0).abs() < 1e-9
+                && (((after.min_y + after.max_y) / 2.0) - centre.1).abs() < 1e-9,
+            "centre held"
+        );
+        assert!((after.max_x - after.min_x - 2.0 * (before.max_x - before.min_x)).abs() < 1e-9);
+
+        // A negative factor mirrors (same box, reflected); zero and non-finite are refused.
+        let flipped = bounds(&doc);
+        assert!(apply(
+            &mut doc,
+            &Op::ScalePath {
+                path: 0,
+                sx: -1.0,
+                sy: 1.0,
+                cx: None,
+                cy: None,
+            }
+        ));
+        let m = bounds(&doc);
+        assert!((m.max_x - m.min_x - (flipped.max_x - flipped.min_x)).abs() < 1e-9);
+        for (sx, sy) in [(0.0, 1.0), (1.0, f64::NAN)] {
+            assert!(!apply(
+                &mut doc,
+                &Op::ScalePath {
+                    path: 0,
+                    sx,
+                    sy,
+                    cx: None,
+                    cy: None
+                }
+            ));
+        }
     }
 
     #[test]
