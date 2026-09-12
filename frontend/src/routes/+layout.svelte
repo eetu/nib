@@ -111,6 +111,43 @@
     color: var(--halo-accent);
   }
 
+  /* Row recipes shared by every list that has rows — the layers tree and the components
+     list both use them. Here rather than copied into each: the copies are how they drift. */
+  :global(.empty) {
+    margin: 0;
+    color: var(--halo-text-muted);
+    font-style: italic;
+  }
+
+  :global(.row-btn) {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    padding: 5px 6px;
+    border: none;
+    border-radius: var(--halo-radius-pill);
+    background: transparent;
+    text-align: left;
+    color: var(--halo-text-main);
+  }
+
+  :global(.row-btn:hover) {
+    background: var(--halo-bg-main);
+  }
+
+  :global(.row-btn.active) {
+    background: var(--halo-accent-soft);
+    color: var(--halo-accent);
+  }
+
+  :global(.rename) {
+    flex: 1;
+    min-width: 0;
+    margin: 2px 0;
+    font-size: 12px;
+  }
+
   :global(input),
   :global(select) {
     font-family: inherit;
