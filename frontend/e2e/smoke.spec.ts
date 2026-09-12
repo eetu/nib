@@ -1087,6 +1087,53 @@ test("a drawn shape gets a real colour, not currentColor", async ({ page }) => {
 // test on geometry that knows nothing about paint, so a `fill="none"` frame brought to the front
 // "contained" the whole scene: every click landed on the frame, fell past its none-fill, and
 // returned its stroke — the same colour everywhere, whatever you pointed at.
+// The eyedropper shows what it would take before it takes it. Deliberately NOT a pixel magnifier:
+// nib samples the model, so zoomed pixels would show antialiased edges it can never return. The
+// exact value plus the named shape it comes from is the answer a vector editor can actually give.
+test("the eyedropper's loupe reads the colour under the cursor", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="sky" x="4" y="4" width="92" height="44" fill="#a9d9f0"/><rect id="sea" x="4" y="48" width="92" height="48" fill="#2f7fb2"/><rect id="crab-shell" x="30" y="60" width="30" height="18" fill="#d63a2c"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+  await page.locator(".layerlist .row-btn").filter({ hasText: "sky" }).click();
+
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  const card = page.locator("svg.canvas g.overlay rect.loupe-card");
+  const swatch = page.locator("svg.canvas g.overlay rect.loupe-swatch");
+  const hex = page.locator("svg.canvas g.overlay text.loupe-hex");
+  const from = page.locator("svg.canvas g.overlay text.loupe-from");
+
+  // Nothing until it's armed — an aid that's always on is furniture.
+  await expect(card).toHaveCount(0);
+  await page.getByLabel("fill eyedropper").click();
+
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.9);
+  await expect(swatch).toHaveAttribute("fill", "#2f7fb2");
+  await expect(hex).toHaveText("#2f7fb2");
+  await expect(from).toHaveText("sea");
+
+  // It follows the cursor: a different shape reads differently.
+  await page.mouse.move(box.x + box.width * 0.45, box.y + box.height * 0.68);
+  await expect(swatch).toHaveAttribute("fill", "#d63a2c");
+  await expect(from).toHaveText("crab-shell");
+
+  // Taking the colour puts it away.
+  await page.mouse.click(box.x + box.width * 0.45, box.y + box.height * 0.68);
+  await expect(card).toHaveCount(0);
+  await expect(
+    page.locator(".paint").filter({ hasText: "fill" }).locator("input.hex"),
+  ).toHaveValue("#d63a2c");
+});
+
 test("an unfilled shape on top doesn't answer for the scene underneath", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {

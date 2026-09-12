@@ -426,7 +426,7 @@ client-side pro pillars, all running on the core):
   corner radius (`ShapeSpec.rx/ry` + an interactive rect-tool radius); **bring-to-front / send-to-back**
   (`ReorderNodeExtreme`, ⌘]/⌘[ + ⌘⇧]/⌘⇧[, MCP `reorder`); **lock/unlock** (`SetPathLocked` — editor-only,
   hit-test-skipped, never exported); **select-all** (⌘A); a **text creation tool** (`AddText` + MCP
-  `add_text`) and an **eyedropper** (`sampleFillAt`); **⌘/Ctrl snap-bypass** + **snap-to-grid on shape
+  `add_text`) and an **eyedropper** (`sampleAt`) that answers only where a shape **paints** — its fill inside, its stroke within the stroke's width — so an unfilled frame on top stops answering for the whole scene under it, and resolves what it finds to a real colour (`currentColor` → what it renders as, a gradient → its first stop); while armed it draws a **loupe** card showing that colour and the named shape it comes from, which is the read a vector editor can give and a pixel magnifier can't; **⌘/Ctrl snap-bypass** + **snap-to-grid on shape
   drag**; **reusable components** (a `<g>` in `<defs>` projects as editable shapes, `<use>` instances,
   stamp, edit-once-propagates, plus **detach**-to-bake and **delete**-cascade) with a full MCP surface
   (`create_component`/`stamp`/`list_components`/`group_named`); **export-fidelity fixes** (canonical

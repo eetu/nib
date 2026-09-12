@@ -227,7 +227,7 @@ function distanceToOutline(subpaths: Subpath[], docPoint: Point): number {
  * stroke's own width of the outline. Otherwise the point is see-through here and the shape below
  * gets asked.
  */
-export function sampleFillAt(docPoint: Point): string | null {
+export function sampleAt(docPoint: Point): { color: string; from: string } | null {
   const doc = editor.doc;
   if (!doc) return null;
   const defUids = editor.defPathUids;
@@ -237,13 +237,15 @@ export function sampleFillAt(docPoint: Point): string | null {
     const p = doc.paths[i];
     if (p.deleted || defUids.has(p.uid ?? "")) continue;
     const style = (k: string) => p.styleOverride?.[k] ?? p.attributes?.[k];
+    const from = p.id || `#${i}`;
+    const got = (c: string | null) => (c ? { color: c, from } : null);
     const fill = style("fill") ?? "#000000";
-    if (fill !== "none" && pointInPath(p.subpaths, docPoint)) return resolveSampled(fill);
+    if (fill !== "none" && pointInPath(p.subpaths, docPoint)) return got(resolveSampled(fill));
     const stroke = style("stroke");
     if (stroke && stroke !== "none") {
       const width = Number(style("stroke-width") ?? "1");
       const reach = (Number.isFinite(width) ? width : 1) / 2 + slack;
-      if (distanceToOutline(p.subpaths, docPoint) <= reach) return resolveSampled(stroke);
+      if (distanceToOutline(p.subpaths, docPoint) <= reach) return got(resolveSampled(stroke));
     }
     // see-through here; keep looking at the shape below.
   }

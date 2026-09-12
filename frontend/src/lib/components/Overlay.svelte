@@ -171,6 +171,37 @@
       <line class="pivot-cross" x1={at.x} y1={at.y - 7} x2={at.x} y2={at.y + 7} />
       <circle class="pivot-dot" cx={at.x} cy={at.y} r="2.5" />
     {/if}
+    {#if interaction.loupe}
+      <!-- The eyedropper's loupe: the colour this click would take, and the shape it comes from.
+           A CARD, not a bare chip — a swatch of the sampled colour sits on whatever it sampled,
+           so by definition it matches its own background and reads as a hole. On the panel's own
+           surface it reads against anything.
+           No magnifier: nib samples the MODEL, so zoomed pixels would show antialiased edges it
+           can never return. The exact value and the named shape it came from is the better
+           answer, and it's one only a vector editor can give. -->
+      {@const at = viewport.toScreen(interaction.loupe.at)}
+      {@const from =
+        interaction.loupe.from.length > 16
+          ? `${interaction.loupe.from.slice(0, 15)}…`
+          : interaction.loupe.from}
+      {@const w = 124}
+      {@const h = 36}
+      <!-- Up-right of the cursor, flipping at the edges so the readout never leaves the canvas. -->
+      {@const lx = at.x + 16 + w > viewport.pxWidth ? at.x - 16 - w : at.x + 16}
+      {@const ly = at.y - 14 - h < 0 ? at.y + 14 : at.y - 14 - h}
+      <rect class="loupe-card" x={lx} y={ly} width={w} height={h} rx="6" />
+      <rect
+        class="loupe-swatch"
+        x={lx + 7}
+        y={ly + 7}
+        width={22}
+        height={22}
+        rx="4"
+        fill={interaction.loupe.color}
+      />
+      <text class="loupe-hex" x={lx + 37} y={ly + 16}>{interaction.loupe.color}</text>
+      <text class="loupe-from" x={lx + 37} y={ly + 28}>{from}</text>
+    {/if}
     {#if editor.multiSelected}
       <!-- outline every selected path (accent centerline) so it's clear which are in the
            multi-selection, plus the union transform box for the group. -->
@@ -334,6 +365,31 @@
     stroke-width: 1;
     opacity: 0.9;
     pointer-events: none;
+  }
+
+  /* The eyedropper's loupe — a card, so an arbitrary sampled colour has something neutral to sit
+     on. Floating the swatch directly over the drawing put it against its own colour. */
+  .loupe-card {
+    fill: var(--halo-bg-main);
+    stroke: var(--halo-border);
+    stroke-width: 1;
+    filter: drop-shadow(0 2px 6px rgb(0 0 0 / 0.18));
+  }
+
+  .loupe-swatch {
+    stroke: var(--halo-border);
+    stroke-width: 1;
+  }
+
+  .loupe-hex {
+    fill: var(--halo-text-main);
+    font-family: var(--halo-font-mono, ui-monospace, monospace);
+    font-size: 11px;
+  }
+
+  .loupe-from {
+    fill: var(--halo-text-muted);
+    font-size: 10px;
   }
 
   /* The rotate tool's pivot: a target you can see against artwork of any colour — a pale halo

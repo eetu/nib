@@ -28,12 +28,17 @@ class Interaction {
   /** Rubber-band marquee rectangle (document coords) while selecting over empty canvas. */
   marquee = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
 
+  /** What the armed eyedropper would take at the cursor, and the shape it comes from — drawn as
+   *  a loupe so you read the colour instead of guessing at it. */
+  loupe = $state<{ at: Point; color: string; from: string } | null>(null);
+
   // (A rotation in flight used to be carried here, so the overlay could draw the box the drag
   // started with rather than re-deriving an axis-aligned one from mid-rotation geometry. It isn't
   // needed now that a shape's tilt is *stored* — `PathElement.boxAngle`, turned live alongside the
   // geometry — because bounds measured in the turning frame keep their size on their own.)
 
   clearDrag(): void {
+    this.loupe = null;
     this.snapPoint = null;
     this.closing = false;
     this.resumePoint = null;
