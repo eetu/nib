@@ -132,7 +132,7 @@
 
   function armEyedropper(): void {
     tools.eyedropperTarget = paintKey;
-    tools.set("eyedropper");
+    tools.borrow("eyedropper");
   }
 
   function setMode(m: "linear" | "radial") {

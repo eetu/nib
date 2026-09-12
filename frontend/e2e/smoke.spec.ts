@@ -1038,6 +1038,59 @@ test("eyedropper samples one shape's fill onto the selection", async ({ page }) 
 // one per paint, which also says *which* paint the next click lands in. It left the tool rail
 // (where it sat between pen and text, answering a different kind of question) but stayed a
 // registered tool: same cursor, same `i` shortcut.
+// Arming the eyedropper BORROWS the current tool; it doesn't switch away from it. Switching runs
+// the outgoing tool's cleanup — and the pen's cleanup is "finish the path" — so picking a colour
+// for the pen used to end the path you were drawing and leave you on the select tool.
+test("the eyedropper borrows the current tool and hands it back", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="20" y="20" width="60" height="60" fill="#0000ff"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+
+  // Arm the pen with nothing selected: the style panel is the pen's NEW-SHAPE style.
+  await page.keyboard.press("p");
+  const pen = page.locator(".rail").getByRole("button", { name: /^pen/ });
+  await expect(pen).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: "new shape style" })).toBeVisible();
+
+  // Take a stroke colour off the blue rect. (The pen's default already has a stroke —
+  // `currentColor` — so the switch is on and there's a field waiting for the sample.)
+  await expect(page.getByLabel("stroke on")).toHaveAttribute("aria-checked", "true");
+  await page.getByLabel("stroke eyedropper").click();
+
+  // Borrowed, not switched: the pen still reads as the selected tool and the panel is still its.
+  await expect(pen).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: "new shape style" })).toBeVisible();
+
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+
+  // Handed back to the pen — not dropped on select — and the colour stuck to the pen's default.
+  await expect(pen).toHaveAttribute("aria-pressed", "true");
+  const strokeField = page.locator(".paint").filter({ hasText: "stroke" }).locator("input.hex");
+  await expect(strokeField).toHaveValue("#0000ff");
+
+  // Drawing with it now uses the sampled stroke.
+  await page.mouse.click(box.x + box.width * 0.2, box.y + box.height * 0.2);
+  await page.mouse.click(box.x + box.width * 0.3, box.y + box.height * 0.3);
+  await page.keyboard.press("Enter");
+  await expect(page.locator('svg.canvas g.artwork path[stroke="#0000ff"]')).toHaveCount(1);
+
+  // Escape un-arms a borrowed tool rather than falling through to the pen's own Escape.
+  await page.getByLabel("stroke eyedropper").click();
+  await page.keyboard.press("Escape");
+  await expect(pen).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("stroke eyedropper")).not.toHaveClass(/\bon\b/);
+});
+
 test("the eyedropper lives with the colours, one per paint", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {

@@ -12,6 +12,8 @@
 
   // Basic (touch-up) mode hides advanced groups (shape primitives); the full surface shows
   // in advanced mode. The engine keeps every tool regardless.
+  // `subject`, not `active`: a borrowed momentary tool (the eyedropper, armed from the style
+  // panel) is an interlude — the pen it interrupted should still read as the selected tool.
   const groups = $derived(
     TOOL_GROUPS.filter((g) => settings.uiLevel === "advanced" || !g.advanced)
       .map((g) => ({ ...g, tools: g.tools.filter((t) => t.inRail !== false) }))
@@ -49,11 +51,11 @@
   {#each groups as group, gi (group.name)}
     {#if gi > 0}<div class="sep"></div>{/if}
     {#if isFlyout(group)}
-      {@const shown = group.tools.find((t) => t.id === tools.active) ?? group.tools[0]}
+      {@const shown = group.tools.find((t) => t.id === tools.subject) ?? group.tools[0]}
       <div class="flyout-anchor">
         <button
           class="icon-btn flyout-btn"
-          class:active={group.tools.some((t) => t.id === tools.active)}
+          class:active={group.tools.some((t) => t.id === tools.subject)}
           title={shown.label + shortcutLabel(shown.shortcut)}
           aria-label={`${group.name} tools`}
           aria-haspopup="menu"
@@ -68,7 +70,7 @@
             {#each group.tools as t (t.id)}
               <button
                 class="flyout-item"
-                class:active={tools.active === t.id}
+                class:active={tools.subject === t.id}
                 role="menuitem"
                 onclick={() => pick(t.id)}
               >
@@ -83,10 +85,10 @@
       {#each group.tools as t (t.id)}
         <button
           class="icon-btn"
-          class:active={tools.active === t.id}
+          class:active={tools.subject === t.id}
           title={t.label + shortcutLabel(t.shortcut)}
           aria-label={t.label}
-          aria-pressed={tools.active === t.id}
+          aria-pressed={tools.subject === t.id}
           onclick={() => tools.set(t.id)}
         >
           <t.icon size={18} />

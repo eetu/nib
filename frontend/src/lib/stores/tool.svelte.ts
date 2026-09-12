@@ -106,8 +106,42 @@ class ToolState {
     });
   }
 
+  /**
+   * The tool a momentary one interrupted, restored when it lets go.
+   *
+   * Switching tools and *borrowing* one are different acts, and conflating them broke both ends:
+   * arming the eyedropper to pick a stroke colour for the pen ended the pen's unfinished path
+   * (a switch runs `onDeactivate`, and the pen's is "finish the path"), then dropped you on the
+   * select tool afterwards. A borrow suspends the host instead, and hands it back.
+   */
+  host = $state<ToolId | null>(null);
+
+  /**
+   * The tool the UI should describe. A borrowed interlude is not a change of subject: while the
+   * eyedropper is armed the rail still shows the pen lit and the style panel still edits the
+   * pen's new-shape style — which is the whole reason you reached for the eyedropper.
+   */
+  get subject(): ToolId {
+    return this.host ?? this.active;
+  }
+
+  /** Pick a tool deliberately — ends whatever the last one was doing. */
   set(id: ToolId): void {
+    this.host = null;
     this.active = id;
+  }
+
+  /** Step onto a momentary tool, remembering the one to come back to. */
+  borrow(id: ToolId): void {
+    if (this.active !== id) this.host = this.active;
+    this.active = id;
+  }
+
+  /** Hand the tool back to whoever lent it. */
+  release(): void {
+    const back = this.host ?? "select";
+    this.host = null;
+    this.active = back;
   }
 
   /** Set/clear one attribute of the new-shape style. */

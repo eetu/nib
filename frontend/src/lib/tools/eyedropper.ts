@@ -17,7 +17,7 @@ export const eyedropperTool: Tool = {
   begin(ctx) {
     const color = sampleFillAt(ctx.docPoint);
     if (color) editor.applySampledPaint(color, tools.eyedropperTarget);
-    tools.set("select");
+    tools.release(); // back to whatever was armed before — the pen, usually
     return null;
   },
 };
