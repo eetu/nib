@@ -17,9 +17,24 @@ export type ToolId =
 
 /** Style applied to the next drawn path/shape (editable up front via the
  *  "new shape style" panel; also the reset defaults). */
+/**
+ * What a freshly drawn shape is painted with.
+ *
+ * The stroke used to be `currentColor`, which followed the UI theme — clever, and wrong for three
+ * reasons that compounded. nib's job is producing a FILE: a path exported as
+ * `stroke="currentColor"` renders a different colour in every context it lands in. The artwork is
+ * judged against `settings.canvasBg`, which is deliberately orthogonal to the UI theme, so a
+ * stroke that changed when you flipped the chrome to dark was answering the wrong question. And
+ * it made the eyedropper useless — every shape you'd drawn carried the same deferred keyword, so
+ * sampling any of them returned the same resolved grey, always.
+ *
+ * `currentColor` is still one keystroke away in the paint kind list, for when it is genuinely what
+ * you want.
+ */
+const DEFAULT_STROKE = "#111111";
 const DEFAULT_STYLE: Record<string, string> = {
   fill: "none",
-  stroke: "currentColor",
+  stroke: DEFAULT_STROKE,
   "stroke-width": "2",
   "stroke-linecap": "round",
   "stroke-linejoin": "round",
@@ -87,7 +102,14 @@ class ToolState {
       this.gridEnabled = p.gridEnabled;
       this.gridSize = p.gridSize;
       this.guidesEnabled = p.guidesEnabled ?? true;
-      if (p.newStyle) this.newStyle = p.newStyle;
+      if (p.newStyle) {
+        // Anyone who used nib before this has `currentColor` saved as their stroke — the very
+        // thing being fixed. Carry them over rather than leaving the bug persisted; a deliberate
+        // `currentColor` is one pick away in the kind list.
+        const saved = { ...p.newStyle };
+        if (saved.stroke === "currentColor") saved.stroke = DEFAULT_STROKE;
+        this.newStyle = saved;
+      }
       this.cornerRadius = p.cornerRadius ?? 0;
     }
     const save = debounce((prefs: Prefs) => saveState<Prefs>(PREFS_KEY, prefs), 300);

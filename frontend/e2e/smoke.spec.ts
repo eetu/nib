@@ -1044,6 +1044,45 @@ test("eyedropper samples one shape's fill onto the selection", async ({ page }) 
 // An eyedropper's job is "give me THAT colour", so a paint that only *refers* to one defeats it.
 // `currentColor` is the case that bit: it's the default stroke every pen-drawn path carries, so
 // sampling your own strokes filled the field with the literal word instead of a colour.
+// A drawn shape is painted with a real colour, not `currentColor`. nib's job is producing a FILE,
+// and a path exported as `stroke="currentColor"` renders differently in every context it lands in
+// — and because every pen-drawn shape carried the same deferred keyword, the eyedropper returned
+// the same resolved grey whatever you pointed it at.
+test("a drawn shape gets a real colour, not currentColor", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.getByRole("button", { name: "new drawing" }).click();
+  await page.keyboard.press("p");
+
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  await page.mouse.click(box.x + box.width * 0.3, box.y + box.height * 0.4);
+  await page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.6);
+  await page.keyboard.press("Enter");
+
+  const drawn = page.locator("svg.canvas g.artwork path").last();
+  const stroke = await drawn.getAttribute("stroke");
+  expect(stroke).not.toBe("currentColor");
+  expect(stroke).toMatch(/^#[0-9a-f]{6}$/i);
+
+  // ...and the exported file carries that colour, so it looks the same wherever it's opened.
+  await page.getByRole("button", { name: "source" }).click();
+  const src = await page.locator(".sourceview textarea").inputValue();
+  expect(src).not.toContain("currentColor");
+  expect(src).toContain(stroke!);
+
+  // Sampling it back gives that colour — the eyedropper is useful again.
+  await page.locator(".sourceview textarea").blur();
+  await page.locator(".layerlist .row-btn").first().click();
+  await page.getByLabel("stroke eyedropper").click();
+  await page.mouse.click(box.x + box.width * 0.45, box.y + box.height * 0.5);
+  await expect(
+    page.locator(".paint").filter({ hasText: "stroke" }).locator("input.hex"),
+  ).toHaveValue(stroke!);
+});
+
 test("the eyedropper resolves currentColor and gradients to an actual colour", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
