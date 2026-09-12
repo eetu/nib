@@ -1032,6 +1032,51 @@ test("eyedropper samples one shape's fill onto the selection", async ({ page }) 
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+// The eyedropper answers "what colour?", so its button belongs beside the colour it fills in —
+// one per paint, which also says *which* paint the next click lands in. It left the tool rail
+// (where it sat between pen and text, answering a different kind of question) but stayed a
+// registered tool: same cursor, same `i` shortcut.
+test("the eyedropper lives with the colours, one per paint", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="a" x="0" y="0" width="12" height="12" fill="#ff0000" stroke="#111111"/><rect id="b" x="12" y="12" width="76" height="76" fill="#0000ff"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // Gone from the rail...
+  await expect(page.locator(".rail").getByRole("button", { name: /eyedropper/i })).toHaveCount(0);
+
+  // ...and present once per paint in the style panel, once a shape is selected.
+  await page.locator(".layerlist .row-btn").nth(1).click();
+  const fillPick = page.getByLabel("fill eyedropper");
+  const strokePick = page.getByLabel("stroke eyedropper");
+  await expect(fillPick).toBeVisible();
+  await expect(strokePick).toBeVisible();
+
+  // Arming one lights that one only — with two on screen, which paint is waiting has to be visible.
+  await strokePick.click();
+  await expect(strokePick).toHaveClass(/\bon\b/);
+  await expect(fillPick).not.toHaveClass(/\bon\b/);
+
+  // And the stroke picker samples into the STROKE: A keeps its red fill, takes B's blue stroke.
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+
+  await page.getByRole("button", { name: "source" }).click();
+  const src = await page.locator(".sourceview textarea").inputValue();
+  expect(src).toContain('fill="#ff0000"'); // the fill was left alone
+  expect(src).toContain('stroke="#0000ff"'); // the stroke took the sample
+  expect(src).not.toContain("#111111");
+});
+
 test("drop shadow adds a filter def + references it; removing clears it", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));

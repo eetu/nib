@@ -13,7 +13,9 @@
   // Basic (touch-up) mode hides advanced groups (shape primitives); the full surface shows
   // in advanced mode. The engine keeps every tool regardless.
   const groups = $derived(
-    TOOL_GROUPS.filter((g) => settings.uiLevel === "advanced" || !g.advanced),
+    TOOL_GROUPS.filter((g) => settings.uiLevel === "advanced" || !g.advanced)
+      .map((g) => ({ ...g, tools: g.tools.filter((t) => t.inRail !== false) }))
+      .filter((g) => g.tools.length > 0),
   );
 
   // A flyout group only collapses into a popup once it holds more than one tool — so a

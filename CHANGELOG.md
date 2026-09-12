@@ -82,6 +82,13 @@ see the note at the end.
 - **The paint field's `none` appears once.** The fill block had a `—` chip in the mode row *and* a
   `—` button under it; the button is now a picker for the values a swatch can't express, so
   `currentColor` is reachable at all.
+- **The eyedropper moved out of the tool rail and into the paint rows**, one per paint. It sat
+  between pen and text, which answer "what am I drawing?"; an eyedropper answers "what colour?",
+  and the field it fills was across the window — while the STYLE header's copy-style button drew
+  the same pipette glyph a few pixels away. One per paint also settles which paint a sample lands
+  in: the button beside `stroke` takes a stroke colour, and lights while it's armed. The `i`
+  shortcut still works and still means fill. Making room meant dropping the empty 50px label column
+  the value row opened with — 56px of a 232px panel — so the hex field is wider than it was before.
 - **The projects panel closes to a rail** (it keeps the sync status visible, and remembers).
 - The container image is built only on PRs that touch it, as the workflow comment already claimed.
 
