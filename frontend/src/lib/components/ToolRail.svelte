@@ -118,7 +118,7 @@
     gap: 4px;
     padding: 8px 6px;
     background: var(--halo-bg-light);
-    border-right: 1px solid var(--halo-border);
+    border-left: 1px solid var(--halo-border);
   }
 
   .sep {
@@ -141,17 +141,19 @@
   /* Corner mark hinting the button expands into a flyout. */
   .flyout-mark {
     position: absolute;
-    right: 3px;
+    left: 3px;
     bottom: 3px;
     width: 0;
     height: 0;
-    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
     border-bottom: 4px solid var(--halo-text-muted);
   }
 
+  /* Opens toward the window, not away from it: the rail sits against the right edge, so a flyout
+     anchored to its right would be off screen. */
   .flyout {
     position: absolute;
-    left: calc(100% + 6px);
+    right: calc(100% + 6px);
     top: 0;
     z-index: 20;
     display: flex;
