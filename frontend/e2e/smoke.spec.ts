@@ -2455,12 +2455,20 @@ test("the navigator tabs the lists that answer 'what exists'", async ({ page }) 
   await expect(layersTab).toContainText("2");
   await expect(page.locator(".layerlist .row-btn")).toHaveCount(2);
 
-  // It's left of the canvas, and the Inspector is right of it — the family's region map.
+  // The family's region map, left to right: navigate · surface · subject · tools.
   const navX = (await page.locator("aside.nav").boundingBox())!.x;
   const canvasX = (await page.locator("svg.canvas").boundingBox())!.x;
   const inspX = (await page.locator("aside.inspector").boundingBox())!.x;
+  const railX = (await page.locator(".rail").boundingBox())!.x;
   expect(navX).toBeLessThan(canvasX);
   expect(canvasX).toBeLessThan(inspX);
+  expect(inspX).toBeLessThan(railX);
+
+  // The rail is against the window edge, so its flyout has to open inward or it's off screen.
+  await page.locator(".rail .flyout-btn").first().click();
+  const flyX = (await page.locator(".rail .flyout").boundingBox())!.x;
+  expect(flyX).toBeLessThan(railX);
+  expect(flyX).toBeGreaterThan(0);
 
   // The region folds, and folding leaves a way back rather than nothing.
   await page.getByRole("button", { name: "hide panel" }).click();

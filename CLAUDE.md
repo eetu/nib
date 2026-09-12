@@ -375,8 +375,10 @@ Per-area detail in `frontend/CLAUDE.md`.
   plus fit-to-artwork. That last one is deliberately not an auto-selection: selecting is something
   the user does, and a shape chosen on their behalf is one Delete away from being lost). Layers is the navigator's default tab: it's the list tied to the document
   in front of you rather than the session around it. Each region folds, and the fold is a *global*
-  pref — chrome layout doesn't belong to a document. *(Still to come: the tool rail moves beside
-  the subject panel, which is the half of the map nib hasn't adopted yet.)*
+  pref — chrome layout doesn't belong to a document. The **tool rail sits beside the subject
+  panel**, at the right edge: a rail on the far side of the canvas from the options it produces is
+  two unrelated strips, and adjacency is the entire point of pairing them. Against the window edge
+  its flyouts have to open *inward*, or a shapes popup lands off screen.
 - **Shared state = rune stores** (`frontend/src/lib/stores/*.svelte.ts`), read
   directly, never prop-drilled: `document` (doc + selection + mutations +
   history), `viewport`, `tool` (+ snap/grid settings), `workspace`, `interaction`

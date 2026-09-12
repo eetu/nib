@@ -277,7 +277,6 @@
   <div class="body">
     <!-- Navigate: what exists (layers · projects · files), as tabs. -->
     <SidePanel />
-    <ToolRail />
 
     <div class="center">
       {#if editor.hasDocument}
@@ -311,7 +310,11 @@
       <SourceView />
     </div>
 
+    <!-- Subject, then tools. The rail sits beside the panel that describes what it makes, which
+         is the whole point of pairing them: pick a shape tool and its style is the next thing
+         along, not across the window. -->
     <Inspector />
+    <ToolRail />
   </div>
 
   {#if dragging}
