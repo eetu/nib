@@ -6,9 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Two tracks since 0.1.0: the editor grew the last of its 1.0 tools, and the MCP surface grew from
-"place shapes" into something you can actually draw with. The second is the one still moving —
-see the note at the end.
+Three tracks since 0.1.0: the editor grew the last of its 1.0 tools, the MCP surface grew from
+"place shapes" into something you can actually draw with, and the interface was rearranged to the
+shape the whole family is meant to share. The MCP surface is the one still moving — see the note at
+the end.
 
 ### Added
 
@@ -75,6 +76,26 @@ see the note at the end.
 
 ### Changed
 
+- **The window is laid out by role now** — navigate · surface · subject · tools, left to right —
+  which is the arrangement the family skill describes and nib is the first to implement. Layers,
+  projects and files became **tabs** in a left-hand navigator (they're all lists you go to, pick
+  from and leave; stacked they competed for one column, where thirty files could push the object
+  tree off a laptop). The Inspector kept the right, answering "what am I working on?". And the tool
+  rail moved beside it: a rail on the far side of the canvas from the options it produces is two
+  unrelated strips, and adjacency is the point of pairing them. Each region folds, and the fold is
+  a global pref — chrome layout doesn't belong to a document.
+- **A paint is a switch plus a kind**, not a row of four chips. `none` was competing with
+  solid/linear/radial in one segmented control, which is why "no fill" ended up with two separate
+  controls a week apart — `none` isn't a *kind* of paint, so it kept wanting a second home — and
+  why the panel showed eight chips before you reached a colour. A switch owns whether the paint
+  exists, a short list owns what kind, and only the chosen kind's controls are on screen; switching
+  a paint off collapses its block. `currentColor` became a kind, which retired the keyword picker
+  added days earlier to patch the first symptom.
+- **A new shape is drawn in a real colour** (`#111111`), not `currentColor`. Following the UI theme
+  was clever and wrong three ways: nib produces a FILE, and `stroke="currentColor"` renders a
+  different colour in every context it lands in; the artwork is judged against `canvasBg`, which is
+  orthogonal to the chrome's theme; and every shape carrying the same deferred keyword made the
+  eyedropper return the same grey whatever you pointed at.
 - **One control per meaning in the interface**, aligning with the halo-interaction rules: a single
   root context menu (the canvas has one now, with node verbs on an anchor), the browser's own menu
   suppressed app-wide except in text fields, one Modal primitive behind every dialog, and **Revert**
@@ -82,6 +103,17 @@ see the note at the end.
 - **The paint field's `none` appears once.** The fill block had a `—` chip in the mode row *and* a
   `—` button under it; the button is now a picker for the values a swatch can't express, so
   `currentColor` is reachable at all.
+- **The canvas has a size you can set** (`SetViewBox`, crops or pads). nib previously had no way
+  to change a canvas at all. It comes with a wrinkle worth knowing: export normally *grows* the
+  viewBox to cover content drawn outside it, so a shape past the edge isn't clipped when the file
+  opens elsewhere — right for content that escaped, wrong for a size someone chose, since cropping
+  is the entire point. So a chosen size turns that net off and exports verbatim.
+- **With nothing selected, the right panel shows the DOCUMENT** — canvas origin and size, the shape
+  count, fit-to-artwork. Deliberately not an auto-selection: selecting is a statement the user
+  makes, and a shape selected on their behalf is one Delete away from being acted on unnoticed.
+- **The eyedropper draws a loupe** while armed — the colour it would take and the *named shape* it
+  comes from. Deliberately not a pixel magnifier: nib samples the model, so magnified pixels would
+  show antialiased edge colours it can never return, lying harder the closer you looked.
 - **The eyedropper moved out of the tool rail and into the paint rows**, one per paint. It sat
   between pen and text, which answer "what am I drawing?"; an eyedropper answers "what colour?",
   and the field it fills was across the window — while the STYLE header's copy-style button drew
@@ -104,6 +136,19 @@ see the note at the end.
 - **"Convert to outlines" did nothing in Safari** — the file picker has to open in the gesture's own
   task, so the font is now warmed on selection rather than fetched after an await.
 - **A shared dev token shipped as a real credential**, and a pre-OIDC dev database couldn't boot.
+- **The eyedropper answered for the whole scene.** `pointInPath` is a winding test on geometry
+  that knows nothing about paint, so a `fill="none"` shape "contained" every point inside its
+  outline. A picture frame drawn as an unfilled rect and brought to the front therefore answered
+  every click — falling past its none-fill and returning its stroke, the same colour everywhere. A
+  shape now answers only where it *paints*: its fill inside, its stroke within the stroke's width.
+- **The eyedropper returned references, not colours** — `currentColor` and `url(#gradient)` came
+  back verbatim. A sampled paint now resolves: to what it actually renders as, or to a gradient's
+  first stop.
+- **Arming the eyedropper ended the path you were drawing.** Switching tools runs the outgoing
+  tool's cleanup, and the pen's cleanup is "finish the path" — so reaching for a colour mid-stroke
+  ended the line being coloured and dropped you on the select tool. A momentary tool is now
+  *borrowed*: the host is suspended and handed back, the UI keeps describing the host, and Escape
+  releases the interlude above the host's own rung.
 - **An MCP group's uid was a per-process counter.** Reopening a project and grouping again minted
   `grp-1` a second time, colliding with the group the previous session persisted — two nodes with
   one uid, after which every uid-addressed op found whichever came first in the tree. uids are the
