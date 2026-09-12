@@ -5,23 +5,22 @@
   import { tools } from "$lib/stores/tool.svelte";
 
   import ColorInput from "./ColorInput.svelte";
+  import Switch from "./Switch.svelte";
 
-  type Mode = "none" | "solid" | "linear" | "radial";
-  // Gradients are an advanced paint; basic (touch-up) mode offers solid colour only. An
-  // existing gradient still displays + edits — you just can't create one in basic.
-  const modes = $derived<[Mode, string][]>(
-    settings.uiLevel === "advanced"
-      ? [
-          ["none", "—"],
-          ["solid", "solid"],
-          ["linear", "linear"],
-          ["radial", "radial"],
-        ]
-      : [
-          ["none", "—"],
-          ["solid", "solid"],
-        ],
-  );
+  /**
+   * A paint asks two questions, and they used to be crammed into one row of four chips:
+   * *is there a fill at all* and *what kind*. `none` competing with solid/linear/radial in a
+   * segmented control is what made "no fill" turn up twice in the same block, and what made the
+   * panel busy — eight chips between fill and stroke before you reach a colour.
+   *
+   * So: a switch owns the first question, a short list owns the second, and only the chosen
+   * kind's controls are on screen. `currentColor` is a kind (a colour deferred to the inherited
+   * one), which retires the separate keyword picker the old row needed.
+   */
+  type Kind = "color" | "currentColor" | "linear" | "radial";
+  // Gradients are an advanced paint; basic (touch-up) mode offers a colour only. An existing
+  // gradient still displays + edits — you just can't create one in basic.
+  const advanced = $derived(settings.uiLevel === "advanced");
 
   // A paint control: solid colour (ColorInput), or a linear/radial gradient whose def lives
   // in the document (referenced by `url(#id)`). Gradient edits go through the editor's
@@ -67,16 +66,37 @@
   const anyGrad = $derived<Gradient | null>(grad ?? importedGrad);
   // What the bar previews — the editable gradient, else a read-only imported one.
   const displayGrad = $derived<Gradient | ImportedGradient | null>(anyGrad ?? readonlyGrad);
-  const mode = $derived<Mode>(
-    displayGrad ? displayGrad.kind : value === "none" || value === "" ? "none" : "solid",
+  const enabled = $derived(!(value === "none" || value === ""));
+  const kind = $derived<Kind>(
+    displayGrad ? (displayGrad.kind as Kind) : value === "currentColor" ? "currentColor" : "color",
   );
-  // In basic mode the control offers only —/solid, but an existing gradient still shows its bar;
-  // append its (active) kind chip so the segmented control never reads as "nothing selected".
-  const displayModes = $derived<[Mode, string][]>(
-    displayGrad && !modes.some(([m]) => m === displayGrad.kind)
-      ? [...modes, [displayGrad.kind, displayGrad.kind]]
-      : modes,
-  );
+
+  /**
+   * What to come back to. Two memories, because they answer different questions: the switch
+   * restores whatever this paint last WAS (a gradient comes back a gradient), while picking the
+   * `colour` kind restores the last actual colour — `currentColor` is a paint but not a colour, so
+   * remembering it in one slot meant leaving `currentColor` handed you black.
+   */
+  let lastPaint = $state("#000000");
+  let lastColor = $state("#000000");
+  $effect(() => {
+    if (enabled) lastPaint = value;
+    if (value.startsWith("#")) lastColor = value;
+  });
+
+  function toggle(on: boolean): void {
+    setPaint(on ? lastPaint || "#000000" : "none");
+  }
+
+  function pickKind(e: Event): void {
+    const next = (e.currentTarget as HTMLSelectElement).value as Kind;
+    if (next === "currentColor") return setPaint("currentColor");
+    if (next === "color") {
+      const c = anyGrad?.stops[0]?.color ?? readonlyGrad?.stops[0]?.color;
+      return setPaint(c ?? lastColor);
+    }
+    setMode(next);
+  }
 
   // A stop as a CSS gradient colour-stop, honouring per-stop opacity (a color→transparent fade
   // reads as solid otherwise). `color-mix` applies alpha to any colour format (hex/named/rgb).
@@ -112,15 +132,10 @@
 
   function armEyedropper(): void {
     tools.eyedropperTarget = paintKey;
-    tools.set("eyedropper");
+    tools.borrow("eyedropper");
   }
 
-  function setMode(m: "none" | "solid" | "linear" | "radial") {
-    if (m === "none") return setPaint("none");
-    if (m === "solid") {
-      const c = anyGrad?.stops[0]?.color ?? readonlyGrad?.stops[0]?.color;
-      return setPaint(c ?? (value.startsWith("#") ? value : "#000000"));
-    }
+  function setMode(m: "linear" | "radial") {
     // An editable gradient (model or adoptable import) just switches kind — adopting on the way.
     if (anyGrad) return editor.setGradient({ ...anyGrad, kind: m });
     // Otherwise create a fresh gradient, seeding from a read-only import's stops if present.
@@ -279,28 +294,34 @@
 <div class="paint">
   <div class="ptop">
     <span class="plabel">{label}</span>
-    <div class="pmode">
-      {#each displayModes as [m, lbl] (m)}
-        <button class:active={mode === m} onclick={() => setMode(m)}>{lbl}</button>
-      {/each}
-    </div>
+    <Switch checked={enabled} label="{label} on" onchange={toggle} />
   </div>
 
-  {#if mode === "solid" || mode === "none"}
-    <!-- No `none` keyword here: the mode row's `—` chip already is that control, and it's the one
-         that shows the state. -->
+  {#if enabled}
+    <!-- What kind of paint. Only the chosen kind's controls follow, so the block is as tall as
+         what it's actually offering. -->
+    <select class="kind" value={kind} aria-label="{label} kind" onchange={pickKind}>
+      <option value="color">colour</option>
+      <option value="currentColor">currentColor</option>
+      {#if advanced || kind === "linear"}<option value="linear">linear gradient</option>{/if}
+      {#if advanced || kind === "radial"}<option value="radial">radial gradient</option>{/if}
+    </select>
+  {/if}
+
+  {#if enabled && (kind === "color" || kind === "currentColor")}
+    <!-- No keyword picker: `currentColor` is a kind in the list above, and `none` is the switch. -->
     <ColorInput
       {label}
       showLabel={false}
       {value}
       editable
-      keywords={["currentColor"]}
+      keywords={[]}
       onsample={armEyedropper}
       armed={tools.active === "eyedropper" && tools.eyedropperTarget === paintKey}
       oninput={(v) => previewPaint(v)}
       onchange={(v) => setPaint(v)}
     />
-  {:else if anyGrad}
+  {:else if enabled && anyGrad}
     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
     <div
       class="bar editable"
@@ -404,7 +425,7 @@
         >
       </div>
     {/if}
-  {:else if readonlyGrad}
+  {:else if enabled && readonlyGrad}
     <!-- gradient defined in the imported source <defs> that nib can't model yet (userSpaceOnUse /
          gradientTransform / …): show its actual stops read-only; pick a mode to build a fresh one -->
     <div
@@ -434,28 +455,14 @@
     color: var(--halo-text-muted);
   }
 
-  .pmode {
-    display: flex;
-    flex: 1;
-    min-width: 0;
-    gap: 4px;
+  .plabel + :global(*) {
+    margin-left: auto;
   }
 
-  .pmode button {
-    flex: 1;
-    min-width: 0;
-    padding: 3px 0;
-    border: 1px solid var(--halo-border);
-    border-radius: var(--halo-radius-pill);
-    background: var(--halo-bg-main);
-    color: var(--halo-text-muted);
-    font-size: 11px;
-  }
-
-  .pmode button.active {
-    border-color: var(--halo-accent);
-    color: var(--halo-accent);
-    background: var(--halo-accent-soft);
+  .kind {
+    width: 100%;
+    margin-bottom: 6px;
+    font-size: 12px;
   }
 
   .bar {

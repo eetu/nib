@@ -392,8 +392,10 @@ test("gradients: convert a shape's fill to a linear gradient", async ({ page }) 
   await page.keyboard.press("v");
   await expect(page.locator("svg.canvas g.overlay polygon.sel-box")).toBeAttached();
 
-  // Fill → linear gradient: a <linearGradient> def appears and the shape references it.
-  await page.locator(".paint").filter({ hasText: "fill" }).getByRole("button", { name: "linear" }).click();
+  // Fill → linear gradient. A paint with no fill has no kind to change, so it's switched on
+  // first — the kind list only exists for a paint that exists (Pixelmator's split).
+  await page.getByLabel("fill on").click();
+  await page.getByLabel("fill kind").selectOption("linear");
   await expect(page.locator("svg.canvas defs linearGradient")).toHaveCount(1);
   await expect(page.locator("svg.canvas g.artwork path")).toHaveAttribute("fill", /url\(#grad-/);
 
@@ -1036,6 +1038,232 @@ test("eyedropper samples one shape's fill onto the selection", async ({ page }) 
 // one per paint, which also says *which* paint the next click lands in. It left the tool rail
 // (where it sat between pen and text, answering a different kind of question) but stayed a
 // registered tool: same cursor, same `i` shortcut.
+// Arming the eyedropper BORROWS the current tool; it doesn't switch away from it. Switching runs
+// the outgoing tool's cleanup — and the pen's cleanup is "finish the path" — so picking a colour
+// for the pen used to end the path you were drawing and leave you on the select tool.
+// An eyedropper's job is "give me THAT colour", so a paint that only *refers* to one defeats it.
+// `currentColor` is the case that bit: it's the default stroke every pen-drawn path carries, so
+// sampling your own strokes filled the field with the literal word instead of a colour.
+// A drawn shape is painted with a real colour, not `currentColor`. nib's job is producing a FILE,
+// and a path exported as `stroke="currentColor"` renders differently in every context it lands in
+// — and because every pen-drawn shape carried the same deferred keyword, the eyedropper returned
+// the same resolved grey whatever you pointed it at.
+test("a drawn shape gets a real colour, not currentColor", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.getByRole("button", { name: "new drawing" }).click();
+  await page.keyboard.press("p");
+
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  await page.mouse.click(box.x + box.width * 0.3, box.y + box.height * 0.4);
+  await page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.6);
+  await page.keyboard.press("Enter");
+
+  const drawn = page.locator("svg.canvas g.artwork path").last();
+  const stroke = await drawn.getAttribute("stroke");
+  expect(stroke).not.toBe("currentColor");
+  expect(stroke).toMatch(/^#[0-9a-f]{6}$/i);
+
+  // ...and the exported file carries that colour, so it looks the same wherever it's opened.
+  await page.getByRole("button", { name: "source" }).click();
+  const src = await page.locator(".sourceview textarea").inputValue();
+  expect(src).not.toContain("currentColor");
+  expect(src).toContain(stroke!);
+
+  // Sampling it back gives that colour — the eyedropper is useful again.
+  await page.locator(".sourceview textarea").blur();
+  await page.locator(".layerlist .row-btn").first().click();
+  await page.getByLabel("stroke eyedropper").click();
+  await page.mouse.click(box.x + box.width * 0.45, box.y + box.height * 0.5);
+  await expect(
+    page.locator(".paint").filter({ hasText: "stroke" }).locator("input.hex"),
+  ).toHaveValue(stroke!);
+});
+
+// An UNFILLED shape is see-through, and the eyedropper has to agree. `pointInPath` is a winding
+// test on geometry that knows nothing about paint, so a `fill="none"` frame brought to the front
+// "contained" the whole scene: every click landed on the frame, fell past its none-fill, and
+// returned its stroke — the same colour everywhere, whatever you pointed at.
+// The eyedropper shows what it would take before it takes it. Deliberately NOT a pixel magnifier:
+// nib samples the model, so zoomed pixels would show antialiased edges it can never return. The
+// exact value plus the named shape it comes from is the answer a vector editor can actually give.
+test("the eyedropper's loupe reads the colour under the cursor", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="sky" x="4" y="4" width="92" height="44" fill="#a9d9f0"/><rect id="sea" x="4" y="48" width="92" height="48" fill="#2f7fb2"/><rect id="crab-shell" x="30" y="60" width="30" height="18" fill="#d63a2c"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+  await page.locator(".layerlist .row-btn").filter({ hasText: "sky" }).click();
+
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  const card = page.locator("svg.canvas g.overlay rect.loupe-card");
+  const swatch = page.locator("svg.canvas g.overlay rect.loupe-swatch");
+  const hex = page.locator("svg.canvas g.overlay text.loupe-hex");
+  const from = page.locator("svg.canvas g.overlay text.loupe-from");
+
+  // Nothing until it's armed — an aid that's always on is furniture.
+  await expect(card).toHaveCount(0);
+  await page.getByLabel("fill eyedropper").click();
+
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.9);
+  await expect(swatch).toHaveAttribute("fill", "#2f7fb2");
+  await expect(hex).toHaveText("#2f7fb2");
+  await expect(from).toHaveText("sea");
+
+  // It follows the cursor: a different shape reads differently.
+  await page.mouse.move(box.x + box.width * 0.45, box.y + box.height * 0.68);
+  await expect(swatch).toHaveAttribute("fill", "#d63a2c");
+  await expect(from).toHaveText("crab-shell");
+
+  // Taking the colour puts it away.
+  await page.mouse.click(box.x + box.width * 0.45, box.y + box.height * 0.68);
+  await expect(card).toHaveCount(0);
+  await expect(
+    page.locator(".paint").filter({ hasText: "fill" }).locator("input.hex"),
+  ).toHaveValue("#d63a2c");
+});
+
+test("an unfilled shape on top doesn't answer for the scene underneath", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  // A picture-frame document, like the one this came from: coloured bands, and an unfilled
+  // rectangle over the lot (last = on top).
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="sky" x="4" y="4" width="92" height="44" fill="#a9d9f0"/><rect id="sea" x="4" y="48" width="92" height="48" fill="#2f7fb2"/><rect id="target" x="0" y="0" width="10" height="10" fill="#ffffff"/><rect id="frame" x="2" y="2" width="96" height="96" fill="none" stroke="#111111" stroke-width="2"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  const at = (fx: number, fy: number) => ({
+    x: box.x + box.width * fx,
+    y: box.y + box.height * fy,
+  });
+
+  // Select the little white target, then sample the sky *through* the frame's interior.
+  await page.locator(".layerlist .row-btn").filter({ hasText: "target" }).click();
+  const fillHex = page.locator(".paint").filter({ hasText: "fill" }).locator("input.hex");
+
+  await page.getByLabel("fill eyedropper").click();
+  const sky = at(0.5, 0.25);
+  await page.mouse.click(sky.x, sky.y);
+  await expect(fillHex).toHaveValue("#a9d9f0");
+
+  // The sea too — different point, different colour. That's the part that was broken: every
+  // point gave the same answer.
+  await page.getByLabel("fill eyedropper").click();
+  const sea = at(0.5, 0.75);
+  await page.mouse.click(sea.x, sea.y);
+  await expect(fillHex).toHaveValue("#2f7fb2");
+
+  // And the frame's stroke is still sampleable where it actually paints — on the line itself.
+  const frameRect = await page
+    .locator('svg.canvas g.artwork path[stroke="#111111"]')
+    .evaluate((el) => (el as SVGGraphicsElement).getBoundingClientRect().toJSON());
+  await page.getByLabel("fill eyedropper").click();
+  await page.mouse.click(frameRect.x + 1, frameRect.y + frameRect.height / 2);
+  await expect(fillHex).toHaveValue("#111111");
+});
+
+test("the eyedropper resolves currentColor and gradients to an actual colour", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  // A big filled rect whose fill is `currentColor` — what a pen-drawn shape looks like.
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="a" x="0" y="0" width="10" height="10" fill="#ff0000"/><rect id="b" x="12" y="12" width="76" height="76" fill="currentColor"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+
+  // Select the small red rect (row 1 — top-of-stack shows first), then sample the big one.
+  await page.locator(".layerlist .row-btn").nth(1).click();
+  await page.getByLabel("fill eyedropper").click();
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+
+  // A real colour, not the word — and the field shows one, so the picker has something to open on.
+  const fill = await page.locator("svg.canvas g.artwork path").first().getAttribute("fill");
+  expect(fill).not.toBe("currentColor");
+  expect(fill).toMatch(/^#[0-9a-f]{6}$/i);
+  await expect(page.locator(".paint").filter({ hasText: "fill" }).locator("input.hex")).toHaveValue(
+    /^#[0-9a-f]{6}$/i,
+  );
+});
+
+test("the eyedropper borrows the current tool and hands it back", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="20" y="20" width="60" height="60" fill="#0000ff"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+
+  // Arm the pen with nothing selected: the style panel is the pen's NEW-SHAPE style.
+  await page.keyboard.press("p");
+  const pen = page.locator(".rail").getByRole("button", { name: /^pen/ });
+  await expect(pen).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: "new shape style" })).toBeVisible();
+
+  // Take a stroke colour off the blue rect. (The pen's default already has a stroke —
+  // `currentColor` — so the switch is on and there's a field waiting for the sample.)
+  await expect(page.getByLabel("stroke on")).toHaveAttribute("aria-checked", "true");
+  await page.getByLabel("stroke eyedropper").click();
+
+  // Borrowed, not switched: the pen still reads as the selected tool and the panel is still its.
+  await expect(pen).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: "new shape style" })).toBeVisible();
+
+  const box = await page.locator("svg.canvas").boundingBox();
+  if (!box) throw new Error("canvas has no bounding box");
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+
+  // Handed back to the pen — not dropped on select — and the colour stuck to the pen's default.
+  await expect(pen).toHaveAttribute("aria-pressed", "true");
+  const strokeField = page.locator(".paint").filter({ hasText: "stroke" }).locator("input.hex");
+  await expect(strokeField).toHaveValue("#0000ff");
+
+  // Drawing with it now uses the sampled stroke.
+  await page.mouse.click(box.x + box.width * 0.2, box.y + box.height * 0.2);
+  await page.mouse.click(box.x + box.width * 0.3, box.y + box.height * 0.3);
+  await page.keyboard.press("Enter");
+  await expect(page.locator('svg.canvas g.artwork path[stroke="#0000ff"]')).toHaveCount(1);
+
+  // Escape un-arms a borrowed tool rather than falling through to the pen's own Escape.
+  await page.getByLabel("stroke eyedropper").click();
+  await page.keyboard.press("Escape");
+  await expect(pen).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("stroke eyedropper")).not.toHaveClass(/\bon\b/);
+});
+
 test("the eyedropper lives with the colours, one per paint", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
@@ -1605,10 +1833,10 @@ test("a source-defined gradient fill is editable in place (adopts on edit, keeps
   await page.keyboard.press("v");
   await page.locator(".layerlist .row-btn").first().click();
 
-  // A plain objectBoundingBox gradient is now editable in place: "linear" mode active + the
-  // editable bar with its two stops (not a read-only preview of the raw url string).
+  // A plain objectBoundingBox gradient is now editable in place: the kind reads "linear" and the
+  // editable bar shows its two stops (not a read-only preview of the raw url string).
   const fill = page.locator(".paint").filter({ hasText: "fill" });
-  await expect(fill.getByRole("button", { name: "linear", exact: true })).toHaveClass(/active/);
+  await expect(page.getByLabel("fill kind")).toHaveValue("linear");
   const bar = fill.locator(".bar.editable");
   await expect(bar).toBeVisible();
   await expect(fill.locator(".marker")).toHaveCount(2);
@@ -1799,11 +2027,7 @@ test("clicking a filled shape's interior selects it (fill hit-test)", async ({ p
   await expect(page.locator("svg.canvas g.artwork path")).not.toHaveAttribute("d", beforeD ?? "");
 
   // Give it a stroke first — cap/width/dash are inert (disabled) without one.
-  await page
-    .locator(".paint")
-    .filter({ hasText: "stroke" })
-    .getByRole("button", { name: "solid", exact: true })
-    .click();
+  await page.getByLabel("stroke on").click();
 
   // Styling round-trips through the core: set the stroke cap and see it on the element.
   await page
@@ -2154,7 +2378,10 @@ test("a label's typeface is editable and its layer row reads its words", async (
 // The paint field's keyword picker. `none` used to sit twice in the fill block — once as a mode
 // chip, once as a `—` button on the row below — which reads as a mistake even though both worked.
 // The button is now a picker for the values a swatch can't reach, and it leaves `none` to the chip.
-test("a paint's SVG keywords are reachable without duplicating the none chip", async ({ page }) => {
+// A paint answers two questions — *is there one* and *what kind* — and they used to share one row
+// of four chips, which is how "no fill" ended up with two controls and the panel ended up busy.
+// A switch owns the first, a short list owns the second, and only the chosen kind's controls show.
+test("a paint is a switch plus a kind, and off collapses the block", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
     timeout: 30_000,
@@ -2171,24 +2398,29 @@ test("a paint's SVG keywords are reachable without duplicating the none chip", a
   await page.locator(".layerlist .row-btn").first().click();
 
   const shape = page.locator("svg.canvas g.artwork path");
-  const fill = page.locator(".paint").filter({ hasText: "fill" }).first();
-  const kinds = fill.getByLabel("fill value");
+  const fillOn = page.getByLabel("fill on");
+  const fillKind = page.getByLabel("fill kind");
 
-  // Exactly one control in the fill block sets `none`: the mode chip.
-  await expect(fill.getByRole("button", { name: "—", exact: true })).toHaveCount(1);
-  await expect(kinds.locator("option")).toHaveText(["colour", "currentColor"]);
+  // On, and a colour. The old four-chip row is gone entirely.
+  await expect(fillOn).toHaveAttribute("aria-checked", "true");
+  await expect(fillKind).toHaveValue("color");
+  await expect(page.locator(".paint").filter({ hasText: "fill" }).locator(".pmode")).toHaveCount(0);
 
-  // The keyword the swatch can't express is now reachable.
-  await kinds.selectOption("currentColor");
+  // `currentColor` is a KIND, not a separate keyword picker beside the field.
+  await fillKind.selectOption("currentColor");
   await expect(shape).toHaveAttribute("fill", "currentColor");
+  await fillKind.selectOption("color");
+  await expect(shape).toHaveAttribute("fill", "#3b82f6"); // and the colour came back
 
-  // Coming back hands the colour back, rather than resetting to black.
-  await kinds.selectOption("color");
-  await expect(shape).toHaveAttribute("fill", "#3b82f6");
-
-  // And the chip still owns `none`.
-  await fill.getByRole("button", { name: "—", exact: true }).click();
+  // The switch owns "none" — one control, and turning it off takes the whole block with it.
+  await fillOn.click();
   await expect(shape).toHaveAttribute("fill", "none");
+  await expect(fillKind).toHaveCount(0);
+  await expect(page.getByLabel("fill eyedropper")).toHaveCount(0);
+
+  // Back on restores the colour rather than dumping you at black.
+  await fillOn.click();
+  await expect(shape).toHaveAttribute("fill", "#3b82f6");
 });
 
 test("double-click a text label edits it in place", async ({ page }) => {

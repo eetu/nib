@@ -162,22 +162,92 @@ export function hitTest(screen: Point): Hit {
   return { kind: "empty" };
 }
 
-/** The colour under `docPoint` for the eyedropper — the front-most shape whose body contains the
- *  point, resolved to its fill (or stroke if fill is `none`); fully-transparent shapes fall through
- *  to the one below. Includes locked shapes (sampling is read-only). `null` = nothing there. */
-export function sampleFillAt(docPoint: Point): string | null {
+/** "rgb(59, 130, 246)" → "#3b82f6". `null` for anything that isn't an rgb triple. */
+function rgbToHex(css: string): string | null {
+  const m = css.match(/rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i);
+  if (!m) return null;
+  const hex = m
+    .slice(1, 4)
+    .map((n) => Math.round(Number(n)).toString(16).padStart(2, "0"))
+    .join("");
+  return `#${hex}`;
+}
+
+/**
+ * A sampled paint, resolved to an actual colour.
+ *
+ * An eyedropper's job is "give me *that* colour", so handing back a paint that only *refers* to one
+ * defeats it. `currentColor` is the case that bites: it's the default stroke every pen-drawn path
+ * carries, so sampling your own strokes used to fill the field with the literal word — a value that
+ * looks like whatever the theme's text colour is and changes when the theme does.
+ *
+ * `currentColor` resolves to what it actually renders as, read off the artwork it inherits from; a
+ * gradient resolves to its first stop, which is the honest single answer to "what colour is that";
+ * a plain colour (hex, or a named one like `red`) is already an answer.
+ */
+function resolveSampled(paint: string): string | null {
+  const v = paint.trim();
+  if (!v || v === "none") return null;
+  if (v.startsWith("url(")) {
+    const id = v.slice(v.indexOf("#") + 1, v.lastIndexOf(")"));
+    const stop =
+      editor.gradientById(id)?.stops[0]?.color ?? editor.importedGradients.get(id)?.stops[0]?.color;
+    return stop ?? null;
+  }
+  if (v === "currentColor" || v === "inherit") {
+    const el = typeof document === "undefined" ? null : document.querySelector("svg.canvas");
+    const computed = el ? getComputedStyle(el).color : "";
+    return rgbToHex(computed);
+  }
+  return v;
+}
+
+/** Distance from `docPoint` to a path's outline, in document units. `Infinity` if it has none. */
+function distanceToOutline(subpaths: Subpath[], docPoint: Point): number {
+  let best = Infinity;
+  for (const sp of subpaths) {
+    const hit = nearestOnSubpath(sp, docPoint);
+    if (hit && hit.distance < best) best = hit.distance;
+  }
+  return best;
+}
+
+/**
+ * The colour under `docPoint` for the eyedropper — what is actually *rendered* there, taken from
+ * the front-most shape that paints the point. Includes locked shapes (sampling is read-only).
+ * `null` = nothing there.
+ *
+ * The subtlety is unfilled shapes. `pointInPath` is a winding test on geometry and knows nothing
+ * about paint, so a `fill="none"` shape "contains" every point inside its outline even though you
+ * can see straight through it. A picture frame drawn as an unfilled rect and brought to the front
+ * therefore answered for the entire scene: every click landed on the frame, fell past its `none`
+ * fill, and returned its stroke — the same colour everywhere, whatever you pointed at.
+ *
+ * So a shape only answers where it paints: its fill anywhere inside, its stroke only within the
+ * stroke's own width of the outline. Otherwise the point is see-through here and the shape below
+ * gets asked.
+ */
+export function sampleAt(docPoint: Point): { color: string; from: string } | null {
   const doc = editor.doc;
   if (!doc) return null;
   const defUids = editor.defPathUids;
+  // A couple of screen pixels of forgiveness, so a thin stroke is still pickable when zoomed out.
+  const slack = viewport.toDocLength(2);
   for (let i = doc.paths.length - 1; i >= 0; i--) {
     const p = doc.paths[i];
     if (p.deleted || defUids.has(p.uid ?? "")) continue;
-    if (!pointInPath(p.subpaths, docPoint)) continue;
-    const fill = p.styleOverride?.fill ?? p.attributes?.fill ?? "#000000";
-    if (fill !== "none") return fill;
-    const stroke = p.styleOverride?.stroke ?? p.attributes?.stroke;
-    if (stroke && stroke !== "none") return stroke;
-    // both none → see-through here; keep looking at the shape below.
+    const style = (k: string) => p.styleOverride?.[k] ?? p.attributes?.[k];
+    const from = p.id || `#${i}`;
+    const got = (c: string | null) => (c ? { color: c, from } : null);
+    const fill = style("fill") ?? "#000000";
+    if (fill !== "none" && pointInPath(p.subpaths, docPoint)) return got(resolveSampled(fill));
+    const stroke = style("stroke");
+    if (stroke && stroke !== "none") {
+      const width = Number(style("stroke-width") ?? "1");
+      const reach = (Number.isFinite(width) ? width : 1) / 2 + slack;
+      if (distanceToOutline(p.subpaths, docPoint) <= reach) return got(resolveSampled(stroke));
+    }
+    // see-through here; keep looking at the shape below.
   }
   return null;
 }

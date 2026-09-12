@@ -36,15 +36,26 @@
   // A tool switch runs the outgoing tool's cleanup (e.g. the pen finishing its path) and
   // clears any live snap aid — the one place for tool-change lifecycle. `tools.active` stays
   // the single source of truth for which tool is selected.
+  //
+  // A BORROW is not a switch. Stepping onto a momentary tool (the eyedropper) and stepping back
+  // off it must not run cleanup: the pen's cleanup finishes its path, so arming the eyedropper to
+  // pick a colour mid-path used to end the path you were drawing.
   let prevTool: ToolId = tools.active;
+  let prevHost: ToolId | null = tools.host;
   $effect(() => {
     const active = tools.active;
+    const host = tools.host;
     if (active !== prevTool) {
-      getTool(prevTool).onDeactivate?.();
-      interaction.clearDrag();
-      editor.exitNodeEdit(); // a tool switch drops back to object mode
+      const borrowing = host === prevTool; // stepped onto a borrowed tool
+      const releasing = prevHost === active; // stepped back onto its host
+      if (!borrowing && !releasing) {
+        getTool(prevTool).onDeactivate?.();
+        interaction.clearDrag();
+        editor.exitNodeEdit(); // a tool switch drops back to object mode
+      }
       prevTool = active;
     }
+    prevHost = host;
   });
 
   function typing(target: EventTarget | null): boolean {
@@ -110,12 +121,16 @@
         canvas.send({ type: "CANCEL" });
         return;
       }
-      if (interaction.penDrawing) finishPen();
+      // A borrowed tool is the most recently entered thing, so it's the first rung: Escape
+      // un-arms the eyedropper and hands the pen back, rather than falling through and ending
+      // the very path you were colouring.
+      if (tools.host) tools.release();
+      else if (interaction.penDrawing) finishPen();
       else if (editor.nodeEditIndex !== null) editor.exitNodeEdit();
       else editor.deselect();
       return;
     }
-    if (e.key === "Enter" && tools.active === "pen") {
+    if (e.key === "Enter" && tools.subject === "pen") {
       finishPen();
       return;
     }

@@ -45,8 +45,10 @@
   // Style target = the selected path (a selected node implies its path).
   const path = $derived(editor.selectedPathElement);
   const pathIndex = $derived(editor.selectedPathIndex);
+  // `subject`, not `active`: with the eyedropper borrowed over the pen, this panel is still the
+  // pen's — it's what you opened the eyedropper to change.
   const isCreateTool = $derived(
-    ["pen", "circle", "rect", "line", "polygon", "star"].includes(tools.active),
+    ["pen", "circle", "rect", "line", "polygon", "star"].includes(tools.subject),
   );
 
   // A selected non-shape element (text/image/use) — its render node, edited generically by attr.

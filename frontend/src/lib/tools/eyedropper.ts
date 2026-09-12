@@ -1,7 +1,8 @@
 import { editor } from "$lib/stores/document.svelte";
+import { interaction } from "$lib/stores/interaction.svelte";
 import { tools } from "$lib/stores/tool.svelte";
 
-import { sampleFillAt } from "./hit";
+import { sampleAt } from "./hit";
 import type { Tool } from "./types";
 
 /** Eyedropper: click to sample the colour of the shape under the cursor and apply it to the current
@@ -15,9 +16,25 @@ export const eyedropperTool: Tool = {
   id: "eyedropper",
   cursor: () => "crosshair",
   begin(ctx) {
-    const color = sampleFillAt(ctx.docPoint);
-    if (color) editor.applySampledPaint(color, tools.eyedropperTarget);
-    tools.set("select");
+    const got = sampleAt(ctx.docPoint);
+    if (got) editor.applySampledPaint(got.color, tools.eyedropperTarget);
+    interaction.loupe = null;
+    tools.release(); // back to whatever was armed before — the pen, usually
     return null;
+  },
+  /**
+   * The loupe: what this click would take, shown before it's taken.
+   *
+   * A magnifier over *pixels* is the usual shape of this, and it would be the wrong one here —
+   * nib samples the MODEL, so a zoomed view of antialiased edges would show colours it can never
+   * return. What it can say instead is better: the exact colour, and which named shape it comes
+   * from. That turns a guess over a busy drawing into a read.
+   */
+  hover(docPoint) {
+    const got = sampleAt(docPoint);
+    interaction.loupe = got ? { at: docPoint, ...got } : null;
+  },
+  onDeactivate() {
+    interaction.loupe = null;
   },
 };

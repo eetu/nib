@@ -17,9 +17,24 @@ export type ToolId =
 
 /** Style applied to the next drawn path/shape (editable up front via the
  *  "new shape style" panel; also the reset defaults). */
+/**
+ * What a freshly drawn shape is painted with.
+ *
+ * The stroke used to be `currentColor`, which followed the UI theme — clever, and wrong for three
+ * reasons that compounded. nib's job is producing a FILE: a path exported as
+ * `stroke="currentColor"` renders a different colour in every context it lands in. The artwork is
+ * judged against `settings.canvasBg`, which is deliberately orthogonal to the UI theme, so a
+ * stroke that changed when you flipped the chrome to dark was answering the wrong question. And
+ * it made the eyedropper useless — every shape you'd drawn carried the same deferred keyword, so
+ * sampling any of them returned the same resolved grey, always.
+ *
+ * `currentColor` is still one keystroke away in the paint kind list, for when it is genuinely what
+ * you want.
+ */
+const DEFAULT_STROKE = "#111111";
 const DEFAULT_STYLE: Record<string, string> = {
   fill: "none",
-  stroke: "currentColor",
+  stroke: DEFAULT_STROKE,
   "stroke-width": "2",
   "stroke-linecap": "round",
   "stroke-linejoin": "round",
@@ -87,7 +102,14 @@ class ToolState {
       this.gridEnabled = p.gridEnabled;
       this.gridSize = p.gridSize;
       this.guidesEnabled = p.guidesEnabled ?? true;
-      if (p.newStyle) this.newStyle = p.newStyle;
+      if (p.newStyle) {
+        // Anyone who used nib before this has `currentColor` saved as their stroke — the very
+        // thing being fixed. Carry them over rather than leaving the bug persisted; a deliberate
+        // `currentColor` is one pick away in the kind list.
+        const saved = { ...p.newStyle };
+        if (saved.stroke === "currentColor") saved.stroke = DEFAULT_STROKE;
+        this.newStyle = saved;
+      }
       this.cornerRadius = p.cornerRadius ?? 0;
     }
     const save = debounce((prefs: Prefs) => saveState<Prefs>(PREFS_KEY, prefs), 300);
@@ -106,8 +128,42 @@ class ToolState {
     });
   }
 
+  /**
+   * The tool a momentary one interrupted, restored when it lets go.
+   *
+   * Switching tools and *borrowing* one are different acts, and conflating them broke both ends:
+   * arming the eyedropper to pick a stroke colour for the pen ended the pen's unfinished path
+   * (a switch runs `onDeactivate`, and the pen's is "finish the path"), then dropped you on the
+   * select tool afterwards. A borrow suspends the host instead, and hands it back.
+   */
+  host = $state<ToolId | null>(null);
+
+  /**
+   * The tool the UI should describe. A borrowed interlude is not a change of subject: while the
+   * eyedropper is armed the rail still shows the pen lit and the style panel still edits the
+   * pen's new-shape style — which is the whole reason you reached for the eyedropper.
+   */
+  get subject(): ToolId {
+    return this.host ?? this.active;
+  }
+
+  /** Pick a tool deliberately — ends whatever the last one was doing. */
   set(id: ToolId): void {
+    this.host = null;
     this.active = id;
+  }
+
+  /** Step onto a momentary tool, remembering the one to come back to. */
+  borrow(id: ToolId): void {
+    if (this.active !== id) this.host = this.active;
+    this.active = id;
+  }
+
+  /** Hand the tool back to whoever lent it. */
+  release(): void {
+    const back = this.host ?? "select";
+    this.host = null;
+    this.active = back;
   }
 
   /** Set/clear one attribute of the new-shape style. */
