@@ -1,13 +1,12 @@
 <script lang="ts">
-  import { BACKEND } from "$lib/backend/flag";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import ContextMenu from "$lib/components/ContextMenu.svelte";
   import EditorCanvas from "$lib/components/EditorCanvas.svelte";
-  import FileList from "$lib/components/FileList.svelte";
   import ImportDialog from "$lib/components/ImportDialog.svelte";
   import Inspector from "$lib/components/Inspector.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
+  import SidePanel from "$lib/components/SidePanel.svelte";
   import SourceView from "$lib/components/SourceView.svelte";
   import ToolRail from "$lib/components/ToolRail.svelte";
   import TopBar from "$lib/components/TopBar.svelte";
@@ -276,16 +275,8 @@
   {/if}
 
   <div class="body">
-    <!-- Connected-mode projects list (dynamically imported so the standalone build ships none of
-         the backend code). -->
-    {#if BACKEND}
-      {#await import("$lib/components/BackendPanel.svelte") then M}
-        <M.default />
-      {/await}
-    {/if}
-    {#if workspace.files.length}
-      <FileList />
-    {/if}
+    <!-- Navigate: what exists (layers · projects · files), as tabs. -->
+    <SidePanel />
     <ToolRail />
 
     <div class="center">

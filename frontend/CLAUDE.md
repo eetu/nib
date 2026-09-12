@@ -23,7 +23,10 @@ src/lib/canvas/     gesture statechart (XState) — idle / panning / dragging
 src/lib/tools/      pluggable editing tools + hit-testing (select / pen / circle / add / delete)
 src/lib/workspace/  File System Access API wrappers + fallbacks
 src/lib/stores/     rune stores: document (a facade over the WASM Editor), viewport, tool, workspace, interaction, settings (theme + canvas bg)
-src/lib/components/ EditorCanvas, Overlay, ToolRail, Inspector, ColorInput, TopBar, SourceView, FileList, ImportDialog, SettingsDialog, Wordmark
+src/lib/components/ EditorCanvas, Overlay, ToolRail, SidePanel (the left navigator: layers ·
+                    projects · files, as tabs), Layers, Inspector (the right subject panel),
+                    ColorInput, PaintInput, Switch, TopBar, SourceView, FileList,
+                    ImportDialog, SettingsDialog, Wordmark
 src/routes/         +layout (tokens + global control base), +page (composition root)
 ```
 
