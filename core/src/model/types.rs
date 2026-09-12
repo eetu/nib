@@ -205,6 +205,15 @@ pub struct SvgDocument {
     #[serde(rename = "viewBox")]
     pub view_box: ViewBox,
     pub paths: Vec<PathElement>,
+    /// The canvas size was set deliberately (`SetViewBox`), rather than read from the source.
+    ///
+    /// Export normally *grows* the viewBox to cover content drawn outside it, so a shape placed
+    /// past the edge isn't clipped when the file is reopened somewhere else. That safety net is
+    /// right for content that wandered out, and wrong for a size someone chose: cropping is the
+    /// whole point of setting a smaller canvas, and a net that grows it back makes the control a
+    /// no-op. So a chosen size is exported verbatim.
+    #[serde(rename = "viewBoxExplicit", skip_serializing_if = "is_false", default)]
+    pub view_box_explicit: bool,
     /// Gradient paints, injected into a `<defs>` on export (empty = none).
     #[serde(default)]
     pub gradients: Vec<Gradient>,

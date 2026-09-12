@@ -218,6 +218,9 @@ pub fn parse_svg(source: &str) -> Result<SvgDocument, String> {
     Ok(SvgDocument {
         source: source.to_string(),
         view_box,
+        // Read from the source, not chosen — so export keeps its grow-to-fit safety net until
+        // someone sets a size deliberately.
+        view_box_explicit: false,
         paths,
         gradients: Vec::new(),
         // The structural model — parsed from the same source (never fails if the doc parsed).
@@ -543,6 +546,9 @@ fn union_content_bounds(doc: &SvgDocument) -> Option<(f64, f64, f64, f64)> {
 /// elsewhere. Equals the source viewBox when all content fits (→ no rewrite).
 fn export_view_box(doc: &SvgDocument) -> ViewBox {
     let vb = doc.view_box;
+    if doc.view_box_explicit {
+        return vb; // a chosen size crops; see `SvgDocument::view_box_explicit`
+    }
     match union_content_bounds(doc) {
         Some((x0, y0, x1, y1)) => {
             let min_x = vb.min_x.min(x0);
@@ -628,7 +634,10 @@ pub fn serialize_svg_prec(doc: &SvgDocument, precision: usize) -> String {
     out.push_str(&src[cursor..]);
     let with_defs = inject_defs(&out, doc);
     let evb = export_view_box(doc);
-    if evb != doc.view_box {
+    // Rewrite when the computed box differs from the declared one (content grew past it) — or
+    // whenever a size was chosen, because then the declared box IS the computed one and the only
+    // stale copy left is the one in the source text.
+    if evb != doc.view_box || doc.view_box_explicit {
         rewrite_svg_viewbox(&with_defs, evb)
     } else {
         with_defs
@@ -688,7 +697,10 @@ fn serialize_via_tree_opt(
     };
     let with_defs = inject_defs(&out, doc);
     let evb = export_view_box(doc);
-    if evb != doc.view_box {
+    // Rewrite when the computed box differs from the declared one (content grew past it) — or
+    // whenever a size was chosen, because then the declared box IS the computed one and the only
+    // stale copy left is the one in the source text.
+    if evb != doc.view_box || doc.view_box_explicit {
         rewrite_svg_viewbox(&with_defs, evb)
     } else {
         with_defs

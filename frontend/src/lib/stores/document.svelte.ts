@@ -1390,6 +1390,45 @@ class DocumentStore {
 
   // --- live mutations (tool drives these; commit at gesture end) ---------
 
+  /** Set the document's canvas (its viewBox). Crops or pads — content outside is clipped on
+   *  export rather than growing the box back, because choosing a size IS how you crop. */
+  setViewBox(minX: number, minY: number, width: number, height: number): void {
+    if (![minX, minY, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return;
+    if (this.#apply({ type: "setViewBox", minX, minY, width, height })) {
+      this.commit();
+      this.#sync();
+    }
+  }
+
+  /** Shrink-or-grow the canvas to exactly contain the artwork, with a small margin. The other
+   *  half of "canvas size": you usually want a number, sometimes you just want it to fit. */
+  fitViewBoxToContent(): void {
+    const doc = this.doc;
+    if (!doc) return;
+    let box: Bounds | null = null;
+    for (const p of doc.paths) {
+      if (p.deleted) continue;
+      const b = tightBounds(p.subpaths);
+      if (!b) continue;
+      box = box
+        ? {
+            minX: Math.min(box.minX, b.minX),
+            minY: Math.min(box.minY, b.minY),
+            maxX: Math.max(box.maxX, b.maxX),
+            maxY: Math.max(box.maxY, b.maxY),
+          }
+        : { ...b };
+    }
+    if (!box) return; // nothing to fit around; leave the canvas as it is
+    const pad = Math.max((box.maxX - box.minX) * 0.04, (box.maxY - box.minY) * 0.04, 1);
+    this.setViewBox(
+      box.minX - pad,
+      box.minY - pad,
+      box.maxX - box.minX + pad * 2,
+      box.maxY - box.minY + pad * 2,
+    );
+  }
+
   setSubpaths(pathIndex: number, subpaths: Subpath[]): void {
     this.#apply({ type: "setSubpaths", path: pathIndex, subpaths });
     this.#sync();

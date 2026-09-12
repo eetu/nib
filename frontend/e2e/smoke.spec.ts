@@ -2384,6 +2384,57 @@ test("a label's typeface is editable and its layer row reads its words", async (
 // The navigator — the left region, answering "what exists?". Layers, projects and files are all
 // lists you go to, pick from and leave; stacked they competed for one column, so they're tabs.
 // Layers is the default: it's the one tied to the document in front of you.
+// Nothing selected used to leave the right panel blank. The honest subject then isn't "nothing",
+// it's the DOCUMENT — and the canvas size is the control it was missing. Note what this is NOT:
+// an auto-selection. Selecting is something the user does, and a shape selected on their behalf is
+// one Delete away from being lost.
+test("with nothing selected the panel shows the document, and its canvas is editable", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 30_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  // A shape that pokes out past the canvas — the case the grow-on-export net exists for.
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect id="wide" x="80" y="10" width="60" height="20" fill="#2f7fb2"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // Nothing is selected: the document is the subject, and nothing got selected on our behalf.
+  await expect(page.getByRole("heading", { name: "document", exact: true })).toBeVisible();
+  await expect(page.locator("svg.canvas g.overlay polygon.sel-box")).toHaveCount(0);
+  await expect(page.getByLabel("canvas width")).toHaveValue("100");
+
+  // Untouched, export grows the box so the overhang isn't clipped elsewhere.
+  await page.getByRole("button", { name: "source" }).click();
+  expect(await page.locator(".sourceview textarea").inputValue()).toContain('viewBox="0 0 140 100"');
+  await page.getByRole("button", { name: "source" }).click();
+
+  // Setting a size crops instead: the canvas is what was asked for.
+  await page.getByLabel("canvas width").fill("120");
+  await page.getByLabel("canvas width").press("Enter");
+  await page.getByRole("button", { name: "source" }).click();
+  expect(await page.locator(".sourceview textarea").inputValue()).toContain('viewBox="0 0 120 100"');
+  await page.getByRole("button", { name: "source" }).click();
+
+  // And it fits to the artwork on request — the other half of "canvas size".
+  await page.getByRole("button", { name: "fit canvas to artwork" }).click();
+  const w = Number(await page.getByLabel("canvas width").inputValue());
+  expect(w).toBeGreaterThan(60); // the shape is 60 wide, plus a margin
+  expect(w).toBeLessThan(80);
+  expect(Number(await page.getByLabel("canvas x").inputValue())).toBeGreaterThan(70);
+
+  // Selecting a shape hands the panel back to it.
+  await page.locator(".layerlist .row-btn").first().click();
+  await expect(page.getByRole("heading", { name: "document", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "style", exact: true })).toBeVisible();
+});
+
 test("the navigator tabs the lists that answer 'what exists'", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
