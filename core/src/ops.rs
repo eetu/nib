@@ -157,6 +157,18 @@ pub enum Op {
         cy: Option<f64>,
     },
 
+    /// Set the document's canvas — its `viewBox`. Crops or pads: content outside it is clipped on
+    /// export rather than growing the box, because choosing a size is how you crop (see
+    /// `SvgDocument::view_box_explicit`). The semantic canvas-size change the inspector and MCP
+    /// both funnel through.
+    SetViewBox {
+        #[serde(rename = "minX")]
+        min_x: f64,
+        #[serde(rename = "minY")]
+        min_y: f64,
+        width: f64,
+        height: f64,
+    },
     /// Scale a path's geometry by `sx`/`sy` about a pivot — default pivot is the path's
     /// bounding-box centre; `cx`/`cy` override it (a shared pivot scales a multi-selection as one).
     /// The semantic resize a numeric field and the MCP `scale` tool funnel through, so growing a
@@ -623,6 +635,12 @@ fn op_is_finite(op: &Op) -> bool {
             cx.is_none_or(f64::is_finite) && cy.is_none_or(f64::is_finite)
         }
         Op::SetPathBoxAngle { angle, .. } => angle.is_finite(),
+        Op::SetViewBox {
+            min_x,
+            min_y,
+            width,
+            height,
+        } => min_x.is_finite() && min_y.is_finite() && width.is_finite() && height.is_finite(),
         Op::ScalePath { sx, sy, cx, cy, .. } => {
             sx.is_finite()
                 && sy.is_finite()
@@ -795,6 +813,30 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
             // The box turns with the shape, so a resize afterwards still pulls along its own axes.
             doc.paths[*path].box_angle += degrees.to_radians();
             doc.paths[*path].edited = true;
+            true
+        }
+        Op::SetViewBox {
+            min_x,
+            min_y,
+            width,
+            height,
+        } => {
+            // A canvas with no area isn't a canvas — and every renderer treats it as "draw
+            // nothing", which looks exactly like nib having lost the document.
+            if *width <= 0.0 || *height <= 0.0 {
+                return false;
+            }
+            let next = crate::model::types::ViewBox {
+                min_x: *min_x,
+                min_y: *min_y,
+                width: *width,
+                height: *height,
+            };
+            if doc.view_box == next && doc.view_box_explicit {
+                return false;
+            }
+            doc.view_box = next;
+            doc.view_box_explicit = true;
             true
         }
         Op::ScalePath {
@@ -1591,6 +1633,7 @@ mod tests {
                 width: 100.0,
                 height: 100.0,
             },
+            view_box_explicit: false,
             paths: vec![PathElement {
                 id: "p0".into(),
                 uid: String::new(),
@@ -1664,6 +1707,80 @@ mod tests {
             }
         ));
         assert_eq!(doc3.paths[0].subpaths[0].nodes[1].point, before);
+    }
+
+    #[test]
+    fn setting_the_canvas_crops_instead_of_growing_back() {
+        use crate::model::document::{parse_svg, serialize_canonical};
+        // A shape that pokes out past the declared canvas — the case the grow-on-export net exists
+        // for, and the case a deliberate crop has to override.
+        let mut doc = parse_svg(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="80" y="10" width="60" height="20"/></svg>"##,
+        )
+        .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+
+        // Untouched, export grows the box so the overhang isn't clipped elsewhere.
+        let grown = serialize_canonical(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(grown.contains("viewBox=\"0 0 140 100\""), "grown: {grown}");
+
+        // Choosing a size turns that off: the canvas is what was asked for, and the overhang
+        // crops — which is the only way "canvas size" can mean anything.
+        assert!(apply(
+            &mut doc,
+            &Op::SetViewBox {
+                min_x: 0.0,
+                min_y: 0.0,
+                width: 100.0,
+                height: 100.0
+            }
+        ));
+        assert!(doc.view_box_explicit);
+        let cropped = serialize_canonical(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(
+            cropped.contains("viewBox=\"0 0 100 100\""),
+            "cropped: {cropped}"
+        );
+
+        // Padding works the same way, and an offset origin rides along.
+        assert!(apply(
+            &mut doc,
+            &Op::SetViewBox {
+                min_x: -10.0,
+                min_y: -10.0,
+                width: 200.0,
+                height: 150.0
+            }
+        ));
+        let padded = serialize_canonical(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(
+            padded.contains("viewBox=\"-10 -10 200 150\""),
+            "padded: {padded}"
+        );
+
+        // A canvas with no area is refused — every renderer draws nothing, which reads as nib
+        // having lost the document.
+        for (w, h) in [(0.0, 50.0), (50.0, -1.0), (f64::NAN, 50.0)] {
+            assert!(!apply(
+                &mut doc,
+                &Op::SetViewBox {
+                    min_x: 0.0,
+                    min_y: 0.0,
+                    width: w,
+                    height: h
+                }
+            ));
+        }
+        // ...and re-setting the same size is a no-op, so it can't stack undo entries.
+        assert!(!apply(
+            &mut doc,
+            &Op::SetViewBox {
+                min_x: -10.0,
+                min_y: -10.0,
+                width: 200.0,
+                height: 150.0
+            }
+        ));
     }
 
     #[test]

@@ -144,6 +144,13 @@ Per-area detail in `frontend/CLAUDE.md`.
   to it. Loading *any* source bumps `treeVersion`, because re-parsing mints fresh uids even for
   identical markup — without it, reverting to the same bytes leaves the canvas drawing a cached
   tree whose uids match nothing, i.e. blank.
+- **The canvas size is a chosen thing** (`SetViewBox` → `doc.view_box` + `view_box_explicit`).
+  Export normally *grows* the viewBox to cover content drawn outside it, so a shape that wandered
+  past the edge isn't clipped when the file is reopened elsewhere — right for content that
+  escaped, wrong for a size someone picked, since cropping is the entire point of setting a
+  smaller canvas. So an explicit size exports verbatim and the net is off; it also always rewrites
+  the emitted attribute, because then the declared box *is* the computed one and the only stale
+  copy left is in the source text.
 - **Two coordinate systems in the canvas.** Artwork is drawn in a scaled `<g>`
   (document units); the editing overlay is drawn in screen space so handles stay
   a constant pixel size at any zoom. `viewport.toScreen/toDoc` bridge them.
@@ -363,8 +370,10 @@ Per-area detail in `frontend/CLAUDE.md`.
 - **The shell has three regions, by role** (halo-interaction's layout): **navigate** on the left
   (`SidePanel` — layers · projects · files as *tabs*; they're all lists you go to, pick from and
   leave, and stacked they competed for one column), the **surface** in the middle, and the
-  **subject** on the right (`Inspector` — properties of what's selected, or the defaults a create
-  tool is about to use). Layers is the navigator's default tab: it's the list tied to the document
+  **subject** on the right (`Inspector` — properties of what's selected, the defaults a create
+  tool is about to use, or — with nothing selected — the **document** itself: canvas origin/size
+  plus fit-to-artwork. That last one is deliberately not an auto-selection: selecting is something
+  the user does, and a shape chosen on their behalf is one Delete away from being lost). Layers is the navigator's default tab: it's the list tied to the document
   in front of you rather than the session around it. Each region folds, and the fold is a *global*
   pref — chrome layout doesn't belong to a document. *(Still to come: the tool rail moves beside
   the subject panel, which is the half of the map nib hasn't adopted yet.)*

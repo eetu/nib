@@ -204,6 +204,17 @@
     if (sel) editor.setNodeType(sel, type);
   }
 
+  // The document as a subject — what the panel shows when nothing is selected.
+  const canvas = $derived(doc?.viewBox ?? { minX: 0, minY: 0, width: 0, height: 0 });
+  const shapeCount = $derived(doc?.paths.filter((p) => !p.deleted).length ?? 0);
+
+  function setCanvas(key: "minX" | "minY" | "width" | "height", e: Event) {
+    const v = evalNum((e.currentTarget as HTMLInputElement).value);
+    if (v === null) return;
+    const next = { ...canvas, [key]: v };
+    editor.setViewBox(next.minX, next.minY, next.width, next.height);
+  }
+
   // The selected path's bounding box, for the numeric transform panel.
   //
   // Deliberately the **document-space** box, not the shape's own tilted one (`boxAngle`), even
@@ -475,6 +486,71 @@
         <p class="hint">instance of a component · move/resize is free</p>
       {:else}
         <p class="hint">{elTag} element · attributes edit in place</p>
+      {/if}
+    </section>
+  {/if}
+
+  {#if !path && !elementSel && !isCreateTool}
+    <!-- Nothing selected. The honest subject then isn't "nothing" — it's the DOCUMENT, which has
+         real properties worth showing. Deliberately not an auto-selection: selecting is something
+         the user does, and a shape selected on their behalf is one Delete away from being lost.
+         Deliberately not a hint telling them to select something either — that's furniture. -->
+    <section>
+      <h2>document</h2>
+      {#if editor.hasDocument}
+        <!-- Origin as well as size: without it the canvas can only be resized from its top-left,
+             and cropping to something in the middle of the artwork is the usual reason to touch
+             these numbers at all. -->
+        <div class="coords">
+          <label
+            >x <input
+              type="number"
+              step="1"
+              aria-label="canvas x"
+              value={round(canvas.minX)}
+              onchange={(e) => setCanvas("minX", e)}
+            /></label
+          >
+          <label
+            >y <input
+              type="number"
+              step="1"
+              aria-label="canvas y"
+              value={round(canvas.minY)}
+              onchange={(e) => setCanvas("minY", e)}
+            /></label
+          >
+        </div>
+        <div class="coords">
+          <label
+            >w <input
+              type="number"
+              min="1"
+              step="1"
+              aria-label="canvas width"
+              value={round(canvas.width)}
+              onchange={(e) => setCanvas("width", e)}
+            /></label
+          >
+          <label
+            >h <input
+              type="number"
+              min="1"
+              step="1"
+              aria-label="canvas height"
+              value={round(canvas.height)}
+              onchange={(e) => setCanvas("height", e)}
+            /></label
+          >
+        </div>
+        <!-- Crops or pads, like every editor's canvas size. Content left outside is clipped on
+             export, which is the only way the number can mean anything. -->
+        <p class="note">{shapeCount} shape{shapeCount === 1 ? "" : "s"} · crops or pads</p>
+        <button class="ghost-btn wide" onclick={() => editor.fitViewBoxToContent()}>
+          fit canvas to artwork
+        </button>
+      {:else}
+        <p class="empty">no document</p>
       {/if}
     </section>
   {/if}
@@ -1131,6 +1207,17 @@
   .shadow-toggle {
     width: 100%;
     margin-top: 6px;
+  }
+
+  .wide {
+    width: 100%;
+    margin-top: 6px;
+  }
+
+  .note {
+    margin: 6px 0 0;
+    color: var(--halo-text-muted);
+    font-size: 11px;
   }
 
   .shadow-toggle.on {
