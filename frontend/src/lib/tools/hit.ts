@@ -13,7 +13,7 @@ import {
   padBounds,
   SELECT_PAD_PX,
 } from "./transform";
-import type { Hit } from "./types";
+import { type Hit, TRANSFORM_TOOLS } from "./types";
 
 const ANCHOR_HIT_PX = 11;
 const SEGMENT_HIT_PX = 8;
@@ -76,7 +76,9 @@ export function hitTest(screen: Point): Hit {
   //       Otherwise the select tool's drag always moves the whole shape — no ambiguity over
   //       whether a node or the shape moves, which matters most when zoomed out and anchors
   //       cluster. Transform handles (step 3) cover object-mode resize/rotate instead.
-  const nodeEditable = tools.active !== "select" || editor.nodeEditIndex !== null;
+  const nodeEditable =
+    !TRANSFORM_TOOLS.has(tools.active) &&
+    (tools.active !== "select" || editor.nodeEditIndex !== null);
   if (nodeEditable) {
     // Handles — only the selected node exposes its control handles.
     const sel = editor.selection;

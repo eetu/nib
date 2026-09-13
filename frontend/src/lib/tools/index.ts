@@ -2,6 +2,7 @@ import Circle from "@lucide/svelte/icons/circle";
 import Eraser from "@lucide/svelte/icons/eraser";
 import Hexagon from "@lucide/svelte/icons/hexagon";
 import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
+import Move3d from "@lucide/svelte/icons/move-3d";
 import PenTool from "@lucide/svelte/icons/pen-tool";
 import Pipette from "@lucide/svelte/icons/pipette";
 import Plus from "@lucide/svelte/icons/plus";
@@ -17,6 +18,7 @@ import type { ToolId } from "$lib/stores/tool.svelte";
 import { addNodeTool } from "./add-node";
 import { circleTool } from "./circle";
 import { deleteNodeTool } from "./delete-node";
+import { distortTool } from "./distort";
 import { eyedropperTool } from "./eyedropper";
 import { lineTool } from "./line";
 import { penTool } from "./pen";
@@ -113,6 +115,13 @@ export const TOOL_GROUPS: ToolGroup[] = [
         label: "rotate about a pivot (click to place, drag to turn)",
         shortcut: "e",
         icon: RotateCw,
+      },
+      {
+        id: "distort",
+        tool: distortTool,
+        label: "tilt (drag a box edge to lean it)",
+        shortcut: "k",
+        icon: Move3d,
       },
     ],
   },

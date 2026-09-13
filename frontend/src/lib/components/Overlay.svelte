@@ -13,6 +13,7 @@
     padBounds,
     SELECT_PAD_PX,
   } from "$lib/tools/transform";
+  import { TRANSFORM_TOOLS } from "$lib/tools/types";
 
   // The transform box of a selected non-shape element (text/image/use). Built by EditorCanvas,
   // which owns the DOM measurement: a label's box comes from its own untransformed bbox mapped
@@ -23,7 +24,16 @@
   // Anchors show only while node-editing — any non-select tool, or the select tool in
   // node-edit mode (double-click). Object-mode select shows the transform box instead, so
   // the canvas stays uncluttered and a drag unambiguously moves the whole shape.
-  const nodeEditing = $derived(tools.active !== "select" || editor.nodeEditIndex !== null);
+  const nodeEditing = $derived(
+    !TRANSFORM_TOOLS.has(tools.active) &&
+      (tools.active !== "select" || editor.nodeEditIndex !== null),
+  );
+
+  // A transform tool grabs the box's edges, so only those four handles are live — draw only
+  // those. A corner that can't be dragged is worse than an absent one: it says "pull me" and
+  // then does nothing. (Corners can't specify an affine map anyway; see tools/distort.ts.)
+  const edgesOnly = $derived(tools.active === "distort");
+  const EDGE_HANDLES = new Set(["n", "e", "s", "w"]);
   const sel = $derived(editor.selection);
   const selNode = $derived(editor.selectedNode);
   const selPath = $derived(editor.selectedPathIndex);
@@ -128,15 +138,20 @@
            re-oriented, since they're the one part drawn at a fixed pixel size. -->
       {@const spin = (frame.angle * 180) / Math.PI}
       <polygon class="sel-box" points={frame.corners.map((p) => `${p.x},${p.y}`).join(" ")} />
-      <line
-        class="rotate-stem"
-        x1={frame.stem.x}
-        y1={frame.stem.y}
-        x2={frame.knob.x}
-        y2={frame.knob.y}
-      />
-      <circle class="rotate-knob" cx={frame.knob.x} cy={frame.knob.y} r="4.5" />
-      {#each frame.handles as h (h.handle)}
+      {#if !edgesOnly}
+        <line
+          class="rotate-stem"
+          x1={frame.stem.x}
+          y1={frame.stem.y}
+          x2={frame.knob.x}
+          y2={frame.knob.y}
+        />
+        <circle class="rotate-knob" cx={frame.knob.x} cy={frame.knob.y} r="4.5" />
+      {/if}
+      {@const live = edgesOnly
+        ? frame.handles.filter((h) => EDGE_HANDLES.has(h.handle))
+        : frame.handles}
+      {#each live as h (h.handle)}
         <rect
           class="xf-handle"
           x={h.point.x - 4}

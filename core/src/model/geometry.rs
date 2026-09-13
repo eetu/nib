@@ -114,6 +114,50 @@ pub fn rotate_subpaths(subpaths: &[Subpath], cx: f64, cy: f64, radians: f64) -> 
         .collect()
 }
 
+/// Apply a general 2×3 affine matrix to subpaths (each node's point + both handles) about the
+/// pivot `(cx, cy)`, returning fresh subpaths. The six numbers are SVG's own `matrix(a b c d e f)`,
+/// taken relative to the pivot:
+///
+/// ```text
+/// x' = cx + a·(x-cx) + c·(y-cy) + e
+/// y' = cy + b·(x-cx) + d·(y-cy) + f
+/// ```
+///
+/// so a caller who knows an SVG `transform` knows this, and the identity is `[1,0,0,1,0,0]`.
+///
+/// **This is why an affine tilt is cheap where perspective isn't.** An affine map sends a cubic
+/// bezier to a cubic bezier, so mapping the anchors and their handles *is* the transform — exact,
+/// no subdivision, no tolerance. (A projective map sends a cubic to a *rational* cubic, which SVG
+/// cannot express, so true perspective has to approximate by subdividing.) It also preserves
+/// collinearity, which is why `node_type` rides along untouched: a smooth node's handles are
+/// collinear with its point, and they still are afterwards.
+///
+/// The `AffinePath` kernel — and the primitive under skew, which has no kernel of its own because
+/// a skew is just `[1, tan(ky), tan(kx), 1, 0, 0]`.
+pub fn affine_subpaths(subpaths: &[Subpath], cx: f64, cy: f64, m: [f64; 6]) -> Vec<Subpath> {
+    let [a, b, c, d, e, f] = m;
+    let at = |p: Point| -> Point {
+        let (x, y) = (p.x - cx, p.y - cy);
+        Point::new(cx + a * x + c * y + e, cy + b * x + d * y + f)
+    };
+    subpaths
+        .iter()
+        .map(|sp| Subpath {
+            closed: sp.closed,
+            nodes: sp
+                .nodes
+                .iter()
+                .map(|n| PathNode {
+                    point: at(n.point),
+                    handle_in: n.handle_in.map(at),
+                    handle_out: n.handle_out.map(at),
+                    node_type: n.node_type,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 /// Scale subpaths (each node's point + both handles) about `(cx, cy)` by `(sx, sy)`, returning
 /// fresh subpaths; the input is untouched. A negative factor mirrors — which is `flip_subpaths` by
 /// another name, and both exist because a flip is the gesture people ask for while a scale is the
