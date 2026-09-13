@@ -126,6 +126,22 @@ the end.
 
 ### Fixed
 
+- **A reload left connected mode attached to nothing.** The canvas came back — the document
+  rehydrates from localStorage — but the project didn't, so every edit went nowhere and the only
+  cue was an unhighlighted row in a panel you might never open. The reattach lived inside that
+  panel, which is why it was silent: it only ran if you happened to be on the projects tab. It now
+  boots with the header, and the header says which of the three states you're in ("synced" ·
+  "local copy" · the connection being down), because if silence meant "fine" it would also mean
+  "this didn't render". On restore the **server's copy wins**: it's what every other client and
+  the LLM are working from, and a local copy that drifted while detached is exactly what must not
+  be pushed over it.
+- **`group_named` rejected the names it had just handed out.** A name lives in one of two places
+  depending only on where the shape came from — an `id` attribute on the tree node (imported
+  shapes, and every `<g>`), or on the `PathElement`, which is where a shape drawn through MCP
+  keeps its name. The structural lookup read only the first, so `set_style` accepted "sky3" while
+  `group_named` insisted no such shape existed, and drawing a scene and then grouping it by name
+  was impossible for no reason the caller could see. One resolver now answers for both, and
+  `reorder`'s copy of the fallback collapsed into it.
 - **An element drag ran away from the cursor, accelerating** — in Firefox, and subtly everywhere.
   `consolidate().matrix` is a *live* view in some engines, so every pointermove composed onto the
   previous frame's result instead of the gesture's start.

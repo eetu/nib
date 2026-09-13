@@ -12,6 +12,7 @@
   import Settings from "@lucide/svelte/icons/settings";
   import Undo2 from "@lucide/svelte/icons/undo-2";
 
+  import { BACKEND } from "$lib/backend/flag";
   import { editor } from "$lib/stores/document.svelte";
   import { tools } from "$lib/stores/tool.svelte";
   import { workspace } from "$lib/stores/workspace.svelte";
@@ -93,6 +94,14 @@
     {#if editor.hasDocument}
       <span class="name">{editor.fileName ?? "untitled.svg"}</span>
       {#if editor.dirty}<span class="dot" title="unsaved changes"></span>{/if}
+    {/if}
+    <!-- Connected mode only, and dynamically imported so the standalone build ships none of the
+         backend code. Outside the hasDocument test on purpose: it's what re-opens the project on
+         load, so gating it on a document already being there would be circular. -->
+    {#if BACKEND}
+      {#await import("./ProjectLink.svelte") then M}
+        <M.default />
+      {/await}
     {/if}
   </div>
 

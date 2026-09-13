@@ -5,10 +5,14 @@
 
 import { base } from "$app/paths";
 import { getProject, putProject } from "$lib/backend/client";
+import { loadState, removeState, saveState } from "$lib/persistence";
 import { type DocumentReplacement, editor } from "$lib/stores/document.svelte";
 import { settings } from "$lib/stores/settings.svelte";
 
 const CLIENT_ID = crypto.randomUUID();
+
+/** Which project this browser was editing — so a reload comes back to it instead of detaching. */
+const PROJECT_KEY = "project";
 
 // `reload` marks a whole-document replacement (an import). Ops describe edits *to* a document, so
 // there's nothing to replay — the peer re-fetches instead.
@@ -35,9 +39,49 @@ class ProjectSync {
   /** Surfaced by the projects panel — an import that couldn't reach the project must not be silent. */
   error = $state<string | null>(null);
 
+  /**
+   * Open a project: load the server's model, then attach.
+   *
+   * The model, not the SVG — it carries the node uids every client and the LLM address, so loading
+   * it is what keeps identity shared. (A project from before the model column has none; the
+   * backend migrates it on first open, so the svg fallback is a one-time path.)
+   */
+  async open(id: number): Promise<void> {
+    const p = await getProject(id);
+    if (p.model) editor.loadModel(JSON.parse(p.model), p.name);
+    else editor.load(p.svg, p.name);
+    this.connect(id);
+  }
+
+  /**
+   * Re-open whatever was being edited before the page reloaded.
+   *
+   * Without this, a reload left the canvas showing the project — restored from localStorage — with
+   * nothing attached to it. Every edit went nowhere, and the only cue was an unhighlighted row in
+   * a panel you might not have open. That's the same silent divergence an unsynced import used to
+   * cause, reached through a different door.
+   *
+   * The server's copy wins, deliberately: it's what every other client and the LLM are working
+   * from, and a local copy that drifted while detached is exactly what must not be pushed over it.
+   * Bounded by the caller's own project list, so a deleted or foreign id quietly does nothing.
+   */
+  async restore(known: readonly number[]): Promise<void> {
+    const id = loadState<number>(PROJECT_KEY);
+    if (id === null || !known.includes(id)) {
+      removeState(PROJECT_KEY);
+      return;
+    }
+    try {
+      await this.open(id);
+    } catch {
+      removeState(PROJECT_KEY); // gone, or unreachable — start detached rather than pretend
+    }
+  }
+
   connect(id: number): void {
     this.disconnect();
     this.projectId = id;
+    saveState(PROJECT_KEY, id);
     this.status = "connecting";
     const ws = new WebSocket(wsUrl(id));
     this.#ws = ws;
@@ -124,6 +168,9 @@ class ProjectSync {
     this.#ws = null;
     this.projectId = null;
     this.status = "disconnected";
+    // Forget it too: New detaches on purpose, and a reload that re-opened the project you had
+    // just left would undo that decision for you.
+    removeState(PROJECT_KEY);
   }
 }
 

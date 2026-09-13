@@ -711,6 +711,28 @@ fn uids_by_id(doc: &SvgDocument, name: &str) -> Vec<String> {
     out
 }
 
+/// A co-author's name → the tree node(s) a STRUCTURAL op should act on (group, reorder, …).
+///
+/// A name lives in one of two places, and which one depends only on where the shape came from: an
+/// `id` attribute on the tree node (imported shapes, and every `<g>`, since groups are only ever
+/// named), or on the `PathElement` itself — which is where a shape drawn through this surface
+/// keeps its name until something writes it back to the tree. A lookup that reads only the first
+/// is blind to a shape you just drew, so `group_named` would reject the very names `add_shape`
+/// had acked a moment earlier while `set_style` accepted them. The tree wins when both answer:
+/// the fallback only runs when nothing up there claims the name, so there is no group-versus-path
+/// ambiguity to resolve.
+fn node_uids_for_name(doc: &SvgDocument, name: &str) -> Vec<String> {
+    let out = uids_by_id(doc, name);
+    if !out.is_empty() {
+        return out;
+    }
+    doc.paths
+        .iter()
+        .filter(|p| !p.deleted && !p.uid.is_empty() && p.id.eq_ignore_ascii_case(name))
+        .map(|p| p.uid.clone())
+        .collect()
+}
+
 /// Bounding-box → a `ShapeSpec` JSON for `add_shape`. `radius` rounds a rect's corners (ignored by
 /// other shapes). `None` for an unknown shape.
 fn shape_spec(
@@ -2240,7 +2262,7 @@ impl NibMcp {
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             let mut v = Vec::with_capacity(p.names.len());
             for nm in &p.names {
-                let m = uids_by_id(doc, nm);
+                let m = node_uids_for_name(doc, nm);
                 match m.len() {
                     0 => return Err(bad(format!("no shape or group named \"{nm}\""))),
                     1 => v.push(m.into_iter().next().unwrap()),
@@ -2499,15 +2521,8 @@ impl NibMcp {
             match p.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
                 Some(n) => {
                     // A group moves as its own node (its children keep their order); a plain
-                    // shape has no such node, so fall back to the paths the name resolves to.
-                    let mut uids = uids_by_id(doc, n);
-                    if uids.is_empty() {
-                        uids = resolve_targets(doc, None, None, Some(n))?
-                            .iter()
-                            .map(|i| doc.paths[*i].uid.clone())
-                            .filter(|u| !u.is_empty())
-                            .collect();
-                    }
+                    // shape has no such node, so this falls back to the path's own uid.
+                    let uids = node_uids_for_name(doc, n);
                     if uids.is_empty() {
                         return Err(bad(format!("no shape or group named \"{n}\"")));
                     }
@@ -2599,9 +2614,12 @@ impl ServerHandler for NibMcp {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::{
-        component_info, find_by_name, mirrored_name, node_path_indices, own_angle, path_bounds,
-        pick_label, rectangle_angle, render_png_region, resolve_targets, uids_by_id, union_bounds,
+        component_info, find_by_name, mirrored_name, node_path_indices, node_uids_for_name,
+        own_angle, path_bounds, pick_label, rectangle_angle, render_png_region, resolve_targets,
+        uids_by_id, union_bounds,
     };
 
     #[test]
@@ -2690,6 +2708,39 @@ mod tests {
         assert!(resolve_targets(doc, None, None, Some("seahorse")).is_err());
         // No target at all is a clear error, not a silent no-op over everything.
         assert!(resolve_targets(doc, None, None, None).is_err());
+    }
+
+    #[test]
+    fn a_name_means_the_same_thing_to_structural_ops_as_to_transforms() {
+        let mut ed = scene();
+        // A shape drawn through this surface rather than imported: its name lives on the
+        // PathElement, and nothing has written an `id` attribute onto the tree node yet.
+        let op = serde_json::from_value(json!({
+            "type": "addShape",
+            "id": "sky3",
+            "uid": "uid-sky3",
+            "spec": { "shape": "rect", "x0": 10.0, "y0": 10.0, "x1": 30.0, "y1": 30.0,
+                      "rx": 0.0, "ry": 0.0 },
+            "attributes": { "fill": "#2b3a70" },
+        }))
+        .unwrap();
+        assert!(ed.apply(&op), "addShape applied");
+        let doc = ed.doc().unwrap();
+
+        // The bug this guards: `group_named` read only tree `id` attributes, so it rejected the
+        // very name `add_shape` had acked a moment earlier — while `set_style`, which goes
+        // through resolve_targets, accepted it. Drawing a scene and then grouping it by name was
+        // therefore impossible, for no reason the caller could see.
+        assert_eq!(node_uids_for_name(doc, "sky3"), vec!["uid-sky3"]);
+        assert!(resolve_targets(doc, None, None, Some("sky3")).is_ok());
+
+        // A `<g>` still resolves to its OWN node, not to the shapes inside it. That asymmetry is
+        // deliberate and is what lets a group be nested rather than flattened into its parts.
+        assert_eq!(node_uids_for_name(doc, "crab"), uids_by_id(doc, "crab"));
+        assert_eq!(node_uids_for_name(doc, "crab").len(), 1);
+        // An imported shape is found by the tree, as before.
+        assert_eq!(node_uids_for_name(doc, "crab-body").len(), 1);
+        assert!(node_uids_for_name(doc, "seahorse").is_empty());
     }
 
     #[test]
