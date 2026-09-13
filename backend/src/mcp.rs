@@ -733,6 +733,34 @@ fn node_uids_for_name(doc: &SvgDocument, name: &str) -> Vec<String> {
         .collect()
 }
 
+/// Resolve targets and build one `affinePath` op per shape, sharing a single pivot.
+///
+/// The shared pivot is the whole point: shearing each shape about its own centre slides the parts
+/// of a scene past each other instead of leaning the scene, the same way rotating each shape in
+/// place is never what "rotate the crab" means. Defaults to the selection's union-bounds centre.
+#[allow(clippy::too_many_arguments)]
+fn affine_ops(
+    sess: &Arc<std::sync::Mutex<ProjectSession>>,
+    index: Option<usize>,
+    indices: Option<&[usize]>,
+    name: Option<&str>,
+    m: [f64; 6],
+    cx: Option<f64>,
+    cy: Option<f64>,
+) -> Result<(Vec<serde_json::Value>, Vec<usize>), ErrorData> {
+    let s = sess.lock().unwrap();
+    let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+    let targets = resolve_targets(doc, index, indices, name)?;
+    let (bx, by, bw, bh) =
+        union_bounds(doc, &targets, 0.0).ok_or_else(|| bad("nothing there to measure"))?;
+    let (px, py) = (cx.unwrap_or(bx + bw / 2.0), cy.unwrap_or(by + bh / 2.0));
+    let ops = targets
+        .iter()
+        .map(|i| json!({ "type": "affinePath", "path": i, "m": m, "cx": px, "cy": py }))
+        .collect();
+    Ok((ops, targets))
+}
+
 /// Bounding-box → a `ShapeSpec` JSON for `add_shape`. `radius` rounds a rect's corners (ignored by
 /// other shapes). `None` for an unknown shape.
 fn shape_spec(
@@ -1131,6 +1159,63 @@ pub struct ScaleParams {
     #[serde(rename = "toHeight", default)]
     pub to_height: Option<f64>,
     /// Fixed point (viewBox units). Default: the selection's own centre, so it grows in place.
+    #[serde(default)]
+    pub cx: Option<f64>,
+    #[serde(default)]
+    pub cy: Option<f64>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct SkewParams {
+    /// The path's #index (from get_document). One of index / indices / name is required.
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// Several #indices, acted on in one call.
+    #[serde(default)]
+    pub indices: Option<Vec<usize>>,
+    /// A shape's or GROUP's name — a group expands to every shape inside it, so one call shears
+    /// the whole scene as one body. Prefer this: it's what your co-author says out loud.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Horizontal skew in degrees: slides the top sideways relative to the bottom, leaving the
+    /// pivot line fixed. Positive leans right. Must be within ±89.
+    #[serde(default)]
+    pub x: Option<f64>,
+    /// Vertical skew in degrees: slides the right side down relative to the left. Positive leans
+    /// down. Must be within ±89.
+    #[serde(default)]
+    pub y: Option<f64>,
+    /// Fixed point (viewBox units). Default: the selection's own centre, so it leans in place.
+    #[serde(default)]
+    pub cx: Option<f64>,
+    #[serde(default)]
+    pub cy: Option<f64>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct TransformParams {
+    /// The path's #index (from get_document). One of index / indices / name is required.
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// Several #indices, acted on in one call.
+    #[serde(default)]
+    pub indices: Option<Vec<usize>>,
+    /// A shape's or GROUP's name — a group transforms as one rigid body about a shared pivot.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// SVG `matrix(a b c d e f)`: x' = a·x + c·y + e, y' = b·x + d·y + f, taken relative to the
+    /// pivot. Identity is a=1 b=0 c=0 d=1. `a·d − b·c` must be non-zero (a zero determinant
+    /// flattens the shape onto a line, which nothing can undo but undo).
+    pub a: f64,
+    pub b: f64,
+    pub c: f64,
+    pub d: f64,
+    /// Translation, applied after the matrix. Default 0,0.
+    #[serde(default)]
+    pub e: Option<f64>,
+    #[serde(default)]
+    pub f: Option<f64>,
+    /// Fixed point (viewBox units). Default: the selection's own centre.
     #[serde(default)]
     pub cx: Option<f64>,
     #[serde(default)]
@@ -1666,6 +1751,93 @@ impl NibMcp {
         } else {
             format!("scaled {} by {}× × {}×", listed(&n), r(sx), r(sy))
         })
+    }
+
+    #[tool(
+        description = "Skew (shear) one shape (`index`), several (`indices`), or a group (`name`) by an angle in degrees — `x` leans the top sideways, `y` leans the right side down. A square becomes a parallelogram. This is the FAKE-3D primitive: pair it with `scale` to tip a shape away from the viewer (a face rotated back about its horizontal axis is scale sy=cos θ; add skew x to swing it round), which is how isometric and flat-perspective illustration is built. Shears about the selection's own centre unless you pass a cx/cy pivot, so a group leans as one body."
+    )]
+    async fn skew(
+        &self,
+        Parameters(p): Parameters<SkewParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let (kx, ky) = (p.x.unwrap_or(0.0), p.y.unwrap_or(0.0));
+        if p.x.is_none() && p.y.is_none() {
+            return Err(bad("pass x and/or y (degrees)"));
+        }
+        // tan runs away at ±90°, where a shear stops being a shear and becomes the collapse the
+        // op refuses anyway. Say so in the units the caller passed rather than in determinants.
+        for (label, v) in [("x", kx), ("y", ky)] {
+            if !v.is_finite() || v.abs() > 89.0 {
+                return Err(bad(format!(
+                    "skew {label} must be finite and within ±89° (got {v})"
+                )));
+            }
+        }
+        let m = [
+            1.0,
+            ky.to_radians().tan(),
+            kx.to_radians().tan(),
+            1.0,
+            0.0,
+            0.0,
+        ];
+        let (ops, n) = affine_ops(
+            &sess,
+            p.index,
+            p.indices.as_deref(),
+            p.name.as_deref(),
+            m,
+            p.cx,
+            p.cy,
+        )?;
+        let applied = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
+        if applied == 0 {
+            return Err(bad("skew did not apply"));
+        }
+        Ok(match (p.x, p.y) {
+            (Some(_), Some(_)) => format!("skewed {} by {}° / {}°", listed(&n), r(kx), r(ky)),
+            (Some(_), None) => format!("skewed {} by {}° horizontally", listed(&n), r(kx)),
+            _ => format!("skewed {} by {}° vertically", listed(&n), r(ky)),
+        })
+    }
+
+    #[tool(
+        description = "Apply a raw SVG affine matrix — `matrix(a b c d e f)` — to one shape (`index`), several (`indices`), or a group (`name`). The general case behind rotate/scale/skew, for when you want one call instead of three: an isometric top face, for instance, is a=0.866 b=0.5 c=-0.866 d=0.5. Identity is a=1 b=0 c=0 d=1; `a·d − b·c` must be non-zero. Prefer rotate/scale/skew when they say what you mean — they carry the intent, and a rotation through them also keeps the human's selection box upright with the shape."
+    )]
+    async fn transform(
+        &self,
+        Parameters(p): Parameters<TransformParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        let m = [p.a, p.b, p.c, p.d, p.e.unwrap_or(0.0), p.f.unwrap_or(0.0)];
+        if !m.iter().all(|v| v.is_finite()) {
+            return Err(bad("every matrix entry must be finite"));
+        }
+        let det = p.a * p.d - p.b * p.c;
+        if det == 0.0 {
+            return Err(bad(
+                "a·d − b·c is zero — that matrix flattens the shape onto a line",
+            ));
+        }
+        let (ops, n) = affine_ops(
+            &sess,
+            p.index,
+            p.indices.as_deref(),
+            p.name.as_deref(),
+            m,
+            p.cx,
+            p.cy,
+        )?;
+        let applied = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
+        if applied == 0 {
+            return Err(bad("transform did not apply"));
+        }
+        Ok(format!("transformed {} (det {})", listed(&n), r(det)))
     }
 
     #[tool(

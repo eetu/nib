@@ -182,6 +182,31 @@ pub enum Op {
         #[serde(default)]
         cy: Option<f64>,
     },
+    /// Apply a general 2×3 affine matrix to a path's geometry about a pivot — default pivot is the
+    /// path's bounding-box centre, `cx`/`cy` override it (a shared pivot transforms a
+    /// multi-selection as one body).
+    ///
+    /// The six numbers are SVG's own `matrix(a b c d e f)`, so `[1,0,0,1,0,0]` is the identity and
+    /// a skew of `kx`/`ky` is `[1, ky, kx, 1, 0, 0]`. This is the primitive the other transforms
+    /// are special cases of, and it exists because **skew had no op at all**: the interactive and
+    /// numeric skew computed new geometry in the frontend and wrote it as a wholesale
+    /// `SetSubpaths`, so the intent never reached the core — which is why MCP could rotate, scale,
+    /// move and flip a shape but not shear one.
+    ///
+    /// It sits *alongside* `RotatePath`/`ScalePath` rather than replacing them: those carry an
+    /// intent this can't (rotation accumulates `PathElement::box_angle`, a flip negates it), and a
+    /// bare matrix can't say which of the infinitely many decompositions the caller meant. For the
+    /// same reason this deliberately leaves `box_angle` alone — a sheared shape has no single tilt,
+    /// so the selection box keeps the angle it had and bounds the result rather than hugging it.
+    AffinePath {
+        path: usize,
+        /// SVG `matrix(a b c d e f)`, relative to the pivot.
+        m: [f64; 6],
+        #[serde(default)]
+        cx: Option<f64>,
+        #[serde(default)]
+        cy: Option<f64>,
+    },
     /// Set the orientation of a path's selection box, in radians clockwise (see
     /// `PathElement::box_angle`). The interactive rotate drag writes geometry live and sets this
     /// alongside it; `RotatePath` accumulates it on its own, so numeric rotation and MCP agree
@@ -647,6 +672,11 @@ fn op_is_finite(op: &Op) -> bool {
                 && cx.is_none_or(f64::is_finite)
                 && cy.is_none_or(f64::is_finite)
         }
+        Op::AffinePath { m, cx, cy, .. } => {
+            m.iter().all(|v| v.is_finite())
+                && cx.is_none_or(f64::is_finite)
+                && cy.is_none_or(f64::is_finite)
+        }
         Op::SetDropShadow {
             dx,
             dy,
@@ -868,6 +898,34 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
                 crate::model::geometry::scale_subpaths(&p.subpaths, px, py, *sx, *sy)
             };
             doc.paths[*path].subpaths = scaled;
+            doc.paths[*path].edited = true;
+            true
+        }
+        Op::AffinePath { path, m, cx, cy } => {
+            // A singular matrix collapses the shape onto a line or a point — the affine twin of
+            // ScalePath's zero factor, and just as unrecoverable. Refuse it rather than flatten
+            // geometry a caller can't get back.
+            let det = m[0] * m[3] - m[1] * m[2];
+            if det == 0.0 {
+                return false;
+            }
+            let mapped = {
+                let Some(p) = doc.paths.get(*path) else {
+                    return false;
+                };
+                if p.deleted {
+                    return false;
+                }
+                let (px, py) = match (cx, cy) {
+                    (Some(x), Some(y)) => (*x, *y),
+                    _ => match crate::model::geometry::subpaths_bounds(&p.subpaths) {
+                        Some(b) => ((b.min_x + b.max_x) / 2.0, (b.min_y + b.max_y) / 2.0),
+                        None => return false,
+                    },
+                };
+                crate::model::geometry::affine_subpaths(&p.subpaths, px, py, *m)
+            };
+            doc.paths[*path].subpaths = mapped;
             doc.paths[*path].edited = true;
             true
         }
@@ -1856,6 +1914,128 @@ mod tests {
                 }
             ));
         }
+    }
+
+    #[test]
+    fn an_affine_matrix_shears_exactly_and_takes_the_handles_with_it() {
+        // A curve, because handles are the point: an affine map sends a cubic to a cubic, so
+        // mapping anchors AND handles IS the transform — no subdivision, no tolerance. This is
+        // the property that makes a tilt cheap where true perspective isn't.
+        let mut doc = doc_from("M 0 0 C 0 2 2 2 2 0", true);
+        let bounds = |d: &crate::model::types::SvgDocument| {
+            crate::model::geometry::subpaths_bounds(&d.paths[0].subpaths).unwrap()
+        };
+        let before = bounds(&doc);
+
+        // skewX by kx about the origin: x' = x + kx·y, y unchanged. The baseline (y=0) is pinned
+        // and everything below it slides right — a shape tipping over.
+        let kx = 0.5;
+        // Built from the wire form MCP and sync actually send, so the `m` array's shape is pinned
+        // here rather than discovered by a peer failing to replay the op.
+        let op: Op = serde_json::from_value(serde_json::json!({
+            "type": "affinePath", "path": 0, "m": [1.0, 0.0, kx, 1.0, 0.0, 0.0], "cx": 0.0, "cy": 0.0
+        }))
+        .expect("affinePath deserializes from the op JSON");
+        assert_eq!(
+            op,
+            Op::AffinePath {
+                path: 0,
+                m: [1.0, 0.0, kx, 1.0, 0.0, 0.0],
+                cx: Some(0.0),
+                cy: Some(0.0),
+            }
+        );
+        assert!(apply(&mut doc, &op));
+        let sp = &doc.paths[0].subpaths[0];
+        assert!(
+            sp.nodes[0].point.x.abs() < 1e-9 && sp.nodes[0].point.y.abs() < 1e-9,
+            "a node on the pivot line doesn't move: {:?}",
+            sp.nodes[0].point
+        );
+        // The handle at (0,2) must land at (0 + 0.5·2, 2) = (1,2). An implementation that moved
+        // only the anchors would leave it at (0,2) and silently reshape the curve.
+        let h = sp.nodes[0].handle_out.expect("curve keeps its handle");
+        assert!(
+            (h.x - 1.0).abs() < 1e-9 && (h.y - 2.0).abs() < 1e-9,
+            "handle sheared with its anchor: {h:?}"
+        );
+        // Height is untouched by a pure skewX; the box widens by kx·height.
+        let after = bounds(&doc);
+        assert!((after.max_y - after.min_y - (before.max_y - before.min_y)).abs() < 1e-9);
+        assert!(
+            (after.max_x - after.min_x - ((before.max_x - before.min_x) + kx * 2.0)).abs() < 1e-9,
+            "sheared width: {:?}",
+            after
+        );
+
+        // The default pivot is the shape's own centre, so it distorts in place rather than
+        // sliding away — same rule as ScalePath and RotatePath.
+        let c0 = {
+            let b = bounds(&doc);
+            ((b.min_x + b.max_x) / 2.0, (b.min_y + b.max_y) / 2.0)
+        };
+        assert!(apply(
+            &mut doc,
+            &Op::AffinePath {
+                path: 0,
+                m: [1.0, 0.3, 0.0, 1.0, 0.0, 0.0],
+                cx: None,
+                cy: None,
+            }
+        ));
+        let b = bounds(&doc);
+        assert!(
+            (((b.min_x + b.max_x) / 2.0) - c0.0).abs() < 1e-9,
+            "x centre held"
+        );
+
+        // A singular matrix would flatten the shape onto a line with no way back — refused, like
+        // ScalePath's zero factor. Non-finite likewise.
+        for m in [
+            [1.0, 2.0, 2.0, 4.0, 0.0, 0.0],      // det 0
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],      // total collapse
+            [1.0, 0.0, 0.0, f64::NAN, 0.0, 0.0], // not finite
+            [1.0, 0.0, 0.0, 1.0, f64::INFINITY, 0.0],
+        ] {
+            assert!(
+                !apply(
+                    &mut doc,
+                    &Op::AffinePath {
+                        path: 0,
+                        m,
+                        cx: None,
+                        cy: None
+                    }
+                ),
+                "refused: {m:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_affine_keeps_a_smooth_node_smooth_and_leaves_the_box_angle_alone() {
+        let mut doc = doc_from("M 0 0 C 0 2 2 2 2 0", true);
+        doc.paths[0].subpaths[0].nodes[0].node_type = crate::model::types::NodeType::Smooth;
+        doc.paths[0].box_angle = 0.75;
+
+        assert!(apply(
+            &mut doc,
+            &Op::AffinePath {
+                path: 0,
+                m: [1.0, 0.0, 0.6, 1.0, 0.0, 0.0],
+                cx: None,
+                cy: None,
+            }
+        ));
+        // An affine map preserves collinearity, so a smooth node is still smooth afterwards —
+        // which is why node_type rides along untouched instead of being recomputed.
+        assert_eq!(
+            doc.paths[0].subpaths[0].nodes[0].node_type,
+            crate::model::types::NodeType::Smooth
+        );
+        // ...and the box angle is deliberately NOT touched: a sheared shape has no single tilt,
+        // so inventing one would draw a box that hugs nothing. It keeps what it had.
+        assert_eq!(doc.paths[0].box_angle, 0.75);
     }
 
     #[test]

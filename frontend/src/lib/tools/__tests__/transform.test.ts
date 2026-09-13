@@ -5,6 +5,7 @@ import type { Subpath } from "$lib/model/types";
 import {
   boundsCorners,
   boxFrame,
+  distortSubpaths,
   framedCenter,
   framedCorners,
   frameHit,
@@ -221,5 +222,71 @@ describe("scaleSubpathsFramed", () => {
     const a = { x: 10, y: 0 };
     const framed = scaleSubpathsFramed(square, a, 2, 3, 0);
     expect(orientedBounds(framed, 0)).toEqual({ minX: 10, minY: 0, maxX: 50, maxY: 30 });
+  });
+});
+
+describe("distortSubpaths", () => {
+  /** A unit square as one closed subpath, with a handle hung off the first node. */
+  const square = (): Subpath[] => [
+    {
+      closed: true,
+      nodes: [
+        { type: "corner", point: { x: 0, y: 0 }, handleOut: { x: 0, y: 10 } },
+        { type: "corner", point: { x: 10, y: 0 } },
+        { type: "corner", point: { x: 10, y: 10 } },
+        { type: "corner", point: { x: 0, y: 10 } },
+      ],
+    },
+  ];
+
+  it("pins the opposite edge and slides the dragged one, handles included", () => {
+    // skewX about the bottom edge (y=10): x' = x + kx·(y - 10).
+    const out = distortSubpaths(square(), 0, { x: 5, y: 10 }, [1, 0, 0.5, 1, 0, 0]);
+    const n = out[0].nodes;
+    // The bottom edge is the pivot line — it does not move.
+    expect(n[2].point.x).toBeCloseTo(10);
+    expect(n[3].point.x).toBeCloseTo(0);
+    // The top edge slides left by kx·height (y - 10 = -10 there).
+    expect(n[0].point.x).toBeCloseTo(-5);
+    expect(n[1].point.x).toBeCloseTo(5);
+    // Heights are untouched by a pure skewX.
+    expect(n[0].point.y).toBeCloseTo(0);
+    // The handle rides along. Left behind, it would silently reshape the curve — the whole
+    // reason an affine transform maps control points rather than re-fitting the outline.
+    expect(n[0].handleOut?.x).toBeCloseTo(0);
+    expect(n[0].handleOut?.y).toBeCloseTo(10);
+  });
+
+  it("shears along the shape's OWN axes when the box is turned", () => {
+    // The point of going through the frame. A skewX on a box turned 30° must slide the shape
+    // along THAT box's top edge; done in document space it would slide along the document's x and
+    // the shape would walk out from under its own box.
+    const angle = Math.PI / 6;
+    const ref = square();
+    const out = distortSubpaths(ref, angle, { x: 5, y: 10 }, [1, 0, 0.5, 1, 0, 0]);
+    // Every point moves parallel to the frame's x-axis — the direction the box's top edge runs.
+    const axis = { x: Math.cos(angle), y: Math.sin(angle) };
+    out[0].nodes.forEach((n, i) => {
+      const d = { x: n.point.x - ref[0].nodes[i].point.x, y: n.point.y - ref[0].nodes[i].point.y };
+      const len = Math.hypot(d.x, d.y);
+      if (len < 1e-9) return; // a point on the pivot line doesn't move at all
+      // Collinear with the axis, not merely in its direction: points on opposite sides of the
+      // pivot line slide opposite ways, which is what makes it a shear rather than a translation.
+      expect(Math.abs((d.x * axis.y - d.y * axis.x) / len)).toBeLessThan(1e-9);
+    });
+    // ...and at least one point actually moved, so the assertion above isn't vacuous.
+    expect(
+      out[0].nodes.some(
+        (n, i) =>
+          Math.hypot(n.point.x - ref[0].nodes[i].point.x, n.point.y - ref[0].nodes[i].point.y) >
+          1e-6,
+      ),
+    ).toBe(true);
+  });
+
+  it("leaves the reference geometry untouched", () => {
+    const ref = square();
+    distortSubpaths(ref, 0, { x: 5, y: 10 }, [1, 0, 0.5, 1, 0, 0]);
+    expect(ref[0].nodes[0].point).toEqual({ x: 0, y: 0 });
   });
 });

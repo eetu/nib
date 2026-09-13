@@ -2,6 +2,7 @@ import { Editor as WasmEditor } from "$lib/core";
 import { STYLE_KEYS } from "$lib/model/document";
 import { tightBounds } from "$lib/model/geometry";
 import type {
+  AffineMatrix,
   BooleanResult,
   Gradient,
   GradientStop,
@@ -1453,6 +1454,27 @@ class DocumentStore {
   rotatePath(pathIndex: number, degrees: number, pivot?: Point): void {
     if (!Number.isFinite(degrees) || degrees === 0) return;
     if (this.#apply({ type: "rotatePath", path: pathIndex, degrees, cx: pivot?.x, cy: pivot?.y })) {
+      this.commit();
+      this.#sync();
+    }
+  }
+
+  /** Shear a path by `kx`/`ky` (tangents of the skew angles) about a pivot, as one committed step.
+   *
+   *  Routed through the `affinePath` op rather than writing geometry, so a skew reaches the core as
+   *  the transform it is: before this existed, a typed or dragged skew was a wholesale
+   *  `setSubpaths`, which is why MCP could rotate, scale and flip a shape but not shear one, and
+   *  why a peer replaying the edit received a pile of coordinates instead of an intent. */
+  skewPath(pathIndex: number, kx: number, ky: number, pivot?: Point): void {
+    if (!Number.isFinite(kx) || !Number.isFinite(ky) || (kx === 0 && ky === 0)) return;
+    this.affinePath(pathIndex, [1, ky, kx, 1, 0, 0], pivot);
+  }
+
+  /** Apply a general SVG `matrix(a b c d e f)` to a path about a pivot (default = its bbox
+   *  centre), as one committed step. The primitive under skew and tilt. */
+  affinePath(pathIndex: number, m: AffineMatrix, pivot?: Point): void {
+    if (!m.every(Number.isFinite) || m[0] * m[3] - m[1] * m[2] === 0) return;
+    if (this.#apply({ type: "affinePath", path: pathIndex, m, cx: pivot?.x, cy: pivot?.y })) {
       this.commit();
       this.#sync();
     }

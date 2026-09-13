@@ -12,6 +12,7 @@ export type ToolId =
   | "text"
   | "eyedropper"
   | "rotate"
+  | "distort"
   | "add-node"
   | "delete-node";
 

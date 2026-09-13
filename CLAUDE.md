@@ -161,8 +161,12 @@ Per-area detail in `frontend/CLAUDE.md`.
   circle centre-snap). Tools: select/move, pen (draw new paths — and *resume*
   an open subpath by clicking either endpoint; grabbing the head reverses the
   subpath so appends still run off the tail, via `editor.reverseSubpath`),
-  circle (drag out a closed 4-node bezier), rotate, add-node, delete-node. Shapes are built as
+  circle (drag out a closed 4-node bezier), rotate, tilt, add-node, delete-node. Shapes are built as
   editable paths (`model/shapes.ts`), not native `<circle>`/`<rect>`.
+  **`TRANSFORM_TOOLS`** (`tools/types.ts`) names the tools that work on the selection's *box* rather
+  than its nodes (rotate, tilt): while one is active anchors are neither drawn nor hit-tested. That
+  isn't decluttering — a circle's four anchors sit exactly on its box's edge-midpoint handles and
+  anchors win the hit-test, so without it the tilt tool could not grab an ellipse at all.
 - **Rotate about a movable pivot is its own tool** (`tools/rotate.ts`, `e`, advanced-only). The
   select tool's box turns about the box centre, which covers most rotation; what it can't do is
   swing a shape *around something else* — an arm about a shoulder, a spoke about a hub. A pivot
@@ -208,6 +212,25 @@ Per-area detail in `frontend/CLAUDE.md`.
   parent's — dragging the east handle of a box turned 30° widens the label along its own baseline
   instead of shearing it out across the parent's x. Move stays in the *parent* space, since
   "follow the cursor" is a screen direction. Both mappers are captured once per gesture.
+- **Tilt is affine, and that's the whole design** (`tools/distort.ts`, `k`, advanced-only). Dragging
+  a box edge leans the shape with the opposite edge pinned; one drag carries both halves, since the
+  motion *along* the edge shears and the motion *across* it foreshortens — which is what reads as a
+  face tipping away rather than as two operations. It is **flat/parallel projection, not
+  perspective**: parallel edges stay parallel. The reason is a hard one and worth keeping — an
+  affine map sends a cubic bezier to a cubic, so mapping the anchors *and their handles* IS the
+  transform (exact, reversible, `affine_subpaths`), whereas a projective map sends a cubic to a
+  **rational** cubic that SVG cannot express, so true vanishing-point perspective must subdivide and
+  approximate to a tolerance. That makes real perspective a live/parametric node like a live boolean
+  (recomputed, baked on serialize) rather than an op — deliberately post-1.0. Only the four **edge**
+  handles are live: a corner drag can't specify an affine map (pinning the opposite corner leaves
+  two free — one equation, two unknowns), and its honest resolution is the general quad this tool
+  exists to avoid, so corners and the knob aren't drawn. The core op is **`AffinePath {path, m, cx,
+  cy}`** — SVG's own `matrix(a b c d e f)` about a pivot — which exists because **skew had no op**:
+  the numeric and interactive versions wrote a wholesale `SetSubpaths`, so the intent never reached
+  the core and MCP could rotate/scale/move/flip but not shear. It sits *alongside*
+  `RotatePath`/`ScalePath` (those carry an intent a bare matrix can't — rotation accumulates
+  `box_angle`) and deliberately leaves `box_angle` alone, since a sheared shape has no single tilt.
+  MCP gets `skew` (degrees) and `transform` (raw matrix) over it.
 - **The selection box is a `BoxFrame` — points, not a rect** (`tools/transform.ts`): four screen-
   space corners plus the eight handles, the knob, and the box's tilt. A turned box can't be an
   `x/y/width/height` rect plus a rotation without the drawing and the hit-test each doing that

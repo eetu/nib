@@ -103,6 +103,28 @@ the end.
 - **The paint field's `none` appears once.** The fill block had a `—` chip in the mode row *and* a
   `—` button under it; the button is now a picker for the values a swatch can't express, so
   `currentColor` is reachable at all.
+- **A tilt tool** (`k`, advanced) — drag an edge of the selection box and the opposite edge stays
+  pinned, so the shape leans. One drag carries both halves of the gesture: the motion along the
+  edge shears, the motion across it foreshortens, which is what makes it read as a face tipping
+  away rather than as two separate operations. This is *flat* perspective and says so — parallel
+  edges stay parallel, which is what isometric illustration is built from. True vanishing-point
+  perspective is a projective map, and a projective map sends a cubic bezier to a **rational**
+  cubic that SVG cannot express, so it would have to subdivide and approximate; an affine map
+  sends a cubic to a cubic, so moving the anchors with their handles *is* the transform — exact
+  and reversible. That one is deliberately post-1.0.
+  - Only the four EDGE handles are live, and the corners and rotate knob aren't drawn. A corner
+    drag can't specify an affine map (pinning the opposite corner leaves two corners free — one
+    equation, two unknowns), and a handle that says "pull me" and then does nothing is worse than
+    an absent one.
+  - Anchors are hidden and un-hit-tested while a transform tool is active (the rotate tool too,
+    now). Not tidiness: a circle's four anchors sit exactly on its box's edge-midpoint handles,
+    and anchors win the hit-test, so without this the tool could not grab an ellipse at all.
+- **`skew` and `transform` on the MCP surface**, and a real `AffinePath` op under both. Skew had
+  no op: the interactive and numeric versions computed geometry in the frontend and wrote it as a
+  wholesale `setSubpaths`, so the intent never reached the core — which is why the LLM could
+  rotate, scale, move and flip a shape but not shear one, and why a peer replaying the edit
+  received a pile of coordinates instead of a transform. The numeric skew now routes through the
+  op like rotate already did.
 - **The canvas has a size you can set** (`SetViewBox`, crops or pads). nib previously had no way
   to change a canvas at all. It comes with a wrinkle worth knowing: export normally *grows* the
   viewBox to cover content drawn outside it, so a shape past the edge isn't clipped when the file
