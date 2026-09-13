@@ -7,7 +7,6 @@
   import {
     createProject,
     deleteProject,
-    getProject,
     listProjects,
     type ProjectMeta,
     renameProject,
@@ -36,15 +35,12 @@
     else if (account.error) error = account.error;
   });
 
+  // Loading-then-attaching lives in the sync store, not here: a reload has to do exactly the same
+  // thing with no panel mounted, and two copies of it are two chances to drift.
   async function openProject(id: number) {
     error = null;
     try {
-      const p = await getProject(id);
-      // Load the native model (ids intact, so structural ops sync correctly); a not-yet-migrated
-      // project has no model — fall back to importing its svg (the backend migrates it on connect).
-      if (p.model) editor.loadModel(JSON.parse(p.model), p.name);
-      else editor.load(p.svg, p.name);
-      sync.connect(id);
+      await sync.open(id);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }

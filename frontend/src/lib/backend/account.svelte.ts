@@ -12,7 +12,19 @@ class Account {
   error = $state<string | null>(null);
   rotating = $state(false);
 
-  async load(): Promise<void> {
+  /** In-flight `/api/me`, shared by concurrent callers. Two mount together on a fresh load — the
+   *  header's project link and the projects panel — and `/api/me` is the call that bounces an
+   *  expired session to the login, so firing it twice means two redirects racing each other. */
+  #loading: Promise<void> | null = null;
+
+  /** Fetch the account. A later call re-fetches (the panel's refresh wants fresh data); only
+   *  overlapping calls share one request. */
+  load(): Promise<void> {
+    this.#loading ??= this.#fetch().finally(() => (this.#loading = null));
+    return this.#loading;
+  }
+
+  async #fetch(): Promise<void> {
     try {
       this.me = await fetchMe();
       this.error = null;
