@@ -2013,6 +2013,52 @@ mod tests {
     }
 
     #[test]
+    fn isometric_needs_scale_before_skew_not_after() {
+        // The recipe the MCP `skew` tool now spells out, pinned. An isometric side face maps the
+        // square's horizontal edge onto (cos30, sin30) — so a unit edge must land at exactly
+        // (0.866…, 0.5). Composed the other way round it lands at (0.866…, 0.577…): a 33.7° face
+        // instead of a 30° one, which looks nearly right on its own and does NOT meet the
+        // neighbouring face of the same cube. That near-miss is why it's worth a test.
+        let half_root3 = 3f64.sqrt() / 2.0;
+        let tan30 = (30f64).to_radians().tan();
+
+        let edge_end = |ops: &[Op]| {
+            let mut doc = doc_from("M 0 0 L 1 0 L 1 1 L 0 1 Z", true);
+            for op in ops {
+                assert!(apply(&mut doc, op), "{op:?}");
+            }
+            doc.paths[0].subpaths[0].nodes[1].point
+        };
+        let scale = Op::ScalePath {
+            path: 0,
+            sx: half_root3,
+            sy: 1.0,
+            cx: Some(0.0),
+            cy: Some(0.0),
+        };
+        let skew = Op::AffinePath {
+            path: 0,
+            m: [1.0, tan30, 0.0, 1.0, 0.0, 0.0],
+            cx: Some(0.0),
+            cy: Some(0.0),
+        };
+
+        // Scale, then skew: (√3/2)·tan30 = 1/2, exactly.
+        let right = edge_end(&[scale.clone(), skew.clone()]);
+        assert!((right.x - half_root3).abs() < 1e-12);
+        assert!((right.y - 0.5).abs() < 1e-12, "isometric edge: {right:?}");
+
+        // Skew, then scale: the shear runs at full strength and the scale only narrows it.
+        let wrong = edge_end(&[skew, scale]);
+        assert!((wrong.x - half_root3).abs() < 1e-12);
+        assert!((wrong.y - tan30).abs() < 1e-12, "not isometric: {wrong:?}");
+        assert!(
+            wrong.y > right.y + 0.07,
+            "and the two are visibly different"
+        );
+    }
+
+    #[test]
     fn an_affine_keeps_a_smooth_node_smooth_and_leaves_the_box_angle_alone() {
         let mut doc = doc_from("M 0 0 C 0 2 2 2 2 0", true);
         doc.paths[0].subpaths[0].nodes[0].node_type = crate::model::types::NodeType::Smooth;

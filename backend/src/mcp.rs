@@ -1754,7 +1754,7 @@ impl NibMcp {
     }
 
     #[tool(
-        description = "Skew (shear) one shape (`index`), several (`indices`), or a group (`name`) by an angle in degrees — `x` leans the top sideways, `y` leans the right side down. A square becomes a parallelogram. This is the FAKE-3D primitive: pair it with `scale` to tip a shape away from the viewer (a face rotated back about its horizontal axis is scale sy=cos θ; add skew x to swing it round), which is how isometric and flat-perspective illustration is built. Shears about the selection's own centre unless you pass a cx/cy pivot, so a group leans as one body."
+        description = "Skew (shear) one shape (`index`), several (`indices`), or a group (`name`) by an angle in degrees — `x` leans the top sideways, `y` leans the right side down. A square becomes a parallelogram. This is the FAKE-3D primitive, and it is how isometric is built: SCALE FIRST, THEN SKEW — the order matters and the other way round is wrong. An isometric side face is scale sx=0.866 sy=1, then skew y=±30 (skewing first gives b=0.577 instead of 0.5, which looks nearly right and does not meet its neighbouring face). To tip a face away from the viewer instead, scale sy=cos θ. Shears about the selection's own centre unless you pass a cx/cy pivot, so a group leans as one body."
     )]
     async fn skew(
         &self,
@@ -1870,8 +1870,15 @@ impl NibMcp {
             if !dx.is_finite() || !dy.is_finite() {
                 return Err(bad("dx/dy must be finite"));
             }
+            // No target at all is a mistake; a move that's already satisfied is not. `toX/toY` says
+            // where the thing should END UP, so a caller placing a row of shapes from computed
+            // coordinates will legitimately hit the one that's already there — and erroring makes
+            // every such caller special-case it. Only an empty ask is an error.
+            if p.to_x.is_none() && p.to_y.is_none() && p.dx.is_none() && p.dy.is_none() {
+                return Err(bad("pass dx/dy, or toX/toY"));
+            }
             if dx == 0.0 && dy == 0.0 {
-                return Err(bad("that move is zero — pass dx/dy or toX/toY"));
+                return Ok(format!("{} is already there", listed(&targets)));
             }
             let ops: Vec<_> = targets
                 .iter()
