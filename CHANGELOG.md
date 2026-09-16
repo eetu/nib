@@ -148,6 +148,16 @@ the end.
 
 ### Fixed
 
+- **A text layer couldn't be deleted at all.** Every delete in the app addressed a `PathElement`
+  by index — but a `<text>`, `<image>` or `<use>` has no editable geometry, so it projects no path
+  and has no index; neither does a `<g>`. The layer row for one had no context menu, the canvas
+  menu offered hide but not delete, and the Delete key looked only at node and path selections. A
+  new `DeleteTreeNode {uid}` op addresses the tree instead, so it reaches every node kind and
+  takes a group's whole subtree with it; the row menu, the canvas menu, ⌫ and the palette all
+  route through it. Callers reselect **by uid**, since removing a subtree re-projects the paths
+  view and every index after it shifts. MCP gets a **`delete`** tool over the same op — the only
+  way it could remove a label, image or `<use>` either, for the same reason; a label with no id
+  answers to its own words, the way `outline_text` already addresses one.
 - **A reload left connected mode attached to nothing.** The canvas came back — the document
   rehydrates from localStorage — but the project didn't, so every edit went nowhere and the only
   cue was an unhighlighted row in a panel you might never open. The reattach lived inside that

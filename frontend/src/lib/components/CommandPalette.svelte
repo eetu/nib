@@ -36,8 +36,11 @@
       run: () => {
         if (editor.selection) editor.deleteNode(editor.selection);
         else if (editor.selectedPaths.length > 0) editor.deleteSelectedPaths();
+        // A label/image/use has no path index, so it deletes by tree uid instead.
+        else if (editor.selectedElementUid) editor.deleteTreeNode(editor.selectedElementUid);
       },
-      enabled: hasSelection,
+      // Deliberately broader than `hasSelection`, which only knows about paths and nodes.
+      enabled: () => hasSelection() || editor.selectedElementUid !== null,
     },
     { label: "deselect", run: () => editor.deselect() },
     {
