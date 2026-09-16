@@ -331,6 +331,43 @@ export function shearSubpaths(ref: Subpath[], pivot: Point, kx: number, ky: numb
   }));
 }
 
+/**
+ * Apply a frame-space SVG matrix to a reference geometry: map each point into the box's own frame,
+ * transform it about `pivot` (also in frame coordinates), map it back.
+ *
+ * Going through the frame is the whole point. A turned box's handles are the shape's OWN axes, so
+ * leaning its top edge has to shear along that edge — do the arithmetic in document space and a
+ * 30°-turned shape shears across the document's x instead, sliding out from under its own box.
+ * It's the same reason `scaleSubpathsFramed` exists.
+ *
+ * Affine, so a cubic bezier maps to a cubic and moving the anchors with their handles is exact —
+ * no subdivision. (See `affine_subpaths` in the core, which this mirrors for the live drag; the
+ * committed numeric/MCP path goes through the `affinePath` op instead.)
+ */
+export function distortSubpaths(
+  ref: Subpath[],
+  angle: number,
+  pivot: Point,
+  m: [number, number, number, number, number, number],
+): Subpath[] {
+  const [a, b, c, d, e, f] = m;
+  const at = (p: Point): Point => {
+    const q = toFrame(p, angle);
+    const x = q.x - pivot.x;
+    const y = q.y - pivot.y;
+    return fromFrame({ x: pivot.x + a * x + c * y + e, y: pivot.y + b * x + d * y + f }, angle);
+  };
+  return ref.map((sp) => ({
+    closed: sp.closed,
+    nodes: sp.nodes.map((n): PathNode => ({
+      type: n.type,
+      point: at(n.point),
+      handleIn: n.handleIn ? at(n.handleIn) : undefined,
+      handleOut: n.handleOut ? at(n.handleOut) : undefined,
+    })),
+  }));
+}
+
 /** Rotate a reference geometry about `pivot` by `angle` radians, returning fresh subpaths
  *  (does not mutate the reference). */
 export function rotateSubpaths(ref: Subpath[], pivot: Point, angle: number): Subpath[] {

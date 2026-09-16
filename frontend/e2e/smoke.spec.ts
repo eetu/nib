@@ -275,6 +275,64 @@ test("shift-selecting two paths enables align", async ({ page }) => {
   expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
 });
 
+test("the tilt tool leans a shape by its edge, pinning the opposite one", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M20 20 H80 V80 H20 Z" fill="#3a7"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+  await page.locator(".layerlist .row-btn").first().click();
+  await expect(page.locator("svg.canvas g.overlay polygon.sel-box")).toBeAttached();
+
+  // Arm the tilt tool. Only the four EDGE handles stay — a corner can't specify an affine map,
+  // and a handle that says "pull me" and then does nothing is worse than an absent one.
+  await page.keyboard.press("k");
+  const handles = page.locator("svg.canvas g.overlay rect.xf-handle");
+  await expect(handles).toHaveCount(4);
+  await expect(page.locator("svg.canvas g.overlay circle.rotate-knob")).toHaveCount(0);
+  // Anchors stay hidden too: a shape's own nodes would otherwise shadow the very handles this
+  // tool grabs (on an ellipse they sit exactly on them).
+  await expect(page.locator("svg.canvas g.overlay circle.anchor, svg.canvas g.overlay rect.anchor"))
+    .toHaveCount(0);
+
+  const path = page.locator("svg.canvas g.artwork path").first();
+  const before = await path.getAttribute("d");
+
+  // Drag the north edge sideways → the top leans, the bottom stays put.
+  const n = await handles.nth(0).boundingBox();
+  if (!n) throw new Error("no N handle");
+  await page.mouse.move(n.x + n.width / 2, n.y + n.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(n.x + 70, n.y + n.height / 2, { steps: 4 });
+  await page.mouse.up();
+
+  const after = await path.getAttribute("d");
+  expect(after).not.toBe(before);
+  // The pinned edge is the assertion that says "shear", not "move": the two y=80 corners are
+  // still at y=80, while the top two have slid along x.
+  const ys = [...(after ?? "").matchAll(/-?\d+(?:\.\d+)?/g)].map(Number);
+  expect(Math.max(...ys.filter((_, i) => i % 2 === 1))).toBeCloseTo(80, 1);
+
+  // One undo step, not one per pointermove.
+  await page.keyboard.press("Meta+z");
+  await expect(path).toHaveAttribute("d", before ?? "");
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("multi-select shows group transform handles and scales all shapes together", async ({
   page,
 }) => {

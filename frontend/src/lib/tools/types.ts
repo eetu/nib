@@ -3,6 +3,17 @@ import type { ToolId } from "$lib/stores/tool.svelte";
 
 import type { TransformHandle } from "./transform";
 
+/**
+ * Tools that work on the selection's BOX rather than on its nodes.
+ *
+ * While one is active, anchors are neither drawn nor hit-tested. That's not decluttering for its
+ * own sake: a circle's four anchors sit exactly on its box's edge-midpoint handles, and anchors
+ * are hit-tested first (so a path's own nodes are never shadowed by a transform handle). Without
+ * this the tilt tool simply could not grab an ellipse — every edge handle would answer as an
+ * anchor. It's the same rule the select tool already follows in object mode, named.
+ */
+export const TRANSFORM_TOOLS: ReadonlySet<ToolId> = new Set<ToolId>(["rotate", "distort"]);
+
 /** What sits under the pointer at pointerdown, in priority order. */
 export type Hit =
   | { kind: "handle"; ref: NodeRef; which: "in" | "out" }

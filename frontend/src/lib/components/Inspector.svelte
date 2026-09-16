@@ -24,7 +24,7 @@
   import { canReadInstalledFonts, installedFamilyNames } from "$lib/text/fonts";
   import { outlineText, warmFontFor } from "$lib/text/outline";
   import { activePivot } from "$lib/tools/rotate";
-  import { boxCenter, scaleSubpaths, shearSubpaths } from "$lib/tools/transform";
+  import { boxCenter, scaleSubpaths } from "$lib/tools/transform";
 
   import ColorInput from "./ColorInput.svelte";
   import PaintInput from "./PaintInput.svelte";
@@ -253,11 +253,10 @@
     // angle and a dragged one agree even when the box is turned.
     const center = activePivot() ?? boxCenter(bounds);
     const k = Math.tan((deg * Math.PI) / 180);
-    editor.setSubpaths(
-      pathIndex,
-      shearSubpaths(path.subpaths, center, axis === "x" ? k : 0, axis === "y" ? k : 0),
-    );
-    editor.commit();
+    // Through the semantic `affinePath` op, like rotate below — a skew used to be written as a
+    // wholesale geometry replacement, so the intent never reached the core and MCP had no way to
+    // shear at all.
+    editor.skewPath(pathIndex, axis === "x" ? k : 0, axis === "y" ? k : 0, center);
   }
 
   // Rotate the selected path a one-shot angle (deg, clockwise) — the input resets to 0 so each

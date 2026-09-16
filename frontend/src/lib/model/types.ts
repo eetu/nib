@@ -4,6 +4,10 @@
 
 export type Point = { x: number; y: number };
 
+/** SVG `matrix(a b c d e f)`: x' = a·x + c·y + e, y' = b·x + d·y + f. The wire form of the
+ *  `affinePath` op, in the same order SVG writes it so one notation covers both. */
+export type AffineMatrix = [number, number, number, number, number, number];
+
 /** A smooth node keeps its two handles collinear (mirror on drag); a corner
  *  node moves them independently. */
 export type NodeType = "corner" | "smooth";
