@@ -21,6 +21,19 @@ pub fn new_sessions() -> Sessions {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
+/// Lock a mutex, ignoring poisoning.
+///
+/// Poisoning is the wrong failure model here. A `std::sync::Mutex` is marked poisoned forever once
+/// a thread panics while holding it, so `lock().unwrap()` turns *one* panic — a malformed op that
+/// trips an assert deep in the core, say — into that project being permanently unopenable for the
+/// life of the process, by everyone. The editor behind the lock is a plain document model, not an
+/// invariant-carrying structure that a half-finished mutation leaves dangerous to read; the worst
+/// a recovered guard exposes is an edit that didn't complete, which the next op overwrites and
+/// undo can take back. Staying up and serving that is strictly better than bricking the project.
+pub fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// A batch of ops broadcast to a project's subscribers. `client_id` is the origin, so a client
 /// ignores the echo of its own edits. Ops replay cleanly on every client now that all clients load
 /// the **same native model** (node `uid`s are shared identity carried by the model), so even
@@ -108,8 +121,8 @@ pub async fn open(
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no such project: {project_id}"))?;
-    if let Some(s) = sessions.lock().unwrap().get(&project_id).cloned() {
-        s.lock().unwrap().last_touched = Instant::now();
+    if let Some(s) = lock(sessions).get(&project_id).cloned() {
+        lock(&s).last_touched = Instant::now();
         return Ok(s);
     }
     let mut editor = Editor::new();
@@ -130,7 +143,7 @@ pub async fn open(
         tx,
         last_touched: Instant::now(),
     }));
-    sessions.lock().unwrap().insert(project_id, session.clone());
+    lock(sessions).insert(project_id, session.clone());
     Ok(session)
 }
 
@@ -149,10 +162,10 @@ pub fn replace_document(
     project_id: i64,
     source: &str,
 ) -> Result<Option<(String, String)>, String> {
-    let Some(sess) = sessions.lock().unwrap().get(&project_id).cloned() else {
+    let Some(sess) = lock(sessions).get(&project_id).cloned() else {
         return Ok(None);
     };
-    let mut s = sess.lock().unwrap();
+    let mut s = lock(&sess);
     s.editor.load_source(source)?;
     s.last_touched = Instant::now();
     let model = s.editor.to_model_json().unwrap_or_default();
@@ -171,7 +184,7 @@ pub fn replace_document(
 /// document to anyone still attached, and the idle sweep would try to flush it back to a row that
 /// no longer exists. Any live WebSocket sees its broadcast channel close and disconnects.
 pub fn close(sessions: &Sessions, project_id: i64) {
-    sessions.lock().unwrap().remove(&project_id);
+    lock(sessions).remove(&project_id);
 }
 
 /// How long a project with no live subscribers stays resident before being dropped.
@@ -191,10 +204,10 @@ pub fn spawn_evictor(sessions: Sessions, pool: SqlitePool) {
         loop {
             tick.tick().await;
             let stale: Vec<(i64, String, String)> = {
-                let mut map = sessions.lock().unwrap();
+                let mut map = lock(&sessions);
                 let mut drained = Vec::new();
                 map.retain(|&id, sess| {
-                    let s = sess.lock().unwrap();
+                    let s = lock(sess);
                     let idle = s.tx.receiver_count() == 0 && s.last_touched.elapsed() > IDLE_EVICT;
                     if idle {
                         drained.push((
@@ -232,7 +245,7 @@ pub fn step_history(
     undo: bool,
 ) -> Result<usize, String> {
     let (model, svg, id, done) = {
-        let mut s = session.lock().unwrap();
+        let mut s = lock(session);
         let mut done = 0usize;
         for _ in 0..steps.clamp(1, 100) {
             let stepped = if undo {
@@ -281,7 +294,7 @@ pub fn apply_ops(
         .map(|v| serde_json::from_value(v.clone()).map_err(|e| format!("invalid op: {e}")))
         .collect::<Result<_, _>>()?;
     let (model, svg, id, applied) = {
-        let mut s = session.lock().unwrap();
+        let mut s = lock(session);
         let mut applied = 0usize;
         for op in &parsed {
             if s.editor.apply(op) {
@@ -311,4 +324,31 @@ pub fn apply_ops(
         let _ = db::update_project(&pool, id, &model, &svg).await;
     });
     Ok(applied)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_poisoned_lock_still_opens() {
+        // The failure this prevents: one panic while holding the lock used to mark the mutex
+        // poisoned forever, so `lock().unwrap()` made that project permanently unopenable — for
+        // every user, for the life of the process — long after the request that panicked was gone.
+        let m = Arc::new(Mutex::new(7u32));
+        let m2 = m.clone();
+        let panicked = std::thread::spawn(move || {
+            let _g = lock(&m2);
+            panic!("boom while holding the lock");
+        })
+        .join();
+        assert!(panicked.is_err(), "the thread really did panic");
+        assert!(m.lock().is_err(), "...and really did poison the mutex");
+
+        // Recovered, with the value the panicking thread left behind — which for a document model
+        // is at worst an edit that didn't finish, not a structure unsafe to read.
+        assert_eq!(*lock(&m), 7);
+        *lock(&m) = 9;
+        assert_eq!(*lock(&m), 9);
+    }
 }

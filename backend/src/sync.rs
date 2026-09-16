@@ -71,7 +71,7 @@ async fn handle_socket(mut socket: WebSocket, project_id: i64, user: Option<User
             return;
         }
     };
-    let mut rx = sess.lock().unwrap().tx.subscribe();
+    let mut rx = session::lock(&sess).tx.subscribe();
 
     loop {
         tokio::select! {
