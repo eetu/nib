@@ -155,7 +155,9 @@ the end.
   new `DeleteTreeNode {uid}` op addresses the tree instead, so it reaches every node kind and
   takes a group's whole subtree with it; the row menu, the canvas menu, ⌫ and the palette all
   route through it. Callers reselect **by uid**, since removing a subtree re-projects the paths
-  view and every index after it shifts.
+  view and every index after it shifts. MCP gets a **`delete`** tool over the same op — the only
+  way it could remove a label, image or `<use>` either, for the same reason; a label with no id
+  answers to its own words, the way `outline_text` already addresses one.
 - **A reload left connected mode attached to nothing.** The canvas came back — the document
   rehydrates from localStorage — but the project didn't, so every edit went nowhere and the only
   cue was an unhighlighted row in a panel you might never open. The reattach lived inside that

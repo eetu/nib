@@ -1223,6 +1223,20 @@ pub struct TransformParams {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct DeleteParams {
+    /// The path's #index (from get_document). One of index / indices / name is required.
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// Several #indices, removed in one call.
+    #[serde(default)]
+    pub indices: Option<Vec<usize>>,
+    /// A shape's, GROUP's or LABEL's name — a group goes with everything inside it. A label with
+    /// no id answers to its own words, the way `outline_text` addresses one.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct MoveParams {
     /// The path's #index (from get_document). One of index / indices / name is required.
     #[serde(default)]
@@ -1838,6 +1852,70 @@ impl NibMcp {
             return Err(bad("transform did not apply"));
         }
         Ok(format!("transformed {} (det {})", listed(&n), r(det)))
+    }
+
+    #[tool(
+        description = "Remove one shape (`index`), several (`indices`), or anything addressable by `name` — a shape, a GROUP (which goes with everything inside it), or a LABEL (by its id, or by its words when it has none). This is the only way to remove a label, image or `<use>`: those carry no editable geometry, so they have no #index for the other tools to name. Undoable, like every edit. Renumbers #indices — call get_document after."
+    )]
+    async fn delete(
+        &self,
+        Parameters(p): Parameters<DeleteParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let user = self.user(&ctx).await?;
+        let sess = self.active_session(&user).await?;
+        // Resolve under the lock, apply after — the same shape as outline_text, so a name that
+        // resolves to nothing is reported before the document changes.
+        let (ops, what) = {
+            let s = sess.lock().unwrap();
+            let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
+            match p.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                Some(n) => {
+                    let mut uids = node_uids_for_name(doc, n);
+                    if uids.is_empty() {
+                        // A label usually carries no `id`, so it answers to its own words —
+                        // matching how `outline_text` addresses one. The error lists candidates.
+                        let all = s.editor.text_infos();
+                        if all.is_empty() {
+                            return Err(bad(format!(
+                                "no shape, group or label named \"{n}\" — call find or get_document"
+                            )));
+                        }
+                        uids = vec![pick_label(&all, n)?.uid.clone()];
+                    }
+                    let k = uids.len();
+                    let ops: Vec<_> = uids
+                        .into_iter()
+                        .map(|uid| json!({ "type": "deleteTreeNode", "uid": uid }))
+                        .collect();
+                    (ops, format!("\"{n}\" ({k})"))
+                }
+                None => {
+                    let targets = resolve_targets(doc, p.index, p.indices.as_deref(), None)?;
+                    // Uid-addressed, so a batch is safe: each op names its own node and can't be
+                    // thrown off by the index shifts the previous deletes in the batch cause.
+                    let ops: Vec<_> = targets
+                        .iter()
+                        .map(|i| {
+                            let uid = &doc.paths[*i].uid;
+                            if uid.is_empty() {
+                                json!({ "type": "deletePath", "path": i })
+                            } else {
+                                json!({ "type": "deleteTreeNode", "uid": uid })
+                            }
+                        })
+                        .collect();
+                    (ops, listed(&targets))
+                }
+            }
+        };
+        let applied = session::apply_ops(&sess, &self.pool, ops, "mcp").map_err(bad)?;
+        if applied == 0 {
+            return Err(bad("delete did not apply"));
+        }
+        Ok(format!(
+            "deleted {what} → #indices renumbered, call get_document"
+        ))
     }
 
     #[tool(
