@@ -148,6 +148,19 @@ the end.
 
 ### Fixed
 
+- **Concurrent co-editing hit `database is locked`.** SQLite's default rollback journal excludes
+  readers for the duration of a write, so the human's `PUT`, the LLM's op and a page load landing
+  together failed under ordinary use rather than under load. WAL lets readers run alongside the
+  writer, and a 5s `busy_timeout` makes the one remaining case — two writers — wait its turn.
+- **One panic made a project permanently unopenable.** A `std::sync::Mutex` stays poisoned for the
+  life of the process, so a single `lock().unwrap()` turned one bad op into that project being
+  dead for every user until a restart. Locks now recover the guard: what's behind it is a document
+  model, where the worst a half-finished mutation leaves is an edit the next op overwrites and
+  undo can take back. A `CatchPanicLayer` turns the panic itself into a 500 with a log line.
+- **The REST surface had no timeout and a 2MB body cap** — a real illustration `PUT` was rejected
+  with a bare 413. Now 16MB and 30s, applied to `/api` only: the WebSocket and MCP's
+  Streamable-HTTP stream are long-lived by design, and a global timeout would cut the co-editing
+  session itself.
 - **A text layer couldn't be deleted at all.** Every delete in the app addressed a `PathElement`
   by index — but a `<text>`, `<image>` or `<use>` has no editable geometry, so it projects no path
   and has no index; neither does a `<g>`. The layer row for one had no context menu, the canvas

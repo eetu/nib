@@ -5,11 +5,12 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::FromRef;
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::StatusCode,
     routing::{get, post},
 };
@@ -19,8 +20,11 @@ use rmcp::transport::streamable_http_server::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::timeout::TimeoutLayer;
+use tower_http::trace::TraceLayer;
 
 mod auth;
 mod config;
@@ -244,7 +248,10 @@ pub fn app(state: AppState) -> Router {
         StreamableHttpServerConfig::default(),
     );
 
-    let router = Router::new()
+    // Request-scoped limits belong on the REST surface ONLY. A global timeout would cut the
+    // WebSocket and MCP's Streamable-HTTP stream, both of which are long-lived by design — the
+    // co-editing session IS the connection staying open.
+    let api = Router::new()
         .route("/api/version", get(version))
         .route("/api/me", get(me))
         .route("/api/token/rotate", post(rotate_token))
@@ -256,6 +263,16 @@ pub fn app(state: AppState) -> Router {
                 .patch(patch_project)
                 .delete(delete_project),
         )
+        // A `PUT` carries a whole SVG. Axum's 2MB default rejects a real illustration with a bare
+        // 413 and no hint, so the cap is raised to something a drawing can actually hit — but kept,
+        // because an unbounded body is a memory-exhaustion lever on a 256MB container.
+        .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(30),
+        ));
+
+    let router = api
         .route("/auth/login", get(login::login))
         .route("/auth/callback", get(login::callback))
         .route("/auth/logout", post(login::logout))
@@ -272,7 +289,13 @@ pub fn app(state: AppState) -> Router {
         router
     };
 
-    router.with_state(state)
+    // Outermost, so it covers every route including the SPA and MCP. A panic in one handler
+    // becomes a 500 for that request instead of a dropped connection with no status and no log
+    // line — and, with `session::lock` recovering poisoned guards, the project stays usable after.
+    router
+        .layer(CatchPanicLayer::new())
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
 }
 
 #[tokio::main]
@@ -452,11 +475,11 @@ mod tests {
             session::apply_ops(&sess, &pool, vec![op], "test").unwrap(),
             1
         );
-        let edited = sess.lock().unwrap().editor.to_svg();
+        let edited = session::lock(&sess).editor.to_svg();
         assert!(edited.contains("<path"), "drawn shape emitted: {edited}");
 
         // persistence round-trips through the DB (model = source of truth, svg = cached export).
-        let model = sess.lock().unwrap().editor.to_model_json().unwrap();
+        let model = session::lock(&sess).editor.to_model_json().unwrap();
         db::update_project(&pool, id, &model, &edited)
             .await
             .unwrap();
@@ -480,8 +503,8 @@ mod tests {
         let sess = session::open(&pool, &sessions, user.id, id).await.unwrap();
 
         // Two subscribers (two live clients on the project).
-        let mut rx1 = sess.lock().unwrap().tx.subscribe();
-        let mut rx2 = sess.lock().unwrap().tx.subscribe();
+        let mut rx1 = session::lock(&sess).tx.subscribe();
+        let mut rx2 = session::lock(&sess).tx.subscribe();
 
         let op = serde_json::json!({
             "type": "addShape", "id": "r1",
@@ -537,7 +560,7 @@ mod tests {
         }
         // Their tree uids — carried by the shared model, so the op replays identically on a peer.
         let uids: Vec<String> = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().unwrap();
             doc.paths
                 .iter()
@@ -551,7 +574,7 @@ mod tests {
             "drawn shapes carry tree uids"
         );
 
-        let mut rx = sess.lock().unwrap().tx.subscribe();
+        let mut rx = session::lock(&sess).tx.subscribe();
         let group = serde_json::json!({
             "type": "groupNodes", "uids": uids, "uid": "grp-1", "name": "pair"
         });
@@ -566,7 +589,7 @@ mod tests {
         assert_eq!(msg.client_id, "clientA");
         assert_eq!(msg.ops.len(), 1, "structural op replays as an op");
         assert_eq!(msg.ops[0]["type"], "groupNodes");
-        let svg = sess.lock().unwrap().editor.to_svg();
+        let svg = session::lock(&sess).editor.to_svg();
         assert!(
             svg.contains("<g"),
             "grouped in the authoritative editor: {svg}"
@@ -738,7 +761,7 @@ mod tests {
         session::open(&pool, &st.sessions, owner.id, id)
             .await
             .unwrap();
-        assert!(st.sessions.lock().unwrap().contains_key(&id));
+        assert!(session::lock(&st.sessions).contains_key(&id));
 
         let del = |token: String| {
             let st = st.clone();
@@ -779,7 +802,7 @@ mod tests {
                 .is_none()
         );
         assert!(
-            !st.sessions.lock().unwrap().contains_key(&id),
+            !session::lock(&st.sessions).contains_key(&id),
             "the resident session is dropped with the row"
         );
 
@@ -804,8 +827,8 @@ mod tests {
         let sess = session::open(&pool, &st.sessions, user.id, id)
             .await
             .unwrap();
-        let mut rx = sess.lock().unwrap().tx.subscribe();
-        assert!(!sess.lock().unwrap().editor.to_svg().contains("circle"));
+        let mut rx = session::lock(&sess).tx.subscribe();
+        assert!(!session::lock(&sess).editor.to_svg().contains("circle"));
 
         // r##…##: the colour literal contains `"#`, which would close an `r#"…"#` string early.
         let imported = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="30" fill="#e11"/></svg>"##;
@@ -824,7 +847,7 @@ mod tests {
 
         // The resident editor now holds the import…
         assert!(
-            sess.lock().unwrap().editor.to_svg().contains("circle"),
+            session::lock(&sess).editor.to_svg().contains("circle"),
             "the live session took the import"
         );
         // …the row agrees…

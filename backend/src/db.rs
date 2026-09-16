@@ -3,10 +3,13 @@
 //! there's no build-time database dependency.
 
 use std::str::FromStr;
+use std::time::Duration;
 
 use serde::Serialize;
 use sqlx::FromRow;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
+};
 
 /// The dev token if `NIB_DEV_TOKEN` is unset — so `just dev` + a local MCP client work with zero
 /// setup. Seeded **only** under `NIB_DEV_AUTH`; a production deploy never creates this user, and
@@ -55,9 +58,27 @@ pub struct Project {
 }
 
 /// Open (creating if missing) the SQLite database at `url` and run migrations.
+///
+/// The journal mode is the load-bearing setting. SQLite's default rollback journal takes a lock
+/// that excludes *readers* for the whole write, so with a pool of connections a co-editing session
+/// — the human's `PUT`, the LLM's op, and a page load all landing together — produces
+/// `database is locked` under ordinary use rather than under stress. WAL lets readers run
+/// alongside the writer, and `busy_timeout` makes the one remaining case (two writers) wait its
+/// turn instead of failing instantly.
 pub async fn connect(url: &str) -> Result<SqlitePool, sqlx::Error> {
-    let opts = SqliteConnectOptions::from_str(url)?.create_if_missing(true);
-    let pool = SqlitePoolOptions::new().connect_with(opts).await?;
+    let opts = SqliteConnectOptions::from_str(url)?
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        // NORMAL is the documented companion to WAL: durable across a process crash, and only a
+        // very recent commit is at risk if the machine loses power. FULL fsyncs every commit,
+        // which on the Pi's SD card is the difference between an edit landing and a visible stall.
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(Duration::from_secs(5))
+        .foreign_keys(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(8)
+        .connect_with(opts)
+        .await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
     Ok(pool)
 }

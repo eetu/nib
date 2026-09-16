@@ -146,10 +146,8 @@ impl NibMcp {
         &self,
         user: &User,
     ) -> Result<Arc<std::sync::Mutex<ProjectSession>>, ErrorData> {
-        let id =
-            self.active.lock().unwrap().ok_or_else(|| {
-                bad("no project open — call open_project or create_project first")
-            })?;
+        let id = session::lock(&self.active)
+            .ok_or_else(|| bad("no project open — call open_project or create_project first"))?;
         session::open(&self.pool, &self.sessions, user.id, id)
             .await
             .map_err(bad)
@@ -748,7 +746,7 @@ fn affine_ops(
     cx: Option<f64>,
     cy: Option<f64>,
 ) -> Result<(Vec<serde_json::Value>, Vec<usize>), ErrorData> {
-    let s = sess.lock().unwrap();
+    let s = session::lock(sess);
     let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
     let targets = resolve_targets(doc, index, indices, name)?;
     let (bx, by, bw, bh) =
@@ -1413,7 +1411,7 @@ impl NibMcp {
         let id = db::create_project(&self.pool, user.id, &p.name, BLANK_SVG)
             .await
             .map_err(|e| bad(e.to_string()))?;
-        *self.active.lock().unwrap() = Some(id);
+        *session::lock(&self.active) = Some(id);
         Ok(json!({ "id": id, "name": p.name }).to_string())
     }
 
@@ -1429,8 +1427,8 @@ impl NibMcp {
         let sess = session::open(&self.pool, &self.sessions, user.id, p.id)
             .await
             .map_err(bad)?;
-        *self.active.lock().unwrap() = Some(p.id);
-        Ok(outline(&sess.lock().unwrap()))
+        *session::lock(&self.active) = Some(p.id);
+        Ok(outline(&session::lock(&sess)))
     }
 
     #[tool(
@@ -1482,7 +1480,7 @@ impl NibMcp {
         }
         session::close(&self.sessions, p.id);
         // Don't leave the connection pointed at a project that no longer exists.
-        let mut active = self.active.lock().unwrap();
+        let mut active = session::lock(&self.active);
         if *active == Some(p.id) {
             *active = None;
         }
@@ -1495,7 +1493,7 @@ impl NibMcp {
     async fn get_document(&self, ctx: RequestContext<RoleServer>) -> Result<String, ErrorData> {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
-        Ok(outline(&sess.lock().unwrap()))
+        Ok(outline(&session::lock(&sess)))
     }
 
     #[tool(
@@ -1511,7 +1509,7 @@ impl NibMcp {
         if p.name.trim().is_empty() {
             return Err(bad("find needs a non-empty name"));
         }
-        let s = sess.lock().unwrap();
+        let s = session::lock(&sess);
         let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
         let matches = find_by_name(doc, &p.name);
         Ok(json!({ "query": p.name, "count": matches.len(), "matches": matches }).to_string())
@@ -1523,7 +1521,7 @@ impl NibMcp {
     async fn get_svg(&self, ctx: RequestContext<RoleServer>) -> Result<String, ErrorData> {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
-        let svg = sess.lock().unwrap().editor.to_svg();
+        let svg = session::lock(&sess).editor.to_svg();
         Ok(svg)
     }
 
@@ -1538,7 +1536,7 @@ impl NibMcp {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
         let (svg, region) = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let svg = s.editor.to_svg();
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             // The rendered tree's origin is the viewBox origin, so a caller's viewBox coordinates
@@ -1603,7 +1601,7 @@ impl NibMcp {
             return Err(bad("the op did not apply (missing target / no-op)"));
         }
         let t = p.op.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        let s = sess.lock().unwrap();
+        let s = session::lock(&sess);
         let ack = match t {
             "addPath" | "addShape" => {
                 let (idx, id) = tail(&s);
@@ -1654,7 +1652,7 @@ impl NibMcp {
             .unwrap_or_else(|| self.gen_id(&p.shape));
         let op = json!({ "type": "addShape", "id": id, "spec": spec, "attributes": attrs });
         session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
-        let s = sess.lock().unwrap();
+        let s = session::lock(&sess);
         let (idx, rid) = tail(&s);
         Ok(format!(
             "added #{idx} \"{rid}\" · {} paths",
@@ -1700,7 +1698,7 @@ impl NibMcp {
             .unwrap_or_else(|| self.gen_id("path"));
         let op = json!({ "type": "addPath", "id": id, "subpaths": subpaths, "attributes": attrs });
         session::apply_ops(&sess, &self.pool, vec![op], "mcp").map_err(bad)?;
-        let s = sess.lock().unwrap();
+        let s = session::lock(&sess);
         let (idx, rid) = tail(&s);
         let nodes: usize = subpaths.iter().map(|sp| sp.nodes.len()).sum();
         Ok(format!(
@@ -1720,7 +1718,7 @@ impl NibMcp {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
         let (ops, sx, sy, n) = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             let targets = resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?;
             let (bx, by, bw, bh) =
@@ -1867,7 +1865,7 @@ impl NibMcp {
         // Resolve under the lock, apply after — the same shape as outline_text, so a name that
         // resolves to nothing is reported before the document changes.
         let (ops, what) = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             match p.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
                 Some(n) => {
@@ -1932,7 +1930,7 @@ impl NibMcp {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
         let (ops, dx, dy, n) = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             let targets = resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?;
             let (bx, by, bw, bh) =
@@ -1984,7 +1982,7 @@ impl NibMcp {
         let a = p.axis.as_deref().unwrap_or("horizontal").to_lowercase();
         let horizontal = !(a.starts_with('v') || a == "y");
         let (ops, count, first) = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             let targets = resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?;
             let (bx, by, bw, bh) =
@@ -2024,7 +2022,7 @@ impl NibMcp {
         if applied == 0 {
             return Err(bad("nothing was mirrored"));
         }
-        let s = sess.lock().unwrap();
+        let s = session::lock(&sess);
         Ok(format!(
             "mirrored {count} shape(s) {} → #{first}…#{} · {} paths · call get_document",
             if horizontal {
@@ -2047,7 +2045,7 @@ impl NibMcp {
     ) -> Result<String, ErrorData> {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
-        let s = sess.lock().unwrap();
+        let s = session::lock(&sess);
         let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
         let targets = resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?;
         let (angle, source) = own_angle(doc, &targets);
@@ -2130,7 +2128,7 @@ impl NibMcp {
         if applied == 0 {
             return Err(bad("none of the ops applied (missing targets / no-ops)"));
         }
-        let s = sess.lock().unwrap();
+        let s = session::lock(&sess);
         Ok(format!(
             "applied {applied}/{asked} ops · {} paths · call get_document",
             count_paths(&s)
@@ -2152,7 +2150,7 @@ impl NibMcp {
             return Err(bad("dx/dy must be finite"));
         }
         let ops = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             let targets = resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?;
             let many = targets.len() > 1;
@@ -2202,7 +2200,7 @@ impl NibMcp {
         if n == 0 {
             return Err(bad("nothing was copied"));
         }
-        let s = sess.lock().unwrap();
+        let s = session::lock(&sess);
         let (idx, _) = tail(&s);
         Ok(format!(
             "copied {made} shape(s) → #{}…#{idx} · {} paths · call get_document",
@@ -2257,7 +2255,7 @@ impl NibMcp {
             "cx": p.cx.unwrap_or(0.5), "cy": p.cy.unwrap_or(0.5), "r": p.r.unwrap_or(0.5),
         });
         let targets = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?
         };
@@ -2323,7 +2321,7 @@ impl NibMcp {
         // Shape first (a read), then apply — so the lock isn't held across the session write, and a
         // font that can't be found is reported before anything in the document changes.
         let (ops, labels, overridden) = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let all = s.editor.text_infos();
             if all.is_empty() {
                 return Err(bad("no labels in this document to outline"));
@@ -2363,7 +2361,7 @@ impl NibMcp {
         if n == 0 {
             return Err(bad("outline_text did not apply (no active document?)"));
         }
-        let s = sess.lock().unwrap();
+        let s = session::lock(&sess);
         // One font shapes a whole label, so a tspan that asked for another one changed typeface.
         // Say which, rather than leaving the model to notice from a render.
         let note = if overridden.is_empty() {
@@ -2392,7 +2390,7 @@ impl NibMcp {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
         let targets = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?
         };
@@ -2468,7 +2466,7 @@ impl NibMcp {
         let sess = self.active_session(&user).await?;
         // Map #indices → tree uids under the lock (no await held), then apply.
         let uids: Vec<String> = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             let mut v = Vec::with_capacity(p.indices.len());
             for &i in &p.indices {
@@ -2515,7 +2513,7 @@ impl NibMcp {
         let sess = self.active_session(&user).await?;
         // Resolve each name → a single tree uid (shape or group) under the lock, then apply.
         let uids: Vec<String> = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             let mut v = Vec::with_capacity(p.names.len());
             for nm in &p.names {
@@ -2560,7 +2558,7 @@ impl NibMcp {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
         let uids: Vec<String> = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             let mut v = Vec::with_capacity(p.indices.len());
             for &i in &p.indices {
@@ -2629,7 +2627,7 @@ impl NibMcp {
     async fn list_components(&self, ctx: RequestContext<RoleServer>) -> Result<String, ErrorData> {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
-        let s = sess.lock().unwrap();
+        let s = session::lock(&sess);
         let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
         let (comps, _) = component_info(doc);
         Ok(json!({ "components": comps }).to_string())
@@ -2664,7 +2662,7 @@ impl NibMcp {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
         let targets = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?
         };
@@ -2673,7 +2671,7 @@ impl NibMcp {
         let (cx, cy) = match (p.cx, p.cy) {
             (Some(x), Some(y)) => (Some(x), Some(y)),
             _ if targets.len() > 1 => {
-                let s = sess.lock().unwrap();
+                let s = session::lock(&sess);
                 let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
                 let (mut minx, mut miny, mut maxx, mut maxy) =
                     (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
@@ -2719,7 +2717,7 @@ impl NibMcp {
         let user = self.user(&ctx).await?;
         let sess = self.active_session(&user).await?;
         let targets = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             resolve_targets(doc, p.index, p.indices.as_deref(), p.name.as_deref())?
         };
@@ -2730,7 +2728,7 @@ impl NibMcp {
         // caller passing just `cx` would get a silent mirror-in-place instead of the mirror they
         // asked for. Fill the axis they left out from each shape's own centre.
         let ops: Vec<_> = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             targets
                 .iter()
@@ -2773,7 +2771,7 @@ impl NibMcp {
         // A group is reordered as the group NODE, not its members — moving thirteen crab parts to
         // the front one by one would interleave them with whatever they passed.
         let (uids, label) = {
-            let s = sess.lock().unwrap();
+            let s = session::lock(&sess);
             let doc = s.editor.doc().ok_or_else(|| bad("no document"))?;
             match p.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
                 Some(n) => {

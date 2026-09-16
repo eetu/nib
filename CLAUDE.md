@@ -538,9 +538,13 @@ client-side pro pillars, all running on the core):
 - **Editor track = A → B → E → finalize; Phase C rides alongside.** Phase E is the
   *editor's capstone* — once it lands the editor is feature-complete and the remaining work
   is **finalization** (coverage/fidelity on a real-SVG corpus, robustness + large-doc perf,
-  UX polish, ship a 1.0), not new capability. **Phase C is not part of "the editor"** — it's
-  the co-editing/persistence infra wrapping the *same* core, a parallel/after track; the
-  browser-only editor stays fully functional without it.
+  UX polish, ship a 1.0), not new capability. Phase C wraps the *same* core in
+  co-editing/persistence infra, and the browser-only editor stays fully functional without it —
+  **but co-editing is the point of nib, so Phase C is in 1.0**, not a parallel track that ships
+  later. A human and an LLM drawing on one document is the thing the whole model-as-source-of-
+  truth design exists to make correct; shipping 1.0 as a local file editor would be shipping the
+  half that was never the interesting half. What that adds to the 1.0 bar is **production-grade
+  backend**, tracked in the Phase C section below.
 - **Phase C (additive, flag-gated): the backend co-editing track — mostly LANDED.** A
   rust-axum backend (`backend/`) links the **same `nib-core` natively** and now persists
   **projects** in **SQLite** (sqlx), owned by **real OIDC users** (kanidm in production).
@@ -675,7 +679,21 @@ client-side pro pillars, all running on the core):
     Segoe UI, Inter, Georgia, Consolas, …) onto the bundled faces, with an unmatched family
     falling back to sans-serif rather than failing the conversion. **`NIB_FONT_DIR`** adds a
     mounted directory on top, for brand faces, without a rebuild.
-    **Still ahead of production-grade: rate limits and conflict UX.**
+  - **Production-grade hardening — partly LANDED.** With co-editing inside 1.0, the backend has
+    to survive being the shared surface, not just work.
+    - **Landed:** SQLite runs in **WAL** with a 5s `busy_timeout` (the default rollback journal
+      locks out readers for the whole write, so the human's `PUT`, the LLM's op and a page load
+      landing together produced `database is locked` under ordinary use, not under stress);
+      `session::lock` **recovers a poisoned mutex** instead of unwrapping (one panic used to mark
+      the project's lock poisoned forever, making it unopenable by everyone for the life of the
+      process); a **`CatchPanicLayer`** turns a handler panic into a 500 with a log line; the REST
+      surface carries a **30s timeout and a 16MB body cap** — deliberately *not* global, since the
+      WebSocket and MCP's Streamable-HTTP stream are long-lived by design and a global timeout
+      would cut the session itself; `TraceLayer` for request logs.
+    - **Still ahead: rate limits** (nothing throttles `/api` or `/mcp`), **conflict UX** (`PUT`
+      is last-write-wins with no version check, so two clients importing at once silently lose
+      one), and the bearer token is **stored plaintext** (a DB-file compromise is every token;
+      the SQL equality lookup isn't constant-time either).
 - **Phase D — LANDED (folded into E3):** arbitrary *nested* groups are the object tree
   itself — `GroupNodes`/`UngroupNode`/`ReorderNode`/`SetNodeHidden` on stable-id (`uid`)
   addressing; drawn + imported content unified into one tree, `<g>`-wrapped on export.
