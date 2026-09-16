@@ -775,6 +775,25 @@ class DocumentStore {
     }
   }
 
+  /**
+   * Delete a tree node and everything under it, by uid.
+   *
+   * The delete that reaches what `deletePath` can't: a `<text>`, `<image>` or `<use>` has no path
+   * index, and neither does a `<g>`, so those had no way out of the document at all. Clears any
+   * selection pointing into the removed subtree — a selection surviving its object is how a later
+   * edit addresses a node that no longer exists.
+   */
+  deleteTreeNode(uid: string): void {
+    // Uids, not indices: removing a subtree re-projects the paths view, so every index after it
+    // shifts and a selection carried across by index would land on a different shape.
+    const sel = this.#pathUids(this.selectedPaths);
+    if (!this.#apply({ type: "deleteTreeNode", uid })) return;
+    this.commit();
+    this.treeVersion++;
+    // A group takes its shapes with it, so uids inside it simply stop resolving and drop out.
+    this.#reselectByUids(sel, this.selectedGroupUid === uid ? null : this.selectedGroupUid);
+  }
+
   /** Move a tree node one slot within its parent — `forward` = higher z (later), else lower. */
   reorderNode(uid: string, forward: boolean): void {
     const sel = this.#pathUids(this.selectedPaths);

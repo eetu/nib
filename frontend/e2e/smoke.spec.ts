@@ -3378,6 +3378,50 @@ test("a node's own verbs live on its right-click", async ({ page }) => {
 // Undo lives in memory, so without a baseline a reload is the one gesture that makes every
 // unsaved change permanent. Revert is the way back — and the one action here that asks first,
 // because it's the one undo can't take back.
+test("a text layer can be deleted — by menu, and by the Delete key", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {
+    timeout: 15_000,
+  });
+  await page.locator("header").getByRole("button", { name: "paste svg", exact: true }).click();
+  await page
+    .locator("textarea")
+    .fill(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="10" y="20">alpha</text><text x="10" y="50">beta</text><rect x="10" y="60" width="20" height="20" fill="#3a7"/></svg>`,
+    );
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("v");
+
+  // A label has no editable geometry, so it never projects a path index — which is what made it
+  // undeletable: every delete in the panel and the keymap addressed a path.
+  const labels = page.locator("svg.canvas g.artwork text");
+  await expect(labels).toHaveCount(2);
+
+  // Right-click its layer row → delete. The row had no context menu at all before.
+  await page.locator(".layerlist .row-btn", { hasText: "alpha" }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: /^delete/ }).click();
+  await expect(labels).toHaveCount(1);
+  await expect(labels.first()).toHaveText("beta");
+
+  // Selecting the other and pressing Delete has to work too.
+  await page.locator(".layerlist .row-btn", { hasText: "beta" }).click();
+  await page.keyboard.press("Delete");
+  await expect(labels).toHaveCount(0);
+
+  // The rect is untouched, and each delete is one undo step.
+  await expect(page.locator("svg.canvas g.artwork path")).toHaveCount(1);
+  await page.keyboard.press("Meta+z");
+  await expect(labels).toHaveCount(1);
+
+  expect(errors, `console/page errors:\n${errors.join("\n")}`).toEqual([]);
+});
+
 test("revert goes back to the saved file, after asking", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-core-version", /\d+\.\d+\.\d+/, {

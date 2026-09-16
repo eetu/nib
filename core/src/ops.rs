@@ -285,6 +285,15 @@ pub enum Op {
     },
     /// Dissolve a group node (`uid`) in the tree, splicing its children into its parent in place.
     UngroupNode { uid: String },
+    /// Delete a tree node and its whole subtree — the one delete that reaches a node with no
+    /// editable geometry.
+    ///
+    /// `DeletePath` addresses a `PathElement` by its index, so it can only remove things that
+    /// project as editable shapes; a `<text>`, `<image>` or `<use>` has no index and a `<g>` isn't
+    /// a path either, which left them with no way out of the document at all. This addresses the
+    /// tree by `uid` instead, so it covers every node kind including a group and everything under
+    /// it. Re-projects the paths view, since removing a subtree removes any shapes inside it.
+    DeleteTreeNode { uid: String },
     /// Move a tree node one element-slot within its parent — `forward` (later in document order =
     /// higher z) or backward. Re-projects the paths view (z-order changed).
     ReorderNode { uid: String, forward: bool },
@@ -1165,6 +1174,13 @@ pub fn apply(doc: &mut SvgDocument, op: &Op) -> bool {
         }
         Op::UngroupNode { uid } => {
             let ok = doc.tree.as_mut().map(|t| t.ungroup(uid)).unwrap_or(false);
+            if ok {
+                reproject_paths(doc);
+            }
+            ok
+        }
+        Op::DeleteTreeNode { uid } => {
+            let ok = doc.tree.as_mut().map(|t| t.remove(uid)).unwrap_or(false);
             if ok {
                 reproject_paths(doc);
             }
@@ -2677,6 +2693,83 @@ mod tests {
             out2.matches("<rect").count() == 2,
             "rects still there: {out2}"
         );
+    }
+
+    #[test]
+    fn delete_tree_node_removes_what_delete_path_cannot_reach() {
+        use crate::model::document::{parse_svg, serialize_via_tree};
+        let mut doc = parse_svg(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text id="label" x="5" y="5">hi</text><g id="grp"><rect x="0" y="0" width="10" height="10"/></g><rect id="keep" x="20" y="0" width="10" height="10"/></svg>"#,
+        )
+        .unwrap();
+        doc.paths = doc.tree.as_ref().unwrap().project_paths();
+
+        // A label projects no PathElement at all, so `DeletePath` has no index to address it with
+        // — which is exactly why a text layer had no way out of the document.
+        assert_eq!(
+            doc.paths.len(),
+            2,
+            "only the two rects project: {:?}",
+            doc.paths.len()
+        );
+        let label_uid = doc
+            .tree
+            .as_ref()
+            .unwrap()
+            .render_children()
+            .iter()
+            .find_map(|n| match n {
+                crate::model::tree::RenderNode::Element { tag, uid, .. } if tag == "text" => {
+                    Some(uid.clone())
+                }
+                _ => None,
+            })
+            .expect("the label is in the tree");
+
+        assert!(apply(&mut doc, &Op::DeleteTreeNode { uid: label_uid }));
+        let out = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(!out.contains("<text"), "label gone: {out}");
+
+        // A group goes with its whole subtree, and the paths view re-projects — the surviving rect
+        // keeps its uid but its index moves, which is why callers must reselect by uid.
+        let keep_uid = doc
+            .paths
+            .iter()
+            .find(|p| p.id == "keep")
+            .expect("the kept rect")
+            .uid
+            .clone();
+        let grp_uid = doc
+            .tree
+            .as_ref()
+            .unwrap()
+            .render_children()
+            .iter()
+            .find_map(|n| match n {
+                crate::model::tree::RenderNode::Element { tag, uid, .. } if tag == "g" => {
+                    Some(uid.clone())
+                }
+                _ => None,
+            })
+            .expect("the group is in the tree");
+        assert!(apply(&mut doc, &Op::DeleteTreeNode { uid: grp_uid }));
+        let out2 = serialize_via_tree(&doc, doc.tree.as_ref().unwrap(), 2);
+        assert!(!out2.contains("<g id=\"grp\""), "group gone: {out2}");
+        assert_eq!(
+            out2.matches("<rect").count(),
+            1,
+            "its rect went too: {out2}"
+        );
+        assert_eq!(doc.paths.len(), 1);
+        assert_eq!(doc.paths[0].uid, keep_uid);
+
+        // A uid that isn't there is a no-op, not a panic.
+        assert!(!apply(
+            &mut doc,
+            &Op::DeleteTreeNode {
+                uid: "no-such-uid".into()
+            }
+        ));
     }
 
     #[test]

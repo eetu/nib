@@ -116,7 +116,31 @@
         run: () => editor.setNodeBoolean(uid, null),
       });
     items.push({ label: "ungroup", run: () => editor.ungroupNode(uid) });
+    items.push({
+      label: "delete",
+      danger: true,
+      run: () => editor.deleteTreeNode(uid),
+    });
     openMenu(e, treeName(n), items);
+  }
+
+  // An opaque leaf — a label, an image, a `<use>`. It had no menu at all, which is why a text
+  // layer couldn't be deleted: every delete in the panel went through a path index, and a leaf
+  // has none. Its verbs are the ones that don't need geometry.
+  function openTreeLeafMenu(e: MouseEvent, n: RenderNode) {
+    if (n.kind !== "element") return;
+    const uid = n.uid;
+    openMenu(e, treeName(n), [
+      { label: "bring to front", run: () => editor.reorderNodeExtreme(uid, true) },
+      { label: "bring forward", run: () => editor.reorderNode(uid, true) },
+      { label: "send backward", run: () => editor.reorderNode(uid, false) },
+      { label: "send to back", run: () => editor.reorderNodeExtreme(uid, false) },
+      {
+        label: n.hidden ? "show" : "hide",
+        run: () => editor.setNodeHidden(uid, !n.hidden),
+      },
+      { label: "delete", danger: true, hint: "⌫", run: () => editor.deleteTreeNode(uid) },
+    ]);
   }
 
   // Group the current selection into a nested `<g>` on the tree. Delegates to the facade so the
@@ -397,6 +421,7 @@
         ondragleave={() => (dropUid === n.uid ? (dropUid = null) : null)}
         ondrop={onRowDrop}
         ondragend={onRowDragEnd}
+        oncontextmenu={(e) => openTreeLeafMenu(e, n)}
       >
         <!-- A label has no geometry to draw a thumbnail from, so it gets the sign for text
                instead of a blank square: the slot still says what kind of thing the row is. -->

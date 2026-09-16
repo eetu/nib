@@ -1477,6 +1477,11 @@ impl Tree {
         ungroup_in(&mut self.root, uid)
     }
 
+    /// Detach the node `uid` and its whole subtree from the tree. Returns whether it was found.
+    pub fn remove(&mut self, uid: &str) -> bool {
+        remove_node(&mut self.root, uid).is_some()
+    }
+
     /// Swap the node `uid` with its adjacent element sibling — `forward` (toward the end / higher
     /// z) or backward. No-op at the end of the run. Returns whether the node was found.
     pub fn reorder(&mut self, uid: &str, forward: bool) -> bool {

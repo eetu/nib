@@ -141,6 +141,10 @@
       } else if (editor.selectedPaths.length > 0) {
         e.preventDefault();
         editor.deleteSelectedPaths();
+      } else if (editor.selectedElementUid) {
+        // A selected label/image/use — it carries no path index, so it needs the tree delete.
+        e.preventDefault();
+        editor.deleteTreeNode(editor.selectedElementUid);
       }
       return;
     }

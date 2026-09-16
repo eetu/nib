@@ -650,6 +650,12 @@
           run: () => void outlineText(element.uid),
         },
         { label: "hide", run: () => editor.setNodeHidden(element.uid, true) },
+        {
+          label: "delete",
+          danger: true,
+          hint: "⌫",
+          run: () => editor.deleteTreeNode(element.uid),
+        },
       ]);
       return;
     }
