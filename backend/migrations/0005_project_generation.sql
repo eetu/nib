@@ -1,0 +1,12 @@
+-- A project's document generation: how many times its document has been REPLACED wholesale.
+--
+-- Not a write counter. Ops can't conflict — one authoritative in-memory session applies them in
+-- order and broadcasts them, so every client converges on the same document — and bumping this on
+-- every op would make a client's copy stale the instant anyone drew anything, which turns the
+-- guard into noise. What can be lost is a whole-document REPLACEMENT landing on top of another
+-- that the replacer never saw: two imports racing, or one client importing over a project someone
+-- else re-imported while it sat idle. That is what this counts, and what `If-Match` on PUT checks.
+--
+-- Existing rows start at 0, so a client that has never seen the field sends nothing and keeps the
+-- old force-write behaviour.
+alter table projects add column generation integer not null default 0;

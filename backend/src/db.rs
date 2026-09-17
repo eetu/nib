@@ -55,6 +55,10 @@ pub struct Project {
     pub svg: String,
     pub created_at: String,
     pub updated_at: String,
+    /// How many times this project's document has been replaced wholesale — see
+    /// `migrations/0005`. A client echoes it back as `If-Match` on `PUT` so a replacement that
+    /// would land on top of one it never saw is refused instead of silently winning.
+    pub generation: i64,
 }
 
 /// Open (creating if missing) the SQLite database at `url` and run migrations.
@@ -191,7 +195,8 @@ pub async fn get_project(
     id: i64,
 ) -> Result<Option<Project>, sqlx::Error> {
     sqlx::query_as::<_, Project>(
-        "select id, user_id, name, model, svg, created_at, updated_at from projects where id = ? and user_id = ?",
+        "select id, user_id, name, model, svg, created_at, updated_at, generation \
+         from projects where id = ? and user_id = ?",
     )
     .bind(id)
     .bind(user_id)
@@ -259,4 +264,30 @@ pub async fn update_project(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Replace a project's document, bumping its `generation` — the write `PUT` makes.
+///
+/// `expected` is the generation the caller believes it is replacing. `Some(g)` makes the write
+/// conditional in **SQL**, so the check and the write are one statement and two callers racing
+/// can't both pass it; `None` forces (a caller that never read a generation, which is what every
+/// client did before this existed). `Ok(None)` means the row moved on — the caller lost.
+pub async fn replace_project(
+    pool: &SqlitePool,
+    id: i64,
+    model: &str,
+    svg: &str,
+    expected: Option<i64>,
+) -> Result<Option<i64>, sqlx::Error> {
+    let mut q = sqlx::QueryBuilder::new("update projects set model = ");
+    q.push_bind(model)
+        .push(", svg = ")
+        .push_bind(svg)
+        .push(", generation = generation + 1, updated_at = datetime('now') where id = ")
+        .push_bind(id);
+    if let Some(g) = expected {
+        q.push(" and generation = ").push_bind(g);
+    }
+    q.push(" returning generation");
+    q.build_query_scalar::<i64>().fetch_optional(pool).await
 }

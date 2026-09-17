@@ -13,7 +13,19 @@ import { settings } from "$lib/stores/settings.svelte";
 export type ProjectMeta = { id: number; name: string; updated_at: string };
 // `model` is the native document-model JSON (the source of truth); `svg` is a cached export. A
 // brand-new project has an empty `model` until first opened (then the backend imports svg → model).
-export type Project = { id: number; name: string; model: string; svg: string };
+export type Project = {
+  id: number;
+  name: string;
+  model: string;
+  svg: string;
+  /** How many times this project's document has been replaced wholesale. Echoed back as
+   *  `If-Match` on the next import, so one that would land on top of a replacement this
+   *  client never saw is refused rather than silently winning. */
+  generation: number;
+};
+
+/** A `PUT` refused because the project moved on — the server's message says where it is. */
+export class ProjectConflict extends Error {}
 /** Identity + the personal bearer token, from `/api/me` (session-authenticated). */
 export type Me = {
   id: number;
@@ -99,12 +111,24 @@ export async function createProject(name: string): Promise<{ id: number; name: s
 }
 
 /** Persist a project's SVG (an explicit save; live edits also stream via the WebSocket). */
-export async function putProject(id: number, svg: string): Promise<void> {
+/**
+ * Replace a project's document.
+ *
+ * `generation` is the one the caller believes it is replacing; the server refuses (409) if the
+ * project has moved on since. Omitting it forces the write, which is what a deliberate overwrite
+ * looks like — so it is never omitted by accident here.
+ */
+export async function putProject(id: number, svg: string, generation?: number): Promise<void> {
+  const headers = authHeaders({ "Content-Type": "image/svg+xml" });
+  if (generation !== undefined) headers["If-Match"] = String(generation);
   const res = await fetch(`${apiBase()}/api/projects/${id}`, {
     method: "PUT",
-    headers: authHeaders({ "Content-Type": "image/svg+xml" }),
+    headers,
     body: svg,
   });
+  if (res.status === 409) {
+    throw new ProjectConflict((await res.text()) || "the project moved on");
+  }
   if (!res.ok) throw new Error(`save project: ${res.status}`);
 }
 

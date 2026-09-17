@@ -699,9 +699,17 @@ client-side pro pillars, all running on the core):
       Traefik already fronts every entry with a `rateLimit` middleware available, nib binds
       loopback only (`127.0.0.1`, even under the host-network OIDC stamp), and its vhost is
       `internal-only`; enabling it is a keel change, not a nib one.
-    - **Still ahead: conflict UX** (`PUT` is last-write-wins with no version check, so two clients
-      importing at once silently lose one), and the bearer token is **stored plaintext** (a
-      DB-file compromise is every token; the SQL equality lookup isn't constant-time either).
+    - **A replacement can't clobber one it never saw.** `projects.generation` counts whole-document
+      REPLACEMENTS, and `PUT` takes the caller's `If-Match`; stale → **409** naming the current
+      generation. Deliberately *not* a write counter: ops can't conflict (one authoritative session
+      applies them in order and broadcasts them, so every client converges), and bumping per op
+      would make a client stale the instant anyone drew, turning the guard into noise. The check is
+      **conditional in SQL**, so the read and the write aren't a window two importers can both
+      pass. No header = forced, which is what a deliberate overwrite looks like. The browser
+      refuses the import, reloads the project's current document and says so — it stays attached,
+      because nothing was lost and the retry from the refreshed state succeeds.
+    - **Still ahead:** the bearer token is **stored plaintext** (a DB-file compromise is every
+      token; the SQL equality lookup isn't constant-time either).
 - **Phase D — LANDED (folded into E3):** arbitrary *nested* groups are the object tree
   itself — `GroupNodes`/`UngroupNode`/`ReorderNode`/`SetNodeHidden` on stable-id (`uid`)
   addressing; drawn + imported content unified into one tree, `<g>`-wrapped on export.

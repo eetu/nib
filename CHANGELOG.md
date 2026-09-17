@@ -157,6 +157,15 @@ the end.
   dead for every user until a restart. Locks now recover the guard: what's behind it is a document
   model, where the worst a half-finished mutation leaves is an edit the next op overwrites and
   undo can take back. A `CatchPanicLayer` turns the panic itself into a 500 with a log line.
+- **Two imports racing silently lost one.** `PUT` was last-write-wins, so a client importing over
+  a project someone else had re-imported while it sat idle overwrote work it never saw. Projects
+  now carry a **generation** — a count of whole-document replacements — and `PUT` takes it as
+  `If-Match`, answering **409** when the project has moved on. Not a write counter: ops can't
+  conflict, since one authoritative session applies them in order and broadcasts them, and
+  counting them would make a client stale the moment anyone drew anything. The check is
+  conditional in SQL, so the read and the write aren't a window two importers can both pass. The
+  browser puts the project's current document back on the canvas and says what happened, staying
+  attached — nothing was lost, and importing again from there succeeds.
 - **An MCP batch was unbounded.** `apply_ops` holds the project's lock for the whole batch, so an
   oversized one stalls the co-editing session and grows the model past the container's cap — from
   a caller that only has to be confused, not hostile. Capped at 500, with an error that says to
