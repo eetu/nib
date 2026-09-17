@@ -25,14 +25,42 @@ pub const DEV_SUB: &str = "dev";
 pub struct User {
     pub id: i64,
     pub name: String,
-    pub token: String,
+    /// The first characters of the bearer token, in the clear — enough to tell one token from
+    /// another in the UI, worth nothing as a credential. The token itself is only ever held as a
+    /// hash, so nothing can hand it back after the moment it was minted.
+    pub token_hint: String,
     /// `None` only for rows predating OIDC (and never in a fresh deployment).
     pub email: Option<String>,
 }
 
+/// The columns a `User` is built from. Spelled once: every lookup must select the same set, and
+/// `token` is deliberately not among them.
+const USER_COLS: &str = "id, name, token_hint, email";
+
 /// Mint a fresh bearer token. Prefixed so it's recognisable in a config file or a paste.
 pub fn mint_token() -> String {
     format!("nib_{}", crate::config::random_hex(32))
+}
+
+/// A token's stored form. See `migrations/0006` for why this is a bare SHA-256 and not a KDF.
+pub fn hash_token(token: &str) -> String {
+    use std::fmt::Write;
+
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(token.as_bytes());
+    h.finalize()
+        .iter()
+        .fold(String::with_capacity(64), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+}
+
+/// The part of a token safe to show. `nib_` plus 8 of the 64 hex characters: enough to recognise
+/// which token a client is configured with, 56 characters short of being usable.
+pub fn token_hint(token: &str) -> String {
+    token.chars().take(12).collect()
 }
 
 /// A project row minus its (potentially large) `svg` — for listings.
@@ -99,13 +127,15 @@ pub async fn resolve_user(
     email: &str,
     name: &str,
 ) -> Result<User, sqlx::Error> {
-    sqlx::query_as::<_, User>(
-        "insert into users (name, token, sub, email) values (?, ?, ?, ?) \
+    let token = mint_token();
+    sqlx::query_as::<_, User>(&format!(
+        "insert into users (name, token_hash, token_hint, sub, email) values (?, ?, ?, ?, ?) \
          on conflict(sub) do update set email = excluded.email, name = excluded.name \
-         returning id, name, token, email",
-    )
+         returning {USER_COLS}",
+    ))
     .bind(name)
-    .bind(mint_token())
+    .bind(hash_token(&token))
+    .bind(token_hint(&token))
     .bind(sub)
     .bind(email)
     .fetch_one(pool)
@@ -123,22 +153,28 @@ pub async fn resolve_user(
 pub async fn ensure_dev_user(pool: &SqlitePool, token: &str) -> Result<User, sqlx::Error> {
     let user = resolve_user(pool, DEV_SUB, "dev@localhost", "developer").await?;
     let mut tx = pool.begin().await?;
+    // Whoever else holds this token gets a fresh (unguessable) one. Matched on the hash, since
+    // that is now the only form stored.
     sqlx::query(
-        "update users set token = 'nib_' || lower(hex(randomblob(32))), \
-         token_rotated_at = datetime('now') where token = ? and id <> ?",
+        "update users set token_hash = lower(hex(randomblob(32))), token_hint = '', \
+         token_rotated_at = datetime('now') where token_hash = ? and id <> ?",
     )
-    .bind(token)
+    .bind(hash_token(token))
     .bind(user.id)
     .execute(&mut *tx)
     .await?;
-    sqlx::query("update users set token = ?, token_rotated_at = datetime('now') where id = ?")
-        .bind(token)
-        .bind(user.id)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "update users set token_hash = ?, token_hint = ?, \
+         token_rotated_at = datetime('now') where id = ?",
+    )
+    .bind(hash_token(token))
+    .bind(token_hint(token))
+    .bind(user.id)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(User {
-        token: token.to_string(),
+        token_hint: token_hint(token),
         ..user
     })
 }
@@ -147,11 +183,15 @@ pub async fn ensure_dev_user(pool: &SqlitePool, token: &str) -> Result<User, sql
 /// stops working immediately — except on already-established WebSockets, which authenticate at
 /// connect time only.
 pub async fn set_token(pool: &SqlitePool, user_id: i64, token: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("update users set token = ?, token_rotated_at = datetime('now') where id = ?")
-        .bind(token)
-        .bind(user_id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "update users set token_hash = ?, token_hint = ?, \
+         token_rotated_at = datetime('now') where id = ?",
+    )
+    .bind(hash_token(token))
+    .bind(token_hint(token))
+    .bind(user_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -162,16 +202,20 @@ pub async fn rotate_token(pool: &SqlitePool, user_id: i64) -> Result<String, sql
     Ok(token)
 }
 
+/// Resolve a presented bearer token. The hash is what's compared, so the database never holds the
+/// value an attacker would need — and the comparison stays one indexed read.
 pub async fn user_by_token(pool: &SqlitePool, token: &str) -> Result<Option<User>, sqlx::Error> {
-    sqlx::query_as::<_, User>("select id, name, token, email from users where token = ?")
-        .bind(token)
-        .fetch_optional(pool)
-        .await
+    sqlx::query_as::<_, User>(&format!(
+        "select {USER_COLS} from users where token_hash = ?"
+    ))
+    .bind(hash_token(token))
+    .fetch_optional(pool)
+    .await
 }
 
 /// Look up a user by OIDC subject — the read behind the session cookie.
 pub async fn user_by_sub(pool: &SqlitePool, sub: &str) -> Result<Option<User>, sqlx::Error> {
-    sqlx::query_as::<_, User>("select id, name, token, email from users where sub = ?")
+    sqlx::query_as::<_, User>(&format!("select {USER_COLS} from users where sub = ?"))
         .bind(sub)
         .fetch_optional(pool)
         .await

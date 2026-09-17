@@ -708,8 +708,19 @@ client-side pro pillars, all running on the core):
       pass. No header = forced, which is what a deliberate overwrite looks like. The browser
       refuses the import, reloads the project's current document and says so — it stays attached,
       because nothing was lost and the retry from the refreshed state succeeds.
-    - **Still ahead:** the bearer token is **stored plaintext** (a DB-file compromise is every
-      token; the SQL equality lookup isn't constant-time either).
+    - **A bearer token is stored as a SHA-256 hash**, never in the clear. The lever that closes is
+      the *backup*, not the break-in: `/var/lib/nib` is in the nightly snapshot, so every copy of
+      it used to hold live credentials, and a snapshot gets copied around far more casually than a
+      host gets compromised. Unsalted and no KDF on purpose — those make *low-entropy* secrets
+      expensive to guess, and a token is 32 random server-minted bytes, so a work factor would buy
+      nothing but latency per request while an unsalted digest keeps the lookup one indexed read.
+      The consequence is that a token is **show-once**: `/api/me` returns a `tokenHint` (its first
+      characters, enough to say *which* token a client holds), and the value itself exists on
+      screen only in the moment `/api/token/rotate` mints it. Migration 0006 **discards** existing
+      tokens rather than converting them — hashing a secret that has already sat readable in every
+      backup preserves the exposure while looking solved — so each user rotates once after the
+      upgrade. Same-origin the browser needs no token at all (the WebSocket authenticates by
+      session cookie); the cross-origin dev split does, so Settings has a field to paste one into.
 - **Phase D — LANDED (folded into E3):** arbitrary *nested* groups are the object tree
   itself — `GroupNodes`/`UngroupNode`/`ReorderNode`/`SetNodeHidden` on stable-id (`uid`)
   addressing; drawn + imported content unified into one tree, `<g>`-wrapped on export.

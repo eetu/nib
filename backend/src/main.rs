@@ -83,10 +83,13 @@ struct Me {
     id: i64,
     name: String,
     email: Option<String>,
-    /// The caller's own token — surfaced so the SPA can display it for copy/paste into an MCP
-    /// client. This is why the endpoint is session-only: a leaked token must not be able to read
-    /// itself back (nor, via `/api/token/rotate`, mint its own replacement).
-    token: String,
+    /// The first characters of the caller's token, so the SPA can say *which* token a client is
+    /// configured with. Not the token: only its hash is stored, so nothing can hand it back after
+    /// the moment it was minted — `/api/token/rotate` returns a new one once, and that is the only
+    /// time it exists outside the caller. The endpoint stays session-only anyway, since a leaked
+    /// token must not be able to mint its replacement.
+    #[serde(rename = "tokenHint")]
+    token_hint: String,
     projects: Vec<db::ProjectMeta>,
 }
 
@@ -100,7 +103,7 @@ async fn me(
         id: user.id,
         name: user.name,
         email: user.email,
-        token: user.token,
+        token_hint: user.token_hint,
         projects,
     }))
 }
@@ -642,18 +645,19 @@ mod tests {
         let user = db::resolve_user(&pool, "sub-a", "a@example.com", "a")
             .await
             .unwrap();
+        let token = db::rotate_token(&pool, user.id).await.unwrap();
         let st = test_state(pool);
 
-        let (status, _) = get(&st, "/api/projects", Some(&user.token)).await;
+        let (status, _) = get(&st, "/api/projects", Some(&token)).await;
         assert_eq!(status, StatusCode::OK, "bearer drives the project API");
 
-        let (status, _) = get(&st, "/api/me", Some(&user.token)).await;
+        let (status, _) = get(&st, "/api/me", Some(&token)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "bearer can't read itself");
 
         let (status, _) = send(
             &st,
             Request::builder().method("POST").uri("/api/token/rotate"),
-            Some(&user.token),
+            Some(&token),
         )
         .await;
         assert_eq!(
@@ -675,7 +679,7 @@ mod tests {
         let user = db::resolve_user(&pool, "sub-a", "a@example.com", "a")
             .await
             .unwrap();
-        let old = user.token.clone();
+        let old = db::rotate_token(&pool, user.id).await.unwrap();
 
         let fresh = db::rotate_token(&pool, user.id).await.unwrap();
         assert_ne!(fresh, old);
@@ -722,11 +726,12 @@ mod tests {
         );
 
         // …and the REST surface agrees, indistinguishably from a missing project.
+        let intruder_token = db::rotate_token(&pool, intruder.id).await.unwrap();
         let st = AppState {
             sessions,
             ..test_state(pool)
         };
-        let (status, _) = get(&st, &format!("/api/projects/{id}"), Some(&intruder.token)).await;
+        let (status, _) = get(&st, &format!("/api/projects/{id}"), Some(&intruder_token)).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
 
         let _ = std::fs::remove_file(&path);
@@ -747,6 +752,8 @@ mod tests {
         let id = db::create_project(&pool, owner.id, "sketch", BLANK_SVG)
             .await
             .unwrap();
+        let owner_token = db::rotate_token(&pool, owner.id).await.unwrap();
+        let intruder_token = db::rotate_token(&pool, intruder.id).await.unwrap();
         let st = test_state(pool.clone());
 
         let rename = |token: String, name: &str| {
@@ -770,12 +777,12 @@ mod tests {
         };
 
         assert_eq!(
-            rename(intruder.token.clone(), "stolen").await,
+            rename(intruder_token.clone(), "stolen").await,
             StatusCode::NOT_FOUND,
             "a non-owner can't rename"
         );
         assert_eq!(
-            rename(owner.token.clone(), "  final  ").await,
+            rename(owner_token.clone(), "  final  ").await,
             StatusCode::NO_CONTENT
         );
         assert_eq!(
@@ -788,7 +795,7 @@ mod tests {
             "the stored name is trimmed"
         );
         assert_eq!(
-            rename(owner.token.clone(), "   ").await,
+            rename(owner_token.clone(), "   ").await,
             StatusCode::BAD_REQUEST,
             "an all-whitespace name is refused, not stored"
         );
@@ -818,7 +825,7 @@ mod tests {
         };
 
         assert_eq!(
-            del(intruder.token).await,
+            del(intruder_token).await,
             StatusCode::NOT_FOUND,
             "a non-owner can't delete"
         );
@@ -830,7 +837,7 @@ mod tests {
             "…and the project survives the attempt"
         );
 
-        assert_eq!(del(owner.token).await, StatusCode::NO_CONTENT);
+        assert_eq!(del(owner_token).await, StatusCode::NO_CONTENT);
         assert!(
             db::get_project(&pool, owner.id, id)
                 .await
@@ -863,6 +870,7 @@ mod tests {
         let sess = session::open(&pool, &st.sessions, user.id, id)
             .await
             .unwrap();
+        let token = db::rotate_token(&pool, user.id).await.unwrap();
         let mut rx = session::lock(&sess).tx.subscribe();
         assert!(!session::lock(&sess).editor.to_svg().contains("circle"));
 
@@ -873,7 +881,7 @@ mod tests {
                 Request::builder()
                     .method("PUT")
                     .uri(format!("/api/projects/{id}"))
-                    .header("authorization", format!("Bearer {}", user.token))
+                    .header("authorization", format!("Bearer {token}"))
                     .body(Body::from(imported))
                     .unwrap(),
             )
@@ -952,7 +960,7 @@ mod tests {
             .await
             .unwrap();
         let st = test_state(pool.clone());
-        let token = user.token.clone();
+        let token = db::rotate_token(&pool, user.id).await.unwrap();
 
         // Both clients read the same generation — the state a race starts from.
         let seen = generation_of(st.clone(), &token, id).await;
@@ -1030,59 +1038,82 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// A database from before OIDC carries a `developer` row whose bearer is the published
-    /// `nib-dev-token`, seeded on every boot by that build. Migration 0004 retires it; this checks
-    /// both halves of the outcome — the known credential stops working, and the row keeps its id
-    /// (and therefore its projects).
+    /// Migration 0006 invalidates every stored token rather than converting it, and this is the
+    /// half of that decision worth pinning: a credential that was readable in every backup must
+    /// stop working, while the row that held it keeps its id — and therefore its projects.
+    ///
+    /// It subsumes migration 0004, which retired one *published* token. Nothing carried forward
+    /// authenticates now, so the old row needs no special case.
     #[tokio::test]
-    async fn the_shared_dev_token_is_retired_from_a_pre_oidc_row() {
+    async fn no_token_survives_the_move_to_hashes() {
         let (pool, path) = test_pool("olddev").await;
-        // Stand in for the pre-OIDC seed: a row with no `sub`, holding the shared token. (The
-        // migrations have already run, so this is written the way that build left it.)
-        sqlx::query("insert into users (name, token) values ('developer', ?)")
-            .bind(db::DEV_TOKEN_DEFAULT)
+        // A row as the pre-hash build left it: identified by `sub`, its token long since stored.
+        let before = db::resolve_user(&pool, "sub-old", "old@example.com", "old")
+            .await
+            .unwrap();
+        let known = db::rotate_token(&pool, before.id).await.unwrap();
+        assert_eq!(
+            db::user_by_token(&pool, &known).await.unwrap().unwrap().id,
+            before.id,
+            "it works before the tokens are cleared"
+        );
+
+        // What the migration does to every row: the hash goes, so nothing matches.
+        sqlx::query("update users set token_hash = null, token_hint = ''")
             .execute(&pool)
             .await
             .unwrap();
-        // …and re-run the migration that retires it, since it landed before this row existed.
-        sqlx::query(
-            "update users set token = 'nib_' || lower(hex(randomblob(32))) \
-             where token = ? and (sub is null or sub <> 'dev')",
-        )
-        .bind(db::DEV_TOKEN_DEFAULT)
-        .execute(&pool)
-        .await
-        .unwrap();
-
         assert!(
-            db::user_by_token(&pool, db::DEV_TOKEN_DEFAULT)
-                .await
-                .unwrap()
-                .is_none(),
-            "the published token no longer resolves to anyone"
+            db::user_by_token(&pool, &known).await.unwrap().is_none(),
+            "a token stored before the move stops working"
+        );
+        // A NULL hash must not match a *presented* token either — SQL NULL comparison does the
+        // right thing here, but silently, so it is asserted rather than assumed.
+        assert!(
+            db::user_by_token(&pool, "").await.unwrap().is_none(),
+            "and an empty presented token matches no cleared row"
         );
 
-        // Seeding the dev user now succeeds where it used to hit the unique index and panic, and it
-        // claims the token for the real `sub = 'dev'` identity.
+        // The user is still there, and rotating gives them a working credential again.
+        let after = db::user_by_sub(&pool, "sub-old")
+            .await
+            .unwrap()
+            .expect("the row survived");
+        assert_eq!(after.id, before.id, "same row, so same projects");
+        let fresh = db::rotate_token(&pool, before.id).await.unwrap();
+        assert_eq!(
+            db::user_by_token(&pool, &fresh).await.unwrap().unwrap().id,
+            before.id
+        );
+        assert!(
+            after.token_hint.is_empty(),
+            "nothing is shown for a cleared token"
+        );
+        assert_eq!(
+            db::user_by_sub(&pool, "sub-old")
+                .await
+                .unwrap()
+                .unwrap()
+                .token_hint,
+            db::token_hint(&fresh),
+            "and the hint identifies the new one"
+        );
+
+        // Seeding the dev identity still works on top of all that — a dev restarts all day.
         let dev = db::ensure_dev_user(&pool, db::DEV_TOKEN_DEFAULT)
             .await
             .unwrap();
-        let by_token = db::user_by_token(&pool, db::DEV_TOKEN_DEFAULT)
-            .await
-            .unwrap()
-            .expect("the dev token resolves again");
-        assert_eq!(by_token.id, dev.id);
-        // Twice, because a dev restarts the backend all day.
         db::ensure_dev_user(&pool, db::DEV_TOKEN_DEFAULT)
             .await
             .unwrap();
-
-        // The old row is still there — its projects were never anyone else's to take.
-        let rows: i64 = sqlx::query_scalar("select count(*) from users")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(rows, 2, "the pre-OIDC row and the dev identity coexist");
+        assert_eq!(
+            db::user_by_token(&pool, db::DEV_TOKEN_DEFAULT)
+                .await
+                .unwrap()
+                .expect("the dev token resolves")
+                .id,
+            dev.id
+        );
 
         pool.close().await;
         let _ = std::fs::remove_file(&path);
@@ -1114,8 +1145,16 @@ mod tests {
             .unwrap()
             .expect("still there");
         assert_eq!(them.id, other.id);
-        assert_ne!(them.token, db::DEV_TOKEN_DEFAULT);
-        assert!(them.token.starts_with("nib_"));
+        // They no longer hold the dev token — that is what  proves — and a
+        // fresh one still authenticates them, so being displaced did not lock them out. The token
+        // itself is unreadable now (only its hash is stored), so this checks the behaviour rather
+        // than the stored value.
+        let theirs = db::rotate_token(&pool, other.id).await.unwrap();
+        assert!(theirs.starts_with("nib_"));
+        assert_eq!(
+            db::user_by_token(&pool, &theirs).await.unwrap().unwrap().id,
+            other.id
+        );
 
         pool.close().await;
         let _ = std::fs::remove_file(&path);

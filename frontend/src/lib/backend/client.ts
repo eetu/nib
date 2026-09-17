@@ -31,7 +31,10 @@ export type Me = {
   id: number;
   name: string;
   email: string | null;
-  token: string;
+  /** The first characters of your bearer token — enough to tell which one a client is configured
+   *  with, useless as a credential. The token itself is only stored hashed, so the server cannot
+   *  hand it back: rotating is the one moment it exists outside you. */
+  tokenHint: string;
   projects: ProjectMeta[];
 };
 
