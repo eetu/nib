@@ -201,18 +201,42 @@ async fn delete_project(
 
 /// Replace a project's document by importing a posted SVG: parse it into the native model (the
 /// source of truth), then persist model + cached SVG. Broken markup never persists (BAD_REQUEST).
+///
+/// **`If-Match` carries the generation the caller believes it is replacing** (see
+/// `migrations/0005`). Sent and stale → `409` with the current one, so a second import can't land
+/// on top of one its author never saw. Absent → forced, which is what every pre-`If-Match` client
+/// does and what a deliberate overwrite looks like.
 async fn put_project(
     AuthUser(user): AuthUser,
     State(st): State<AppState>,
     Path(id): Path<i64>,
+    headers: axum::http::HeaderMap,
     body: String,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    if db::get_project(&st.pool, user.id, id)
-        .await
-        .map_err(ise)?
-        .is_none()
-    {
+    let Some(project) = db::get_project(&st.pool, user.id, id).await.map_err(ise)? else {
         return Err((StatusCode::NOT_FOUND, "no such project".to_string()));
+    };
+    // A malformed If-Match is a caller bug, not a licence to force the write.
+    let expected = match headers.get(axum::http::header::IF_MATCH) {
+        None => None,
+        Some(v) => Some(
+            v.to_str()
+                .ok()
+                .and_then(|s| s.trim_matches('"').parse::<i64>().ok())
+                .ok_or((
+                    StatusCode::BAD_REQUEST,
+                    "If-Match must be the project's generation, an integer".to_string(),
+                ))?,
+        ),
+    };
+    if expected.is_some_and(|g| g != project.generation) {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "the project moved on: it is at generation {} — re-open it and redo the import",
+                project.generation
+            ),
+        ));
     }
     // Parse first so broken markup is rejected before anything is touched…
     let mut editor = nib_core::Editor::new();
@@ -227,9 +251,21 @@ async fn put_project(
         Ok(None) => (editor.to_model_json().unwrap_or_default(), editor.to_svg()),
         Err(e) => return Err((StatusCode::BAD_REQUEST, e)),
     };
-    db::update_project(&st.pool, id, &model, &svg)
+    // Conditional in SQL, so the read above narrowing to "not stale" and this write are not a
+    // window another importer can slip through: two racing callers both pass the check, only one
+    // passes the update.
+    if db::replace_project(&st.pool, id, &model, &svg, expected)
         .await
-        .map_err(ise)?;
+        .map_err(ise)?
+        .is_none()
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            "the project was replaced while this import was in flight — re-open it and redo the \
+             import"
+                .to_string(),
+        ));
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -858,6 +894,118 @@ mod tests {
         let msg = rx.recv().await.unwrap();
         assert!(msg.reload, "peers get a reload signal");
         assert!(msg.ops.is_empty(), "and no ops to replay");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Two imports racing: the second must lose loudly rather than silently win.
+    ///
+    /// Ops can't produce this — one authoritative session applies them in order — so whole-document
+    /// replacement is the only lost-update hazard, and `generation` + `If-Match` is the guard.
+    #[tokio::test]
+    async fn a_stale_import_is_refused_instead_of_clobbering() {
+        async fn generation_of(st: AppState, token: &str, id: i64) -> i64 {
+            let res = app(st)
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/api/projects/{id}"))
+                        .header("authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["generation"]
+                .as_i64()
+                .expect("the project carries a generation")
+        }
+
+        async fn import(
+            st: AppState,
+            token: &str,
+            id: i64,
+            svg: &str,
+            if_match: Option<&str>,
+        ) -> StatusCode {
+            let mut req = Request::builder()
+                .method("PUT")
+                .uri(format!("/api/projects/{id}"))
+                .header("authorization", format!("Bearer {token}"));
+            if let Some(g) = if_match {
+                req = req.header("if-match", g);
+            }
+            app(st)
+                .oneshot(req.body(Body::from(svg.to_string())).unwrap())
+                .await
+                .unwrap()
+                .status()
+        }
+
+        let (pool, path) = test_pool("conflict").await;
+        let user = db::resolve_user(&pool, "sub-a", "a@example.com", "a")
+            .await
+            .unwrap();
+        let id = db::create_project(&pool, user.id, "target", BLANK_SVG)
+            .await
+            .unwrap();
+        let st = test_state(pool.clone());
+        let token = user.token.clone();
+
+        // Both clients read the same generation — the state a race starts from.
+        let seen = generation_of(st.clone(), &token, id).await;
+
+        // r##…##: the colour literals contain `"#`, which would close an `r#"…"#` string early.
+        let first = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="30" fill="#e11"/></svg>"##;
+        let second = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="10" y="10" width="20" height="20" fill="#11e"/></svg>"##;
+        let stale = seen.to_string();
+
+        assert_eq!(
+            import(st.clone(), &token, id, first, Some(&stale)).await,
+            StatusCode::NO_CONTENT
+        );
+        // The loser is told, and — the point — the winner's document is still there.
+        assert_eq!(
+            import(st.clone(), &token, id, second, Some(&stale)).await,
+            StatusCode::CONFLICT
+        );
+        let stored = db::get_project(&pool, user.id, id).await.unwrap().unwrap();
+        assert!(
+            stored.svg.contains("circle"),
+            "first import survived: {}",
+            stored.svg
+        );
+        assert!(!stored.svg.contains("rect"), "stale import did not land");
+        assert_eq!(stored.generation, seen + 1, "one replacement, one bump");
+
+        // Re-read and retry: the same import now succeeds, so the guard is recoverable, not a wall.
+        let fresh = generation_of(st.clone(), &token, id).await.to_string();
+        assert_eq!(
+            import(st.clone(), &token, id, second, Some(&fresh)).await,
+            StatusCode::NO_CONTENT
+        );
+        assert!(
+            db::get_project(&pool, user.id, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .svg
+                .contains("rect"),
+            "the retry landed"
+        );
+
+        // No If-Match at all still forces, which is what every pre-If-Match client does.
+        assert_eq!(
+            import(st.clone(), &token, id, first, None).await,
+            StatusCode::NO_CONTENT
+        );
+        // A malformed one is a caller bug, not a licence to force.
+        assert_eq!(
+            import(st.clone(), &token, id, first, Some("\"not-a-number\"")).await,
+            StatusCode::BAD_REQUEST
+        );
 
         let _ = std::fs::remove_file(&path);
     }

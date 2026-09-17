@@ -4,7 +4,7 @@
 // A `.svelte.ts` module so the reactive `$state` connection status compiles.
 
 import { base } from "$app/paths";
-import { getProject, putProject } from "$lib/backend/client";
+import { getProject, ProjectConflict, putProject } from "$lib/backend/client";
 import { loadState, removeState, saveState } from "$lib/persistence";
 import { type DocumentReplacement, editor } from "$lib/stores/document.svelte";
 import { settings } from "$lib/stores/settings.svelte";
@@ -40,6 +40,15 @@ class ProjectSync {
   error = $state<string | null>(null);
 
   /**
+   * The document generation this client last saw, echoed back as `If-Match` on the next import.
+   *
+   * Only whole-document replacements move it. Ops don't, deliberately: one authoritative session
+   * applies them in order and broadcasts them, so every client converges — counting them here
+   * would make this stale the moment anyone drew anything and turn the guard into noise.
+   */
+  #generation: number | null = null;
+
+  /**
    * Open a project: load the server's model, then attach.
    *
    * The model, not the SVG — it carries the node uids every client and the LLM address, so loading
@@ -50,6 +59,7 @@ class ProjectSync {
     const p = await getProject(id);
     if (p.model) editor.loadModel(JSON.parse(p.model), p.name);
     else editor.load(p.svg, p.name);
+    this.#generation = p.generation;
     this.connect(id);
   }
 
@@ -130,14 +140,24 @@ class ProjectSync {
       return;
     }
     try {
-      await putProject(id, r.svg);
+      await putProject(id, r.svg, this.#generation ?? undefined);
       // Adopt the server's parse: it mints the node uids every client (and the LLM) addresses, so
       // re-loading its model is what keeps identity shared. Skipping this is how ops start
       // referring to nodes the backend has never heard of.
       await this.#reload();
       this.error = null;
     } catch (e) {
-      // Don't keep streaming edits into a project that didn't receive the import.
+      if (e instanceof ProjectConflict) {
+        // Someone else replaced the document. The import is refused rather than landing on top of
+        // work this client never saw — so stay attached, put the project's current document back
+        // on the canvas, and say what happened. Detaching here would be the harsher answer to the
+        // safer failure: nothing was lost, and the next import from the refreshed state succeeds.
+        this.error = `${e.message}. The canvas has been put back to the project's current document; import again if you still want to replace it.`;
+        await this.#reload().catch(() => {});
+        return;
+      }
+      // Anything else means the project did NOT receive the import, so the canvas and the project
+      // have diverged — stop streaming edits into it.
       this.error = `import into project failed: ${e instanceof Error ? e.message : String(e)}`;
       this.disconnect();
     }
@@ -149,6 +169,7 @@ class ProjectSync {
     if (id === null) return;
     const p = await getProject(id);
     if (this.projectId !== id) return; // switched projects mid-flight
+    this.#generation = p.generation;
     // Loaded through `load`/`loadModel`, never `importDocument` — this came *from* the project, so
     // announcing it as an import would push it straight back.
     if (p.model) editor.loadModel(JSON.parse(p.model), p.name);
@@ -162,6 +183,7 @@ class ProjectSync {
   }
 
   disconnect(): void {
+    this.#generation = null;
     editor.setSyncSink(null);
     editor.setReplaceSink(null);
     this.#ws?.close();
