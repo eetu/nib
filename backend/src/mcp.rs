@@ -35,6 +35,10 @@ use crate::{AppState, auth};
 const BLANK_SVG: &str =
     "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n</svg>";
 
+/// Most ops one `apply_ops` call may carry. A batch holds the project's lock for its whole run,
+/// so this is the bound that keeps one confused caller from stalling a co-editing session.
+const MAX_BATCH_OPS: usize = 500;
+
 /// The workflow playbook handed to the model on connect — imperative, cost-aware, and it teaches
 /// the two habits that make the output a *document* rather than a pile of paths: name + group.
 const INSTRUCTIONS: &str = "nib is a direct-manipulation SVG editor. You co-edit a live document \
@@ -2111,7 +2115,7 @@ impl NibMcp {
     }
 
     #[tool(
-        description = "Apply SEVERAL operations in order, as one call — same `type`-tagged objects as apply_op. Use it to lay down a whole scene or a whole shape at once: a drawing that costs thirty round trips one at a time costs one here. Returns a one-line ack; structural ops still renumber #indices, so call get_document after."
+        description = "Apply up to 500 operations in order, as one call — same `type`-tagged objects as apply_op. Use it to lay down a whole scene or a whole shape at once: a drawing that costs thirty round trips one at a time costs one here. Returns a one-line ack; structural ops still renumber #indices, so call get_document after."
     )]
     async fn apply_ops(
         &self,
@@ -2122,6 +2126,17 @@ impl NibMcp {
         let sess = self.active_session(&user).await?;
         if p.ops.is_empty() {
             return Err(bad("no ops given"));
+        }
+        // A batch holds the session's lock for its whole run, so an unbounded one is the cheapest
+        // way to stall a co-editing session and grow the model past a 256MB container — from a
+        // caller that only has to be confused, not hostile. The cap is far above any real scene
+        // (the four-frame crab drawing peaks near 40 ops in one call) and says how to proceed.
+        if p.ops.len() > MAX_BATCH_OPS {
+            return Err(bad(format!(
+                "{} ops is over the {MAX_BATCH_OPS} limit for one call — split it into several \
+                 apply_ops batches (they compose: each is applied in order)",
+                p.ops.len()
+            )));
         }
         let asked = p.ops.len();
         let applied = session::apply_ops(&sess, &self.pool, p.ops, "mcp").map_err(bad)?;

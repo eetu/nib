@@ -157,6 +157,12 @@ the end.
   dead for every user until a restart. Locks now recover the guard: what's behind it is a document
   model, where the worst a half-finished mutation leaves is an edit the next op overwrites and
   undo can take back. A `CatchPanicLayer` turns the panic itself into a 500 with a log line.
+- **An MCP batch was unbounded.** `apply_ops` holds the project's lock for the whole batch, so an
+  oversized one stalls the co-editing session and grows the model past the container's cap — from
+  a caller that only has to be confused, not hostile. Capped at 500, with an error that says to
+  split it. This is the half of rate limiting an edge proxy can't do: it counts requests per
+  source IP, but `/mcp` is authed per token and a rasterize doesn't look different from
+  `/api/version` to a proxy.
 - **The REST surface had no timeout and a 2MB body cap** — a real illustration `PUT` was rejected
   with a bare 413. Now 16MB and 30s, applied to `/api` only: the WebSocket and MCP's
   Streamable-HTTP stream are long-lived by design, and a global timeout would cut the co-editing
