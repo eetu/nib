@@ -76,6 +76,17 @@ the end.
 
 ### Changed
 
+- **A bearer token is stored hashed, and is shown once.** The database held it in the clear, which
+  meant every nightly snapshot of `/var/lib/nib` carried live credentials — and snapshots get
+  copied around far more casually than hosts get compromised. Only a SHA-256 is stored now
+  (unsalted, no KDF: a token is 32 random server-minted bytes, so there is no dictionary to slow
+  down and a work factor would buy nothing but latency per request). The cost is that the server
+  can no longer show you a token it cannot read: `/api/me` returns a hint like `nib_ab12cd34…` and
+  the value itself appears only in the moment rotating mints it. **Existing tokens are discarded,
+  not converted** — hashing a secret that has already sat readable in every backup preserves the
+  exposure while looking solved — so each user rotates once after upgrading, and any MCP client
+  needs the new value. Same-origin the browser needs no token at all (live sync authenticates by
+  session cookie); the cross-origin dev split does, so Settings gained a field for it.
 - **The window is laid out by role now** — navigate · surface · subject · tools, left to right —
   which is the arrangement the family skill describes and nib is the first to implement. Layers,
   projects and files became **tabs** in a left-hand navigator (they're all lists you go to, pick

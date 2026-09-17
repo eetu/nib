@@ -1,5 +1,6 @@
 // The signed-in account (connected mode only). Holds what `/api/me` returns — identity plus the
-// personal bearer token an MCP client needs — so Settings can show it without re-fetching.
+// bearer token's hint — so Settings can say which token is in play without re-fetching. The
+// token itself is never returned: only its hash is stored (see backend migration 0006).
 //
 // `error` is reserved for *real* failures: an unauthenticated call redirects to the login flow
 // from inside the client, so reaching the catch here means the backend is actually unreachable.
@@ -11,6 +12,11 @@ class Account {
   me = $state<Me | null>(null);
   error = $state<string | null>(null);
   rotating = $state(false);
+
+  /** The token minted by the most recent rotate, held only in memory for the user to copy. The
+   *  server cannot show it again, so this is the one moment it exists outside the database's
+   *  hash — it is deliberately not persisted anywhere but the field the user pastes it into. */
+  freshToken = $state<string | null>(null);
 
   /** In-flight `/api/me`, shared by concurrent callers. Two mount together on a fresh load — the
    *  header's project link and the projects panel — and `/api/me` is the call that bounces an
@@ -28,9 +34,6 @@ class Account {
     try {
       this.me = await fetchMe();
       this.error = null;
-      // Keep the stored token in step with the server's, so the WebSocket and a cross-origin SPA
-      // both authenticate with the current one after a rotate elsewhere.
-      setBackendToken(this.me.token);
     } catch (e) {
       this.error = e instanceof Error ? e.message : String(e);
     }
@@ -40,7 +43,10 @@ class Account {
     this.rotating = true;
     try {
       const token = await rotateToken();
-      if (this.me) this.me = { ...this.me, token };
+      this.freshToken = token;
+      if (this.me) this.me = { ...this.me, tokenHint: token.slice(0, 12) };
+      // Same-origin the browser authenticates by cookie, so it doesn't need this — but the
+      // cross-origin dev split does, and the user has the token in hand exactly now.
       setBackendToken(token);
       this.error = null;
     } catch (e) {
