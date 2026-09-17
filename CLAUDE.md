@@ -690,10 +690,18 @@ client-side pro pillars, all running on the core):
       surface carries a **30s timeout and a 16MB body cap** — deliberately *not* global, since the
       WebSocket and MCP's Streamable-HTTP stream are long-lived by design and a global timeout
       would cut the session itself; `TraceLayer` for request logs.
-    - **Still ahead: rate limits** (nothing throttles `/api` or `/mcp`), **conflict UX** (`PUT`
-      is last-write-wins with no version check, so two clients importing at once silently lose
-      one), and the bearer token is **stored plaintext** (a DB-file compromise is every token;
-      the SQL equality lookup isn't constant-time either).
+    - **Expensive calls are bounded at the input**, which is the half of "rate limiting" a proxy
+      structurally can't do: it counts requests per source IP, but `/mcp` is authed per *token*
+      (every client behind one VPN exit is one IP) and a request's cost is not its count —
+      `/api/version` and a rasterize look identical to Traefik. So `render_document` clamps
+      `width` to 128–1024 and `apply_ops` caps a batch at `MAX_BATCH_OPS`, since a batch holds the
+      project's lock for its whole run. A **generic req/s throttle stays an edge concern** —
+      Traefik already fronts every entry with a `rateLimit` middleware available, nib binds
+      loopback only (`127.0.0.1`, even under the host-network OIDC stamp), and its vhost is
+      `internal-only`; enabling it is a keel change, not a nib one.
+    - **Still ahead: conflict UX** (`PUT` is last-write-wins with no version check, so two clients
+      importing at once silently lose one), and the bearer token is **stored plaintext** (a
+      DB-file compromise is every token; the SQL equality lookup isn't constant-time either).
 - **Phase D — LANDED (folded into E3):** arbitrary *nested* groups are the object tree
   itself — `GroupNodes`/`UngroupNode`/`ReorderNode`/`SetNodeHidden` on stable-id (`uid`)
   addressing; drawn + imported content unified into one tree, `<g>`-wrapped on export.
