@@ -1038,6 +1038,109 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A migration has to apply to a database that already holds DATA, not just to a fresh file.
+    ///
+    /// This is the test whose absence let a broken migration reach the Pi. Every other test starts
+    /// from an empty database, where `projects` has no rows — so 0006's original table rebuild
+    /// dropped `users` without violating `projects.user_id`'s foreign key, passed everywhere, and
+    /// then crash-looped the deployment on the first real row. Foreign keys are on (`db::connect`),
+    /// which is what turned a latent rebuild into a hard failure.
+    ///
+    /// It drives the migration FILES rather than `db::connect`, because what has to be proven is
+    /// that the SQL survives existing rows — and `_sqlx_migrations` bookkeeping would only get in
+    /// the way of standing a pre-0006 database up by hand.
+    #[tokio::test]
+    async fn a_migration_applies_to_a_database_that_already_has_rows() {
+        let path = std::env::temp_dir().join(format!("nib-mig-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}?mode=rwc", path.display()))
+            .await
+            .unwrap();
+        // One connection for the whole test: `pragma foreign_keys` is per-connection, and the
+        // point is to run the migration with it ON, the way the real pool does.
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("pragma foreign_keys = on")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+
+        // The schema as it stood before token hashing, from the files themselves so this can't
+        // drift from what a real deployment has on disk.
+        for sql in [
+            include_str!("../migrations/0001_init.sql"),
+            include_str!("../migrations/0002_model.sql"),
+            include_str!("../migrations/0003_oidc_users.sql"),
+            include_str!("../migrations/0004_retire_the_shared_dev_token.sql"),
+            include_str!("../migrations/0005_project_generation.sql"),
+        ] {
+            sqlx::raw_sql(sql).execute(&mut *conn).await.unwrap();
+        }
+        // A user, and a project pointing at it — the row that makes dropping `users` illegal.
+        sqlx::query(
+            "insert into users (name, token, sub) values ('someone', 'plain-secret', 's1')",
+        )
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into projects (user_id, name, svg, model) values (1, 'sketch', '<svg/>', '')",
+        )
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+
+        // …and the migration, wrapped in a transaction exactly as sqlx runs it. That wrapping is
+        // load-bearing: it is why `pragma foreign_keys = off` is not an option inside a migration.
+        sqlx::raw_sql(&format!(
+            "begin;\n{}\ncommit;",
+            include_str!("../migrations/0006_hash_tokens.sql")
+        ))
+        .execute(&mut *conn)
+        .await
+        .expect("0006 applies over existing rows");
+
+        // The project survived, still attached to its user, with nothing dangling.
+        let projects: i64 = sqlx::query_scalar("select count(*) from projects where user_id = 1")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert_eq!(projects, 1, "the project kept its owner");
+        let violations: i64 =
+            sqlx::query_scalar("select count(*) from pragma_foreign_key_check('projects')")
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(violations, 0, "no dangling reference left behind");
+
+        // The plaintext is destroyed, not merely hidden behind a renamed column.
+        let plain: i64 =
+            sqlx::query_scalar("select count(*) from users where retired_plaintext_token = ?")
+                .bind("plain-secret")
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(plain, 0, "the stored secret was overwritten");
+        drop(conn);
+        assert!(
+            db::user_by_token(&pool, "plain-secret")
+                .await
+                .unwrap()
+                .is_none(),
+            "and it no longer resolves to anyone"
+        );
+
+        // The user is still there and can mint a working credential again.
+        let user = db::user_by_sub(&pool, "s1").await.unwrap().expect("kept");
+        let fresh = db::rotate_token(&pool, user.id).await.unwrap();
+        assert_eq!(
+            db::user_by_token(&pool, &fresh).await.unwrap().unwrap().id,
+            user.id
+        );
+
+        pool.close().await;
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// Migration 0006 invalidates every stored token rather than converting it, and this is the
     /// half of that decision worth pinning: a credential that was readable in every backup must
     /// stop working, while the row that held it keeps its id — and therefore its projects.

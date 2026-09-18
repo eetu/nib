@@ -129,7 +129,11 @@ pub async fn resolve_user(
 ) -> Result<User, sqlx::Error> {
     let token = mint_token();
     sqlx::query_as::<_, User>(&format!(
-        "insert into users (name, token_hash, token_hint, sub, email) values (?, ?, ?, ?, ?) \
+        // `retired_plaintext_token` is migration 0006's renamed corpse of the old column: kept
+        // because dropping it would mean rebuilding the table, still `not null unique`, so every
+        // row needs a distinct meaningless value. Nothing ever reads it.
+        "insert into users (name, retired_plaintext_token, token_hash, token_hint, sub, email) \
+         values (?, lower(hex(randomblob(16))), ?, ?, ?, ?) \
          on conflict(sub) do update set email = excluded.email, name = excluded.name \
          returning {USER_COLS}",
     ))
