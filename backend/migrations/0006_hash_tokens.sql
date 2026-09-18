@@ -4,11 +4,12 @@
 -- snapshot, so every copy of it held live credentials — and a snapshot gets copied around far more
 -- casually than a host gets compromised.
 --
--- **Existing tokens are discarded, not converted.** Hashing a secret that has already been sitting
+-- **Existing tokens are destroyed, not converted.** Hashing a secret that has already been sitting
 -- in the clear across every backup preserves the exposure while making it look solved; the honest
--- response to "these were stored readably" is to replace them. So `token_hash` starts NULL, which
--- matches no presented token, and each user mints a new one from Settings. Under dev auth the seed
--- re-claims the known dev token at boot, so `just dev` keeps working untouched.
+-- response to "these were stored readably" is to replace them. So the plaintext is overwritten
+-- with random bytes here and `token_hash` starts NULL, which matches no presented token — each
+-- user mints a new one from Settings. Under dev auth the seed re-claims the known dev token at
+-- boot, so `just dev` keeps working untouched.
 --
 -- SHA-256, unsalted, no KDF — deliberately. Work factors and salts exist to make *low-entropy*
 -- secrets expensive to guess; a token here is 32 random bytes minted by the server, so there is no
@@ -19,26 +20,20 @@
 -- a client is configured with without being able to reveal it. The rest is 56 hex characters, so
 -- the hint is worth nothing as a credential.
 --
--- The table is rebuilt rather than altered because the plaintext column carries an inline
--- `unique`, whose implicit index SQLite will not drop on its own — and leaving the column would
--- keep a `not null unique` field that new rows have nothing meaningful to put in.
-create table users_new (
-    id integer primary key,
-    name text not null,
-    token_hash text unique,
-    token_hint text not null default '',
-    created_at text not null default (datetime('now')),
-    sub text,
-    email text,
-    token_rotated_at text
-);
+-- The old column is **renamed and overwritten rather than dropped.** Dropping it would mean
+-- rebuilding the table, because the inline `unique` from migration 0001 carries an implicit index
+-- SQLite will not drop on its own — and rebuilding means `drop table users`, which violates
+-- `projects.user_id`'s foreign key the moment any project exists. `PRAGMA foreign_keys` cannot be
+-- turned off from inside a migration (SQLite ignores it within a transaction, and sqlx wraps each
+-- migration in one), and deferring the check only moves the same failure to COMMIT. Renaming
+-- touches no foreign key, needs no data movement, and leaves the column honestly labelled; its
+-- `not null unique` is satisfied by the random value, which is why the overwrite is per-row random
+-- rather than a constant.
+alter table users rename column token to retired_plaintext_token;
 
-insert into users_new (id, name, token_hash, token_hint, created_at, sub, email, token_rotated_at)
-select id, name, null, '', created_at, sub, email, token_rotated_at
-from users;
+update users set retired_plaintext_token = lower(hex(randomblob(16)));
 
-drop table users;
+alter table users add column token_hash text;
+alter table users add column token_hint text not null default '';
 
-alter table users_new rename to users;
-
-create unique index users_sub on users (sub);
+create unique index if not exists users_token_hash on users (token_hash);

@@ -719,7 +719,14 @@ client-side pro pillars, all running on the core):
       screen only in the moment `/api/token/rotate` mints it. Migration 0006 **discards** existing
       tokens rather than converting them — hashing a secret that has already sat readable in every
       backup preserves the exposure while looking solved — so each user rotates once after the
-      upgrade. Same-origin the browser needs no token at all (the WebSocket authenticates by
+      upgrade. The old column is **renamed and overwritten, not dropped**: dropping it means
+      rebuilding the table (its inline `unique` from 0001 carries an index SQLite won't drop on its
+      own), and `drop table users` violates `projects.user_id` the moment a project exists.
+      `PRAGMA foreign_keys` can't be turned off from inside a migration — SQLite ignores it within
+      a transaction and sqlx wraps each migration in one — and deferring the check only moves the
+      same failure to COMMIT. **A migration has to be tested against a database that already holds
+      rows:** every test starting from an empty file is exactly what let the table rebuild pass CI
+      and then crash-loop the deployment on its first real project. Same-origin the browser needs no token at all (the WebSocket authenticates by
       session cookie); the cross-origin dev split does, so Settings has a field to paste one into.
 - **Phase D — LANDED (folded into E3):** arbitrary *nested* groups are the object tree
   itself — `GroupNodes`/`UngroupNode`/`ReorderNode`/`SetNodeHidden` on stable-id (`uid`)

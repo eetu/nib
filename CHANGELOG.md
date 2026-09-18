@@ -85,7 +85,10 @@ the end.
   the value itself appears only in the moment rotating mints it. **Existing tokens are discarded,
   not converted** — hashing a secret that has already sat readable in every backup preserves the
   exposure while looking solved — so each user rotates once after upgrading, and any MCP client
-  needs the new value. Same-origin the browser needs no token at all (live sync authenticates by
+  needs the new value. The old column is renamed and overwritten rather than dropped: dropping it
+  would mean rebuilding the table, and `drop table users` violates `projects.user_id` as soon as a
+  project exists — which is a migration that passes against an empty test database and fails
+  against a real one. Same-origin the browser needs no token at all (live sync authenticates by
   session cookie); the cross-origin dev split does, so Settings gained a field for it.
 - **The window is laid out by role now** — navigate · surface · subject · tools, left to right —
   which is the arrangement the family skill describes and nib is the first to implement. Layers,
